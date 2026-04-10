@@ -2,26 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+:root { --background: #0f0f0f; --foreground: #f1f1f1; }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+*, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--background); color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+  /* iOS safe area */
+  padding-top: env(safe-area-inset-top, 0px);
 }
+
+/* 禁止长按弹出菜单（APP体验） */
+img, a, button { -webkit-touch-callout: none; user-select: none; }
+p, h1, h2, h3, span, div { user-select: text; }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+@media (max-width: 768px) { ::-webkit-scrollbar { display: none; } }
+
+/* 手机端底部安全区 */
+.pb-safe { padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px)); }
+
+/* 触摸反馈 */
+.touch-active:active { transform: scale(0.97); opacity: 0.8; }
+
+/* 动画 */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideDown { from { transform: translateY(-100%); } to { transform: translateY(0); } }
 
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+  .animate-fade-in { animation: fadeIn 0.3s ease; }
+  .animate-slide-up { animation: slideUp 0.3s ease; }
+  .line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 }

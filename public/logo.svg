@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3ea6ff"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="star" x1="40" y1="20" x2="80" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e0e7ff"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="10" y1="60" x2="110" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.3"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.3"/>
+    </linearGradient>
+  </defs>
+  <!-- 圆角方形背景 -->
+  <rect width="120" height="120" rx="28" fill="url(#bg)"/>
+  <!-- 聚合光环 -->
+  <circle cx="60" cy="60" r="38" stroke="url(#ring)" stroke-width="2.5" fill="none"/>
+  <!-- 四颗小星点（聚合感） -->
+  <circle cx="60" cy="22" r="3" fill="white" opacity="0.7"/>
+  <circle cx="98" cy="60" r="3" fill="white" opacity="0.7"/>
+  <circle cx="60" cy="98" r="3" fill="white" opacity="0.7"/>
+  <circle cx="22" cy="60" r="3" fill="white" opacity="0.7"/>
+  <!-- 中心五角星 -->
+  <path d="M60 30 L68.5 51.5 L91 54 L74 69.5 L78.5 92 L60 81 L41.5 92 L46 69.5 L29 54 L51.5 51.5 Z" fill="url(#star)"/>
+  <!-- 星中心高光 -->
+  <circle cx="60" cy="62" r="8" fill="white" opacity="0.15"/>
+</svg>

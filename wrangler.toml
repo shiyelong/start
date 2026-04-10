@@ -1,0 +1,31 @@
+name = "starhub"
+compatibility_date = "2024-12-01"
+pages_build_output_dir = "out"
+
+# ── D1 Database ──────────────────────────────────────────────
+[[d1_databases]]
+binding = "DB"
+database_name = "starhub-db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# ── KV Namespace ─────────────────────────────────────────────
+[[kv_namespaces]]
+binding = "KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+# ── Environment Variables (non-secret) ───────────────────────
+[vars]
+JWT_SECRET = "change-me-to-a-secure-random-string"
+
+# ── IMPORTANT ────────────────────────────────────────────────
+# The following secrets should be set via the Cloudflare dashboard
+# (Settings > Environment Variables > Secrets), NOT in this file:
+#
+#   OPENAI_API_KEY      - OpenAI API key for AI proxy
+#   DEEPSEEK_API_KEY    - DeepSeek API key for AI proxy
+#   MOONSHOT_API_KEY    - Moonshot API key for AI proxy
+#
+# To set them via CLI:
+#   npx wrangler pages secret put OPENAI_API_KEY
+#   npx wrangler pages secret put DEEPSEEK_API_KEY
+#   npx wrangler pages secret put MOONSHOT_API_KEY
