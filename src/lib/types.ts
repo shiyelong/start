@@ -389,7 +389,7 @@ export interface Env {
   ROMS: unknown; // R2Bucket at runtime in Workers
   CORES: unknown; // R2Bucket at runtime in Workers
   REPLAYS: unknown; // R2Bucket at runtime in Workers
-  ASSETS: unknown; // R2Bucket at runtime in Workers
+  ASSETS: unknown; // R2Bucket — renamed to R2_ASSETS in wrangler.toml (ASSETS is reserved in Pages)
   GAME_ROOM: unknown; // DurableObjectNamespace at runtime in Workers
   JWT_SECRET: string;
 }

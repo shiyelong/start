@@ -11,14 +11,12 @@ database_id = "cfcc5677-2d27-412e-a7ff-f49073269ccd"
 binding = "KV"
 id = "ad13af1682b74a2f9c872b956423401c"
 
-[durable_objects]
-bindings = [
-  { name = "GAME_ROOM", class_name = "GameRoom" }
-]
-
-[[migrations]]
-tag = "v1"
-new_classes = ["GameRoom"]
+# Durable Objects — deployed as a separate Worker (see workers/game-room.ts)
+# To enable multiplayer, deploy the GameRoom Worker separately and uncomment:
+# [durable_objects]
+# bindings = [
+#   { name = "GAME_ROOM", class_name = "GameRoom", script_name = "starhub-game-room" }
+# ]
 
 [[r2_buckets]]
 binding = "ROMS"
@@ -33,7 +31,7 @@ binding = "REPLAYS"
 bucket_name = "r2-replays"
 
 [[r2_buckets]]
-binding = "ASSETS"
+binding = "R2_ASSETS"
 bucket_name = "r2-assets"
 
 [vars]

@@ -10,7 +10,7 @@ export interface WorkerEnv {
   ROMS: R2Bucket;
   CORES: R2Bucket;
   REPLAYS: R2Bucket;
-  ASSETS: R2Bucket;
+  R2_ASSETS: R2Bucket;
   GAME_ROOM: DurableObjectNamespace;
   JWT_SECRET: string;
 }
