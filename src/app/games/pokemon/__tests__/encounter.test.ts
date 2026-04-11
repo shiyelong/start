@@ -2,11 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   checkEncounter,
   selectWildPet,
-  ENCOUNTER_RATE,
   PET_TEMPLATES,
   MAP_AREAS,
   type PetEncounter,
-} from "../page";
+} from "../game-utils";
 
 describe("checkEncounter", () => {
   it("returns false when not on an encounter tile", () => {

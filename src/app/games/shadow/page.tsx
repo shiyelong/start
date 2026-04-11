@@ -4,13 +4,13 @@ import Header from "@/components/Header";
 
 // ─── Type Definitions ────────────────────────────────────
 
-export interface Platform {
+interface Platform {
   x: number; y: number;
   width: number; height: number;
   type: "solid" | "oneway";
 }
 
-export interface EnemySpawn {
+interface EnemySpawn {
   x: number; y: number;
   type: string;
   behavior: "patrol" | "chase" | "fly";
@@ -18,19 +18,19 @@ export interface EnemySpawn {
   patrolRange?: number;
 }
 
-export interface BossAttack {
+interface BossAttack {
   name: string;
   duration: number;
   cooldown: number;
 }
 
-export interface BossPhase {
+interface BossPhase {
   hpThreshold: number;
   attacks: BossAttack[];
   speed: number;
 }
 
-export interface BossConfig {
+interface BossConfig {
   name: string;
   hp: number;
   width: number;
@@ -38,24 +38,24 @@ export interface BossConfig {
   phases: BossPhase[];
 }
 
-export interface ItemSpawn {
+interface ItemSpawn {
   x: number; y: number;
   type: "heal" | "atkBoost" | "shield" | "coin";
 }
 
-export interface HiddenArea {
+interface HiddenArea {
   x: number; y: number;
   width: number; height: number;
   reward: ItemSpawn[];
 }
 
-export interface BgLayer {
+interface BgLayer {
   color: string;
   elements: { type: string; x: number; y: number; scale: number }[];
   speed: number;
 }
 
-export interface Level {
+interface Level {
   id: number;
   platforms: Platform[];
   enemies: EnemySpawn[];
@@ -67,7 +67,7 @@ export interface Level {
   width: number;
 }
 
-export interface Player {
+interface Player {
   x: number; y: number;
   vx: number; vy: number;
   hp: number; maxHp: number;
@@ -87,7 +87,7 @@ export interface Player {
   abilities: { maxHpBonus: number; atkBonus: number; jumpBonus: number };
 }
 
-export interface Enemy {
+interface Enemy {
   x: number; y: number;
   vx: number; vy: number;
   hp: number; maxHp: number;
@@ -102,7 +102,7 @@ export interface Enemy {
   height: number;
 }
 
-export interface Boss {
+interface Boss {
   x: number; y: number;
   vx: number; vy: number;
   hp: number; maxHp: number;
@@ -117,25 +117,25 @@ export interface Boss {
   projectiles: Projectile[];
 }
 
-export interface Projectile {
+interface Projectile {
   x: number; y: number;
   vx: number; vy: number;
   width: number; height: number;
   active: boolean;
 }
 
-export interface ActiveItem {
+interface ActiveItem {
   x: number; y: number;
   type: "heal" | "atkBoost" | "shield" | "coin";
   collected: boolean;
 }
 
-export interface HudNotification {
+interface HudNotification {
   text: string;
   timer: number;
 }
 
-export interface LevelResult {
+interface LevelResult {
   stars: 1 | 2 | 3;
   time: number;
   remainingHp: number;
@@ -144,21 +144,21 @@ export interface LevelResult {
 
 // ─── Physics Constants ───────────────────────────────────
 
-export const GRAVITY = 0.5;
-export const JUMP_SPEED = -10;
-export const MOVE_SPEED = 4;
-export const DOUBLE_JUMP_SPEED = -8;
-export const INVINCIBLE_FRAMES = 60;
-export const CANVAS_W = 800;
-export const CANVAS_H = 500;
-export const ATTACK_DURATION = 15;
-export const ATTACK_RANGE = 40;
-export const PLAYER_W = 28;
-export const PLAYER_H = 36;
+const GRAVITY = 0.5;
+const JUMP_SPEED = -10;
+const MOVE_SPEED = 4;
+const DOUBLE_JUMP_SPEED = -8;
+const INVINCIBLE_FRAMES = 60;
+const CANVAS_W = 800;
+const CANVAS_H = 500;
+const ATTACK_DURATION = 15;
+const ATTACK_RANGE = 40;
+const PLAYER_W = 28;
+const PLAYER_H = 36;
 
 // ─── Pure Functions (exported for testing) ───────────────
 
-export function calculateStars(
+function calculateStars(
   remainingHpPercent: number,
   time: number,
   parTime: number
@@ -168,11 +168,11 @@ export function calculateStars(
   return 1;
 }
 
-export function applyGravity(vy: number): number {
+function applyGravity(vy: number): number {
   return vy + GRAVITY;
 }
 
-export function applyJump(onGround: boolean, doubleJumpUsed: boolean, jumpBonus: number): { vy: number; onGround: boolean; doubleJumpUsed: boolean } | null {
+function applyJump(onGround: boolean, doubleJumpUsed: boolean, jumpBonus: number): { vy: number; onGround: boolean; doubleJumpUsed: boolean } | null {
   if (onGround) {
     return { vy: JUMP_SPEED - jumpBonus, onGround: false, doubleJumpUsed: false };
   } else if (!doubleJumpUsed) {
@@ -181,7 +181,7 @@ export function applyJump(onGround: boolean, doubleJumpUsed: boolean, jumpBonus:
   return null;
 }
 
-export function checkPlatformCollision(
+function checkPlatformCollision(
   px: number, py: number, pw: number, ph: number,
   vy: number,
   platform: Platform
@@ -214,7 +214,7 @@ export function checkPlatformCollision(
   return null;
 }
 
-export function applyItemEffect(
+function applyItemEffect(
   player: Pick<Player, "hp" | "maxHp" | "atkBoostTimer" | "shieldActive" | "coins" | "score">,
   itemType: "heal" | "atkBoost" | "shield" | "coin"
 ): Pick<Player, "hp" | "maxHp" | "atkBoostTimer" | "shieldActive" | "coins" | "score"> {
@@ -237,7 +237,7 @@ export function applyItemEffect(
   return result;
 }
 
-export function checkRectCollision(
+function checkRectCollision(
   ax: number, ay: number, aw: number, ah: number,
   bx: number, by: number, bw: number, bh: number
 ): boolean {
@@ -988,12 +988,12 @@ export default function ShadowDungeonPage() {
   const gsRef = useRef<GameStateRef | null>(null);
   const rafRef = useRef<number>(0);
   const [uiPhase, setUiPhase] = useState<GamePhase>("menu");
-  const [uiLevel, setUiLevel] = useState(1);
-  const [uiHp, setUiHp] = useState(100);
-  const [uiMaxHp, setUiMaxHp] = useState(100);
-  const [uiCoins, setUiCoins] = useState(0);
+  const [, setUiLevel] = useState(1);
+  const [, setUiHp] = useState(100);
+  const [, setUiMaxHp] = useState(100);
+  const [, setUiCoins] = useState(0);
   const [uiScore, setUiScore] = useState(0);
-  const [uiTime, setUiTime] = useState(0);
+  const [, setUiTime] = useState(0);
   const [uiResults, setUiResults] = useState<(LevelResult | null)[]>([null, null, null, null, null]);
   const [uiUnlocked, setUiUnlocked] = useState(1);
   const [upgradeChoices, setUpgradeChoices] = useState<string[]>([]);

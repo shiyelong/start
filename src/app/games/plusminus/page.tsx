@@ -139,7 +139,7 @@ function renderGame(
     drawText(ctx, "开始游戏", cx, btnY + btnH / 2, btnW * 0.8, "#0f0f0f", 20);
 
     // Store button bounds for click detection
-    (game as Record<string, unknown>)._startBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+    (game as unknown as Record<string, unknown>)._startBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
   } else if (game.over) {
     // ─── Game Over Screen ─────────────────────────────
     drawText(ctx, "游戏结束！", cx, h * 0.18, w * 0.8, "#ffffff", 28);
@@ -157,7 +157,7 @@ function renderGame(
     ctx.fill();
     drawText(ctx, "再来一局", cx, btnY + btnH / 2, btnW * 0.8, "#0f0f0f", 20);
 
-    (game as Record<string, unknown>)._startBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+    (game as unknown as Record<string, unknown>)._startBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
   } else {
     // ─── Playing Screen ───────────────────────────────
 
@@ -249,8 +249,8 @@ function renderGame(
     drawText(ctx, "+1", plusBtnX + btnW / 2, btnY + btnH / 2, btnW * 0.7, BTN_PLUS_COLOR, 32);
 
     // Store button bounds
-    (game as Record<string, unknown>)._minusBtnBounds = { x: minusBtnX, y: btnY, w: btnW, h: btnH };
-    (game as Record<string, unknown>)._plusBtnBounds = { x: plusBtnX, y: btnY, w: btnW, h: btnH };
+    (game as unknown as Record<string, unknown>)._minusBtnBounds = { x: minusBtnX, y: btnY, w: btnW, h: btnH };
+    (game as unknown as Record<string, unknown>)._plusBtnBounds = { x: plusBtnX, y: btnY, w: btnW, h: btnH };
   }
 
   // Particles (always render)
@@ -441,18 +441,18 @@ export default function PlusMinusGame() {
     }
 
     // Start / restart button
-    if ((!game.started || game.over) && hitTest(x, y, (game as Record<string, unknown>)._startBtnBounds as Bounds | undefined)) {
+    if ((!game.started || game.over) && hitTest(x, y, (game as unknown as Record<string, unknown>)._startBtnBounds as Bounds | undefined)) {
       doStart();
       return;
     }
 
     // -1 / +1 buttons
     if (game.started && !game.over && !game.paused) {
-      if (hitTest(x, y, (game as Record<string, unknown>)._minusBtnBounds as Bounds | undefined)) {
+      if (hitTest(x, y, (game as unknown as Record<string, unknown>)._minusBtnBounds as Bounds | undefined)) {
         handleTap("left");
         return;
       }
-      if (hitTest(x, y, (game as Record<string, unknown>)._plusBtnBounds as Bounds | undefined)) {
+      if (hitTest(x, y, (game as unknown as Record<string, unknown>)._plusBtnBounds as Bounds | undefined)) {
         handleTap("right");
         return;
       }

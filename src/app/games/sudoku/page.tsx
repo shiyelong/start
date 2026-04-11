@@ -662,7 +662,7 @@ export default function SudokuPage() {
         particlesRef.current?.update(dt);
 
         // Update error flashes
-        for (const [key, time] of anim.errorFlash) {
+        for (const [key, time] of Array.from(anim.errorFlash)) {
           const newTime = time - dt;
           if (newTime <= 0) anim.errorFlash.delete(key);
           else anim.errorFlash.set(key, newTime);
