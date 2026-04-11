@@ -11,5 +11,30 @@ database_id = "cfcc5677-2d27-412e-a7ff-f49073269ccd"
 binding = "KV"
 id = "ad13af1682b74a2f9c872b956423401c"
 
+[durable_objects]
+bindings = [
+  { name = "GAME_ROOM", class_name = "GameRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["GameRoom"]
+
+[[r2_buckets]]
+binding = "ROMS"
+bucket_name = "r2-roms"
+
+[[r2_buckets]]
+binding = "CORES"
+bucket_name = "r2-cores"
+
+[[r2_buckets]]
+binding = "REPLAYS"
+bucket_name = "r2-replays"
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "r2-assets"
+
 [vars]
 JWT_SECRET = "starhub-jwt-secret-x7k9m2p4q8w1"

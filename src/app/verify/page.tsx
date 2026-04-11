@@ -226,7 +226,7 @@ export default function VerifyPage() {
       params.set("pageSize", "50");
       const res = await fetchWithAuth(`/api/verify?${params.toString()}`);
       if (!res.ok) throw new Error(`请求失败 (${res.status})`);
-      const data = await res.json();
+      const data = await res.json() as { items?: Record<string, unknown>[] };
       const mapped = (data.items || []).map(mapApiItemToVerifyItem);
       setItems(mapped);
     } catch (err) {
@@ -574,7 +574,7 @@ function DetailModal({ item, onClose }: { item: VerifyItem; onClose: () => void 
       try {
         const res = await fetchWithAuth(`/api/verify/${item.id}`);
         if (!res.ok || cancelled) return;
-        const data = await res.json();
+        const data = await res.json() as { records?: Record<string, unknown>[] };
         if (cancelled) return;
         const recs = (data.records || []).map((r: Record<string, unknown>) => ({
           id: r.id,

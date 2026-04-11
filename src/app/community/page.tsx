@@ -93,7 +93,7 @@ export default function CommunityPage() {
       const url = `/api/community/posts?category=${catParam}&sort=newest&page=1&pageSize=50`;
       const res = await fetchWithAuth(url);
       if (!res.ok) throw new Error(`请求失败 (${res.status})`);
-      const data = await res.json();
+      const data = await res.json() as { posts?: typeof posts };
       setPosts(data.posts || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载失败");
@@ -115,9 +115,9 @@ export default function CommunityPage() {
     try {
       const res = await fetchWithAuth(`/api/community/posts/${id}`);
       if (!res.ok) throw new Error(`请求失败 (${res.status})`);
-      const data = await res.json();
-      setDetailPost(data.post || data);
-      setDetailComments(data.comments || data.post?.comments || []);
+      const data = await res.json() as Record<string, unknown>;
+      setDetailPost((data.post || data) as typeof detailPost);
+      setDetailComments(((data.comments || (data.post as Record<string, unknown>)?.comments || []) as typeof detailComments));
     } catch {
       // If detail fetch fails, use the list data as fallback
       const fallback = posts.find(p => p.id === id) || null;
@@ -134,7 +134,7 @@ export default function CommunityPage() {
     try {
       const res = await fetchWithAuth(`/api/community/posts/${detailPost.id}/like`, { method: "POST" });
       if (!res.ok) throw new Error("点赞失败");
-      const data = await res.json();
+      const data = await res.json() as { likes?: number };
       const newLikes = data.likes ?? detailPost.likes;
       setDetailPost(prev => prev ? { ...prev, likes: newLikes } : prev);
       // Also update in list
@@ -154,9 +154,9 @@ export default function CommunityPage() {
         body: JSON.stringify({ content: commentText.trim() }),
       });
       if (!res.ok) throw new Error("评论失败");
-      const data = await res.json();
+      const data = await res.json() as { comment?: typeof detailComments[number] };
       if (data.comment) {
-        setDetailComments(prev => [...prev, data.comment]);
+        setDetailComments(prev => [...prev, data.comment!]);
       }
       setCommentText("");
     } catch { /* silently fail */ }

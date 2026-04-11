@@ -250,3 +250,141 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage(created_at);
 -- comment_likes
 CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);
 CREATE INDEX IF NOT EXISTS idx_comment_likes_user_id ON comment_likes(user_id);
+
+-- ============================================================
+-- FC Arcade Online: Classic Console ROM Multiplayer Platform
+-- ============================================================
+
+-- ROM metadata
+CREATE TABLE IF NOT EXISTS rom_metadata (
+  hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  player_count INTEGER NOT NULL DEFAULT 1,
+  file_size INTEGER NOT NULL,
+  cover_art_url TEXT,
+  is_favorite INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rom_user ON rom_metadata(user_id);
+CREATE INDEX IF NOT EXISTS idx_rom_platform ON rom_metadata(platform);
+CREATE INDEX IF NOT EXISTS idx_rom_title ON rom_metadata(title);
+
+-- Player profiles
+CREATE TABLE IF NOT EXISTS player_profile (
+  user_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  total_games_played INTEGER NOT NULL DEFAULT 0,
+  total_time_seconds INTEGER NOT NULL DEFAULT 0,
+  multiplayer_wins INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Game sessions
+CREATE TABLE IF NOT EXISTS game_session (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  rom_hash TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  duration_seconds INTEGER NOT NULL,
+  mode TEXT NOT NULL,
+  result TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (user_id) REFERENCES player_profile(user_id),
+  FOREIGN KEY (rom_hash) REFERENCES rom_metadata(hash)
+);
+CREATE INDEX IF NOT EXISTS idx_session_user ON game_session(user_id);
+CREATE INDEX IF NOT EXISTS idx_session_rom ON game_session(rom_hash);
+CREATE INDEX IF NOT EXISTS idx_session_date ON game_session(created_at);
+
+-- Achievements
+CREATE TABLE IF NOT EXISTS achievement_definition (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  icon_url TEXT,
+  condition_type TEXT NOT NULL,
+  condition_value INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS player_achievement (
+  user_id TEXT NOT NULL,
+  achievement_id TEXT NOT NULL,
+  earned_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, achievement_id),
+  FOREIGN KEY (user_id) REFERENCES player_profile(user_id),
+  FOREIGN KEY (achievement_id) REFERENCES achievement_definition(id)
+);
+
+-- Cheat codes
+CREATE TABLE IF NOT EXISTS cheat_code (
+  id TEXT PRIMARY KEY,
+  rom_hash TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  code TEXT NOT NULL,
+  format TEXT NOT NULL,
+  description TEXT NOT NULL,
+  submitted_by TEXT NOT NULL,
+  upvotes INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cheat_rom ON cheat_code(rom_hash);
+
+-- Tournaments
+CREATE TABLE IF NOT EXISTS tournament (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  rom_hash TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  max_participants INTEGER NOT NULL,
+  match_format TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'registration',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at TEXT,
+  completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tournament_participant (
+  tournament_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  seed INTEGER,
+  eliminated_round INTEGER,
+  registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (tournament_id, user_id),
+  FOREIGN KEY (tournament_id) REFERENCES tournament(id),
+  FOREIGN KEY (user_id) REFERENCES player_profile(user_id)
+);
+
+CREATE TABLE IF NOT EXISTS tournament_match (
+  id TEXT PRIMARY KEY,
+  tournament_id TEXT NOT NULL,
+  round INTEGER NOT NULL,
+  match_index INTEGER NOT NULL,
+  player1_id TEXT,
+  player2_id TEXT,
+  winner_id TEXT,
+  room_code TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  scheduled_at TEXT,
+  completed_at TEXT,
+  FOREIGN KEY (tournament_id) REFERENCES tournament(id)
+);
+CREATE INDEX IF NOT EXISTS idx_match_tournament ON tournament_match(tournament_id);
+
+-- Replay metadata
+CREATE TABLE IF NOT EXISTS replay (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  rom_hash TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  duration_seconds INTEGER NOT NULL,
+  r2_key TEXT,
+  share_code TEXT UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_replay_user ON replay(user_id);
+CREATE INDEX IF NOT EXISTS idx_replay_rom ON replay(rom_hash);
