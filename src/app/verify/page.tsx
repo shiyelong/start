@@ -1063,7 +1063,7 @@ function VerifyRecordsPanel({ records }: { records: VerifyRecord[] }) {
                   )}>
                     <span className="text-[#8a8a8a]">{field}：</span>
                     <span className={hasConflict ? "text-[#f0b90b] font-bold" : "text-[#2ba640] font-bold"}>{winner[0]}</span>
-                    <span className="text-[#666] ml-1">({winner[1].count}人{hasConflict ? " 👍" + winner[1].totalLikes : ""})</span>
+                    <span className="text-[#666] ml-1">({winner[1].count}人{hasConflict ? " ?" + winner[1].totalLikes : ""})</span>
                     {hasConflict && <span className="text-[#ff4444] text-[9px] ml-1">有争议</span>}
                   </div>
                 );

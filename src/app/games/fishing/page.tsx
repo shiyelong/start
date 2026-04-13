@@ -78,15 +78,15 @@ const MAX_BITE_DELAY = 3.5;
 const MAX_SWIMMING_FISH = 12;
 
 const FISH_POOL: Fish[] = [
-  { name: "鲫鱼", emoji: "🐟", rarity: "common", weight: "0.3-1.2kg", price: 5, chance: 30 },
-  { name: "草鱼", emoji: "🐠", rarity: "common", weight: "1-3kg", price: 10, chance: 25 },
-  { name: "鲤鱼", emoji: "🐡", rarity: "common", weight: "0.5-2kg", price: 8, chance: 20 },
-  { name: "鲈鱼", emoji: "🎣", rarity: "rare", weight: "1-4kg", price: 25, chance: 10 },
-  { name: "金枪鱼", emoji: "🦈", rarity: "rare", weight: "5-20kg", price: 50, chance: 7 },
-  { name: "河豚", emoji: "🐡", rarity: "epic", weight: "0.5-2kg", price: 100, chance: 4 },
-  { name: "龙虾", emoji: "🦞", rarity: "epic", weight: "0.8-3kg", price: 80, chance: 3 },
-  { name: "金龙鱼", emoji: "✨", rarity: "legendary", weight: "2-5kg", price: 500, chance: 0.8 },
-  { name: "美人鱼", emoji: "🧜", rarity: "legendary", weight: "???", price: 1000, chance: 0.2 },
+  { name: "鲫鱼", emoji: "F1", rarity: "common", weight: "0.3-1.2kg", price: 5, chance: 30 },
+  { name: "草鱼", emoji: "F2", rarity: "common", weight: "1-3kg", price: 10, chance: 25 },
+  { name: "鲤鱼", emoji: "F3", rarity: "common", weight: "0.5-2kg", price: 8, chance: 20 },
+  { name: "鲈鱼", emoji: "?", rarity: "rare", weight: "1-4kg", price: 25, chance: 10 },
+  { name: "金枪鱼", emoji: "F4", rarity: "rare", weight: "5-20kg", price: 50, chance: 7 },
+  { name: "河豚", emoji: "F3", rarity: "epic", weight: "0.5-2kg", price: 100, chance: 4 },
+  { name: "龙虾", emoji: "?", rarity: "epic", weight: "0.8-3kg", price: 80, chance: 3 },
+  { name: "金龙鱼", emoji: "?", rarity: "legendary", weight: "2-5kg", price: 500, chance: 0.8 },
+  { name: "美人鱼", emoji: "?", rarity: "legendary", weight: "???", price: 1000, chance: 0.2 },
 ];
 
 const RARITY_COLORS: Record<string, string> = {
@@ -328,7 +328,7 @@ function renderGame(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = `rgba(255, 68, 68, ${0.7 + pulse * 0.3})`;
-    ctx.fillText("❗ 上钩了！", rodX, alertY);
+    ctx.fillText("? 上钩了！", rodX, alertY);
     ctx.restore();
 
     // Timer bar
@@ -940,7 +940,7 @@ export default function FishingPage() {
         {/* Title + Stats */}
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-xl font-bold text-white">
-            <span className="text-[#3ea6ff]">🎣 钓鱼达人</span>
+            <span className="text-[#3ea6ff]">? 钓鱼达人</span>
           </h1>
           <div className="flex gap-2">
             <div className="text-center px-3 py-1.5 rounded-lg bg-[#1a1a1a] border border-[#333]">
@@ -970,7 +970,7 @@ export default function FishingPage() {
                   : "bg-[#3ea6ff] text-[#0f0f0f] hover:bg-[#65b8ff] active:scale-95"
               }`}
             >
-              🎣 抛竿
+              ? 抛竿
             </button>
             <button
               onClick={buyBait}
@@ -995,7 +995,7 @@ export default function FishingPage() {
               onClick={() => { soundRef.current?.toggleMute(); forceUpdate(n => n + 1); }}
               className="px-3 py-1.5 rounded-lg text-xs border border-[#333] text-[#aaa] hover:text-white hover:border-[#555] transition"
             >
-              {soundRef.current?.isMuted() ? "🔇" : "🔊"}
+              {soundRef.current?.isMuted() ? "?" : "?"}
             </button>
             <button
               onClick={restart}
@@ -1022,7 +1022,7 @@ export default function FishingPage() {
               onClick={reelIn}
               className="px-6 py-2.5 rounded-xl bg-[#ff4444] text-white font-bold text-sm hover:bg-[#ff6666] active:scale-95 transition"
             >
-              🐟 快拉！收竿！
+              F1 快拉！收竿！
             </button>
           </div>
         )}
@@ -1033,7 +1033,7 @@ export default function FishingPage() {
 
         {/* Fish Encyclopedia */}
         <h3 className="text-sm font-bold mt-4 mb-2">
-          <span className="text-[#f0b90b]">📖</span> 鱼类图鉴
+          <span className="text-[#f0b90b]">?</span> 鱼类图鉴
         </h3>
         <div className="grid grid-cols-3 gap-2 mb-4">
           {FISH_POOL.map(f => {
@@ -1045,7 +1045,7 @@ export default function FishingPage() {
                   collected ? RARITY_BG[f.rarity] : "border-[#333] opacity-40"
                 }`}
               >
-                <div className="text-xl">{collected ? f.emoji : "❓"}</div>
+                <div className="text-xl">{collected ? f.emoji : "?"}</div>
                 <p className={`text-[10px] font-bold ${collected ? RARITY_CSS[f.rarity] : "text-[#666]"}`}>
                   {collected ? f.name : "???"}
                 </p>
@@ -1058,7 +1058,7 @@ export default function FishingPage() {
         {gameRef.current && gameRef.current.caught.length > 0 && (
           <>
             <h3 className="text-sm font-bold mb-2">
-              <span className="text-[#3ea6ff]">📋</span> 最近钓获
+              <span className="text-[#3ea6ff]">?</span> 最近钓获
             </h3>
             <div className="space-y-1.5 max-h-40 overflow-y-auto">
               {gameRef.current.caught.slice(0, 10).map((f, i) => (

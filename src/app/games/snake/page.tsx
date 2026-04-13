@@ -95,13 +95,13 @@ interface GameState {
 
 // ─── Food config ─────────────────────────────────────────────────────────────
 const FOOD_CONFIG: Record<FoodType, { points: number; color: string; glow: string; emoji: string }> = {
-  normal:  { points: 10, color: "#ff4444", glow: "#ff6666", emoji: "🍎" },
-  golden:  { points: 30, color: "#ffd700", glow: "#ffee88", emoji: "🌟" },
-  speed:   { points: 5,  color: "#00ccff", glow: "#66eeff", emoji: "⚡" },
-  shield:  { points: 5,  color: "#8855ff", glow: "#aa88ff", emoji: "🛡️" },
-  ghost:   { points: 5,  color: "#ff88ff", glow: "#ffaaff", emoji: "👻" },
-  magnet:  { points: 5,  color: "#ff8800", glow: "#ffaa44", emoji: "🧲" },
-  boss:    { points: 50, color: "#ff0066", glow: "#ff4499", emoji: "👑" },
+  normal:  { points: 10, color: "#ff4444", glow: "#ff6666", emoji: "a" },
+  golden:  { points: 30, color: "#ffd700", glow: "#ffee88", emoji: "*" },
+  speed:   { points: 5,  color: "#00ccff", glow: "#66eeff", emoji: "?" },
+  shield:  { points: 5,  color: "#8855ff", glow: "#aa88ff", emoji: "?" },
+  ghost:   { points: 5,  color: "#ff88ff", glow: "#ffaaff", emoji: "?" },
+  magnet:  { points: 5,  color: "#ff8800", glow: "#ffaa44", emoji: "?" },
+  boss:    { points: 50, color: "#ff0066", glow: "#ff4499", emoji: "?" },
 };
 
 // ─── Audio ───────────────────────────────────────────────────────────────────
@@ -694,7 +694,7 @@ export default function SnakeGame() {
         ctx.font = `${cellPx * 0.8}px serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText("👑", fx + cellPx, fy + cellPx);
+        ctx.fillText("?", fx + cellPx, fy + cellPx);
       } else {
         ctx.translate(fx, fy);
         ctx.rotate(f.type !== "normal" ? rotation : 0);
@@ -889,7 +889,7 @@ export default function SnakeGame() {
       ctx.fillStyle = ACCENT;
       ctx.font = "bold 24px monospace";
       ctx.textAlign = "center";
-      ctx.fillText("🐍 贪吃蛇", CANVAS_SIZE / 2, CANVAS_SIZE / 2 - 10);
+      ctx.fillText("S 贪吃蛇", CANVAS_SIZE / 2, CANVAS_SIZE / 2 - 10);
       ctx.fillStyle = "#666";
       ctx.font = "12px monospace";
       ctx.fillText("选择难度，点击开始", CANVAS_SIZE / 2, CANVAS_SIZE / 2 + 16);
@@ -1032,10 +1032,10 @@ export default function SnakeGame() {
 
   // ─── Power-up labels ──────────────────────────────────────────────────
   const powerLabels: Record<string, { icon: string; label: string; color: string }> = {
-    speed: { icon: "⚡", label: "加速", color: "#00ccff" },
-    shield: { icon: "🛡️", label: "护盾", color: "#8855ff" },
-    ghost: { icon: "👻", label: "穿透", color: "#ff88ff" },
-    magnet: { icon: "🧲", label: "磁铁", color: "#ff8800" },
+    speed: { icon: "?", label: "加速", color: "#00ccff" },
+    shield: { icon: "?", label: "护盾", color: "#8855ff" },
+    ghost: { icon: "?", label: "穿透", color: "#ff88ff" },
+    magnet: { icon: "?", label: "磁铁", color: "#ff8800" },
   };
 
 
@@ -1050,7 +1050,7 @@ export default function SnakeGame() {
         <div className="clear-both" />
 
         <h1 className="text-2xl font-bold mb-2">
-          <span className="mr-2">🐍</span>
+          <span className="mr-2">S</span>
           <span style={{ color: ACCENT }}>贪吃蛇</span>
           <span className="text-xs text-[#666] ml-2 font-normal">Premium</span>
         </h1>
@@ -1102,7 +1102,7 @@ export default function SnakeGame() {
             })}
             {shieldCount > 0 && (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ backgroundColor: "#8855ff25", color: "#8855ff", border: "1px solid #8855ff40" }}>
-                🛡️ ×{shieldCount}
+                ? ×{shieldCount}
               </span>
             )}
           </div>
@@ -1189,13 +1189,13 @@ export default function SnakeGame() {
 
         {/* Legend */}
         <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-[#666]">
-          <span>🍎 +10</span>
-          <span>🌟 +30</span>
-          <span>👑 +50</span>
-          <span>⚡ 加速</span>
-          <span>🛡️ 护盾</span>
-          <span>👻 穿透</span>
-          <span>🧲 磁铁</span>
+          <span>a +10</span>
+          <span>* +30</span>
+          <span>? +50</span>
+          <span>? 加速</span>
+          <span>? 护盾</span>
+          <span>? 穿透</span>
+          <span>? 磁铁</span>
         </div>
         <p className="text-[10px] text-[#555] mt-1">方向键/WASD控制 · 空格暂停 · 滑动操作</p>
 

@@ -71,9 +71,9 @@ export default function GameLeaderboard({ gameId }: { gameId: string }) {
   };
 
   const rankIcon = (rank: number) => {
-    if (rank === 1) return "🥇";
-    if (rank === 2) return "🥈";
-    if (rank === 3) return "🥉";
+    if (rank === 1) return "?";
+    if (rank === 2) return "?";
+    if (rank === 3) return "?";
     return `${rank}`;
   };
 

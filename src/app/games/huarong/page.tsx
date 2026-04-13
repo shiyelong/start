@@ -361,7 +361,7 @@ function renderGame(
     ctx.save();
     ctx.translate(w / 2, h / 2 - 30);
     ctx.scale(scale, scale);
-    drawText(ctx, "🏆", 0, -30, 100, "#ffffff", 48);
+    drawText(ctx, "?", 0, -30, 100, "#ffffff", 48);
     drawText(ctx, "曹操逃出！", 0, 15, w * 0.7, "#fbbf24", 24);
     drawText(ctx, `${game.moves}步 · ${Math.floor(game.elapsed / 1000)}秒 · ${calcScore(game.moves, game.elapsed)}分`, 0, 50, w * 0.8, "#8a8a8a", 14);
     ctx.restore();
@@ -823,7 +823,7 @@ export default function HuarongPage() {
         {/* Title + Stats */}
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-xl font-bold text-white">
-            <span className="text-[#dc2626]">♟ 华容道</span>
+            <span className="text-[#dc2626]">? 华容道</span>
           </h1>
           <div className="flex gap-2">
             <div className="text-center px-3 py-1.5 rounded-lg bg-[#1a1a1a] border border-[#333]">
@@ -880,7 +880,7 @@ export default function HuarongPage() {
               onClick={() => { soundRef.current?.toggleMute(); forceUpdate(n => n + 1); }}
               className="px-3 py-1.5 rounded-lg text-xs border border-[#333] text-[#aaa] hover:text-white hover:border-[#555] transition"
             >
-              {soundRef.current?.isMuted() ? "🔇" : "🔊"}
+              {soundRef.current?.isMuted() ? "?" : "?"}
             </button>
             <button
               onClick={restart}
@@ -934,7 +934,7 @@ export default function HuarongPage() {
         {/* Win message */}
         {won && (
           <div className="text-center mt-3 p-4 rounded-xl bg-[#1a1a1a] border border-[#fbbf24]/30">
-            <p className="text-2xl mb-1">🏆</p>
+            <p className="text-2xl mb-1">?</p>
             <p className="text-lg font-bold text-[#fbbf24]">曹操逃出！</p>
             <p className="text-[#8a8a8a] text-sm">{moves}步 · {Math.floor(elapsed / 1000)}秒 · 得分 {calcScore(moves, elapsed)}</p>
             <button

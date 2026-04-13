@@ -559,7 +559,7 @@ function drawPetSprite(
   if (pet.rarity === "rare" || pet.rarity === "epic") {
     ctx.fillStyle = pet.rarity === "epic" ? "#f0b90b" : "#bdc3c7";
     ctx.font = `${u * 2}px sans-serif`;
-    ctx.fillText("★", x + s * 0.02, y + s * 0.15);
+    ctx.fillText("?", x + s * 0.02, y + s * 0.15);
   }
 }
 
@@ -1295,11 +1295,11 @@ function renderHUD(
 
   // Gold
   ctx.fillStyle = "#ffd700";
-  ctx.fillText(`💰${state.gold}`, 70, 18);
+  ctx.fillText(`G${state.gold}`, 70, 18);
 
   // Area name
   ctx.fillStyle = "#aaaaaa";
-  ctx.fillText(`📍${areaName}`, 140, 18);
+  ctx.fillText(`?${areaName}`, 140, 18);
 
   // Quest hint (if any active quest)
   const activeQuest = state.quests.find((q) => !q.completed);
@@ -1308,7 +1308,7 @@ function renderHUD(
     if (questDef) {
       ctx.fillStyle = "#88ccff";
       ctx.font = "9px monospace";
-      ctx.fillText(`📋${questDef.name}`, 240, 18);
+      ctx.fillText(`?${questDef.name}`, 240, 18);
     }
   }
 
@@ -1420,7 +1420,7 @@ function renderMenu(
       ctx.fillStyle = completed ? "#2ecc71" : "#f39c12";
       ctx.font = "11px monospace";
       ctx.fillText(
-        `${completed ? "✅" : "⬜"} ${quest.name}`,
+        `${completed ? "?" : "⬜"} ${quest.name}`,
         42,
         panelY + 36 + i * 22,
       );
@@ -2051,7 +2051,7 @@ export default function PokemonPage() {
       <Header />
       <main className="max-w-2xl mx-auto px-4 py-4 pb-24 md:pb-8">
         <h1 className="text-xl font-bold text-white mb-3">
-          <span className="text-[#f0b90b]">🐉 宠物大冒险</span>
+          <span className="text-[#f0b90b]">? 宠物大冒险</span>
         </h1>
 
         {/* Canvas */}

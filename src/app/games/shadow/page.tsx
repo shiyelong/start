@@ -973,11 +973,11 @@ function drawHUD(ctx: CanvasRenderingContext2D, p: Player, levelId: number, time
   // Atk boost indicator
   if (p.atkBoostTimer > 0) {
     ctx.fillStyle = "#c44dff";
-    ctx.fillText(`⚔ ATK UP ${Math.ceil(p.atkBoostTimer / 60)}s`, 580, 24);
+    ctx.fillText(`? ATK UP ${Math.ceil(p.atkBoostTimer / 60)}s`, 580, 24);
   }
   if (p.shieldActive) {
     ctx.fillStyle = "#a855f7";
-    ctx.fillText("🛡 SHIELD", 700, 24);
+    ctx.fillText("? SHIELD", 700, 24);
   }
 }
 
@@ -1402,7 +1402,7 @@ export default function ShadowDungeonPage() {
 
   const renderMenu = () => (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-purple-950/90 to-gray-950/90 text-white z-10">
-      <h1 className="text-4xl font-bold mb-2 drop-shadow-lg">👻 Shadow Dungeon</h1>
+      <h1 className="text-4xl font-bold mb-2 drop-shadow-lg">? Shadow Dungeon</h1>
       <p className="text-lg mb-8 text-purple-300">Brave the darkness within!</p>
       <button onClick={() => { setUiPhase("levelSelect"); }} className="px-8 py-3 bg-purple-700 hover:bg-purple-600 rounded-lg text-xl font-bold transition-colors mb-4">
         Enter Dungeon
@@ -1421,9 +1421,9 @@ export default function ShadowDungeonPage() {
             <button key={lv.id} disabled={locked}
               onClick={() => { if (!locked) initLevel(i, gsRef.current?.player.abilities); }}
               className={`w-20 h-24 rounded-lg flex flex-col items-center justify-center text-sm font-bold transition-all ${locked ? "bg-gray-800 opacity-50 cursor-not-allowed" : "bg-purple-800 hover:bg-purple-700 cursor-pointer"}`}>
-              <span className="text-lg">{locked ? "🔒" : `${lv.id}`}</span>
-              <span className="text-xs mt-1">{lv.boss ? "💀 Boss" : "Stage"}</span>
-              {result && <span className="text-purple-300 text-xs">{"★".repeat(result.stars)}{"☆".repeat(3 - result.stars)}</span>}
+              <span className="text-lg">{locked ? "" : `${lv.id}`}</span>
+              <span className="text-xs mt-1">{lv.boss ? "? Boss" : "Stage"}</span>
+              {result && <span className="text-purple-300 text-xs">{"?".repeat(result.stars)}{"?".repeat(3 - result.stars)}</span>}
             </button>
           );
         })}
@@ -1438,10 +1438,10 @@ export default function ShadowDungeonPage() {
     const result = uiResults[gsRef.current?.level ?? 0];
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-purple-950/90 to-violet-900/90 text-white z-10">
-        <h2 className="text-3xl font-bold mb-4">🎉 Level Complete!</h2>
+        <h2 className="text-3xl font-bold mb-4">? Level Complete!</h2>
         {result && (
           <div className="text-center mb-6">
-            <p className="text-2xl text-purple-300 mb-2">{"★".repeat(result.stars)}{"☆".repeat(3 - result.stars)}</p>
+            <p className="text-2xl text-purple-300 mb-2">{"?".repeat(result.stars)}{"?".repeat(3 - result.stars)}</p>
             <p>Time: {Math.floor(result.time)}s</p>
             <p>Score: {result.score}</p>
             <p>HP: {result.remainingHp}</p>
@@ -1464,7 +1464,7 @@ export default function ShadowDungeonPage() {
 
   const renderGameOver = () => (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-red-950/90 to-gray-950/90 text-white z-10">
-      <h2 className="text-3xl font-bold mb-4">💀 Game Over</h2>
+      <h2 className="text-3xl font-bold mb-4">? Game Over</h2>
       <p className="mb-6 text-gray-400">Score: {uiScore}</p>
       <div className="flex gap-3">
         <button onClick={() => initLevel(gsRef.current?.level ?? 0, gsRef.current?.player.abilities)} className="px-6 py-2 bg-purple-700 hover:bg-purple-600 rounded-lg font-bold transition-colors">
@@ -1479,9 +1479,9 @@ export default function ShadowDungeonPage() {
 
   const renderUpgrade = () => {
     const labels: Record<string, { icon: string; name: string; desc: string }> = {
-      hp: { icon: "❤️", name: "Max HP +25", desc: "Increase maximum health" },
-      atk: { icon: "⚔️", name: "ATK +5", desc: "Increase attack power" },
-      jump: { icon: "🦘", name: "Jump +1", desc: "Jump higher" },
+      hp: { icon: "?", name: "Max HP +25", desc: "Increase maximum health" },
+      atk: { icon: "<i class="fas fa-swords" />", name: "ATK +5", desc: "Increase attack power" },
+      jump: { icon: "?", name: "Jump +1", desc: "Jump higher" },
     };
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-purple-950/90 to-indigo-950/90 text-white z-10">

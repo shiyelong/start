@@ -390,7 +390,7 @@ export default function EmulatorSessionPage() {
                 onClick={() => setActivePanel(null)}
                 className="p-1 rounded-lg text-muted hover:text-white hover:bg-bg-hover transition text-lg"
               >
-                ✕
+                ?
               </button>
             </div>
             <CheatPanel

@@ -43,7 +43,7 @@ const PROVIDER_CONFIG: Record<string, { model: string; name: string }> = {
 function AIChat() {
   const [mode, setMode] = useState("chat");
   const [msgs, setMsgs] = useState<Msg[]>([
-    { role: "assistant", content: "👋 你好！我是星聚 AI 助手。\n\n我拥有多种能力模式，可以切换上方标签使用：\n\n💬 智能对话 — 问我任何问题\n💻 代码助手 — 写代码、Debug、技术咨询\n✍️ 文案创作 — 写文章、文案、脚本\n🌐 翻译 — 多语言互译\n🖼️ 图片描述 — AI看图说话\n📊 数据分析 — 分析数据趋势\n\n试试下方的快捷提问，或直接输入你的问题！", mode: "chat" }
+    { role: "assistant", content: " 你好！我是星聚 AI 助手。\n\n我拥有多种能力模式，可以切换上方标签使用：\n\n 智能对话 — 问我任何问题\n 代码助手 — 写代码、Debug、技术咨询\n 文案创作 — 写文章、文案、脚本\n 翻译 — 多语言互译\n 图片描述 — AI看图说话\n 数据分析 — 分析数据趋势\n\n试试下方的快捷提问，或直接输入你的问题！", mode: "chat" }
   ]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
@@ -149,7 +149,7 @@ function AIChat() {
       await callAI(msg);
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : "未知错误";
-      setMsgs(prev => [...prev, { role: "assistant", content: `⚠️ AI调用失败：${errMsg}`, mode }]);
+      setMsgs(prev => [...prev, { role: "assistant", content: `? AI调用失败：${errMsg}`, mode }]);
     }
     setTyping(false);
   }, [input, mode, typing, callAI]);
@@ -296,8 +296,8 @@ function AIChat() {
               <i className="fas fa-save mr-1.5" />保存设置
             </button>
             <div className="mt-3 p-3 rounded-xl bg-[#212121]/50 border border-[#333]/30 text-[10px] text-[#666] space-y-1">
-              <p>🔒 API Key 安全存储在服务器端，不会暴露给浏览器。</p>
-              <p>💡 选择服务商后，请求会通过后端代理转发到对应的AI服务。</p>
+              <p> API Key 安全存储在服务器端，不会暴露给浏览器。</p>
+              <p> 选择服务商后，请求会通过后端代理转发到对应的AI服务。</p>
             </div>
           </div>
         </div>

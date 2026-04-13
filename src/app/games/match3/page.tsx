@@ -322,13 +322,13 @@ function renderGame(
   // ─── HUD: Score, Moves, Combo ──────────────────────
   const hudY = 12;
   drawText(ctx, `⭐ ${game.score}`, w * 0.2, hudY + 10, w * 0.3, "#f0b90b", 16);
-  drawText(ctx, `✋ ${game.moves}步`, cx, hudY + 10, w * 0.3, "#3ea6ff", 16);
+  drawText(ctx, `? ${game.moves}步`, cx, hudY + 10, w * 0.3, "#3ea6ff", 16);
   if (game.combo > 1) {
     const comboPulse = 1 + Math.sin(anim.time * 5) * 0.08;
     ctx.save();
     ctx.translate(w * 0.8, hudY + 10);
     ctx.scale(comboPulse, comboPulse);
-    drawText(ctx, `🔥 x${game.combo}`, 0, 0, w * 0.25, "#ff6b6b", 16);
+    drawText(ctx, `<i class="fas fa-fire" /> x${game.combo}`, 0, 0, w * 0.25, "#ff6b6b", 16);
     ctx.restore();
   }
 

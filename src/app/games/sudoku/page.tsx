@@ -798,7 +798,7 @@ export default function SudokuPage() {
         {/* Title + Stats */}
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-xl font-bold text-white">
-            <span className="text-[#3ea6ff]">🔢 数独</span>
+            <span className="text-[#3ea6ff]">? 数独</span>
           </h1>
           <div className="flex gap-2">
             <div className="text-center px-3 py-1.5 rounded-lg bg-[#1a1a1a] border border-[#333]">
@@ -842,7 +842,7 @@ export default function SudokuPage() {
               onClick={() => { soundRef.current?.toggleMute(); forceUpdate(n => n + 1); }}
               className="px-3 py-1.5 rounded-lg text-xs border border-[#333] text-[#aaa] hover:text-white hover:border-[#555] transition"
             >
-              {soundRef.current?.isMuted() ? "🔇" : "🔊"}
+              {soundRef.current?.isMuted() ? "?" : "?"}
             </button>
           </div>
         </div>
@@ -873,7 +873,7 @@ export default function SudokuPage() {
             onClick={clearCell}
             className="px-4 py-1.5 rounded-lg text-xs border border-[#333] text-[#aaa] hover:text-white transition"
           >
-            🗑️ 清除
+            ? 清除
           </button>
           <button
             onClick={toggleNotes}
@@ -883,7 +883,7 @@ export default function SudokuPage() {
                 : "border-[#333] text-[#aaa]"
             }`}
           >
-            ✏️ 笔记{notesMode ? " ON" : ""}
+            ? 笔记{notesMode ? " ON" : ""}
           </button>
           <button
             onClick={() => newGame(difficulty)}
@@ -896,7 +896,7 @@ export default function SudokuPage() {
         {/* Win overlay */}
         {won && (
           <div className="text-center mt-2">
-            <p className="text-3xl mb-1">🎉</p>
+            <p className="text-3xl mb-1">?</p>
             <p className="text-lg font-bold text-[#22c55e]">完美解答！</p>
             <p className="text-[#8a8a8a] text-sm mb-3">
               用时 {formatTime(displayTime)} · 得分 {score}

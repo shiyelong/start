@@ -40,7 +40,7 @@ const THUMB_GRADIENTS = [
   "from-[#2a0a1a] to-[#3a1a2a]", "from-[#0a2a1a] to-[#1a3a2a]",
   "from-[#0a0a1a] to-[#1a0a2a]", "from-[#1a1a2e] to-[#0a2a3e]",
 ];
-const AVATARS = ["🎮","🎸","📚","⚔️","🍖","💻","🎨","🚴","🌙","⭐","🎹","🐍"];
+const AVATARS = ["<i class="fas fa-gamepad" />","G","B","<i class="fas fa-swords" />","?","","A","R","M","⭐","P","S"];
 
 function mapApiRoom(row: Record<string, unknown>, idx: number): LiveRoom {
   const tags = (() => { try { return JSON.parse(row.tags as string); } catch { return []; } })();
@@ -110,7 +110,7 @@ export default function LivePage() {
     // 模拟其他人回复
     setTimeout(() => {
       const bots = ["路人甲", "小明", "观众A", "粉丝1号", "游客", "老王"];
-      const replies = ["666", "好厉害！", "主播加油", "哈哈哈", "太强了", "学到了", "❤️", "🔥🔥🔥", "第一次来", "关注了"];
+      const replies = ["666", "好厉害！", "主播加油", "哈哈哈", "太强了", "学到了", "?", "<i class="fas fa-fire" /><i class="fas fa-fire" /><i class="fas fa-fire" />", "第一次来", "关注了"];
       setChatMsgs(prev => [...prev.slice(-50), {
         user: bots[Math.floor(Math.random() * bots.length)],
         msg: replies[Math.floor(Math.random() * replies.length)],
@@ -124,7 +124,7 @@ export default function LivePage() {
     setWatching(room);
     setChatMsgs([
       { user: "系统", msg: `欢迎来到 ${room.streamer} 的直播间！`, color: "#f0b90b" },
-      { user: "系统", msg: "请文明发言，友善互动 ❤️", color: "#8a8a8a" },
+      { user: "系统", msg: "请文明发言，友善互动 ?", color: "#8a8a8a" },
     ]);
   };
 

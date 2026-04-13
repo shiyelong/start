@@ -351,7 +351,7 @@ function renderGame(
     ctx.fillStyle = "#f0b90b";
     ctx.font = "bold 14px sans-serif";
     ctx.textAlign = "left";
-    const qLines = wrapText(ctx, `❓ ${puzzle.question}`, contentW);
+    const qLines = wrapText(ctx, `? ${puzzle.question}`, contentW);
     for (const ql of qLines) {
       ctx.fillText(ql, startX, y, contentW);
       y += 20;
@@ -421,12 +421,12 @@ function renderGame(
         ctx.fillStyle = "#2ba640";
         ctx.font = "bold 16px sans-serif";
         ctx.textAlign = "right";
-        ctx.fillText("✓", startX + contentW - 14, optY + optH / 2);
+        ctx.fillText("?", startX + contentW - 14, optY + optH / 2);
       } else if (game.revealed && isSelected && !isCorrect) {
         ctx.fillStyle = "#ff4444";
         ctx.font = "bold 16px sans-serif";
         ctx.textAlign = "right";
-        ctx.fillText("✗", startX + contentW - 14, optY + optH / 2);
+        ctx.fillText("?", startX + contentW - 14, optY + optH / 2);
       }
     }
 
@@ -437,7 +437,7 @@ function renderGame(
       ctx.globalAlpha = Math.min(1, anim.feedbackAlpha);
 
       const fbColor = anim.feedbackCorrect ? "#2ba640" : "#ff4444";
-      const fbText = anim.feedbackCorrect ? "✅ 回答正确！" : "❌ 回答错误";
+      const fbText = anim.feedbackCorrect ? "? 回答正确！" : "? 回答错误";
 
       // Feedback box
       drawRoundedRect(ctx, startX, y, contentW, 36, 10);
@@ -468,7 +468,7 @@ function renderGame(
       ctx.font = "bold 11px sans-serif";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      ctx.fillText("💡 解析", startX + 12, y + 8);
+      ctx.fillText(" 解析", startX + 12, y + 8);
 
       ctx.fillStyle = "#aaa";
       ctx.font = "11px sans-serif";
@@ -541,7 +541,7 @@ function renderGame(
     ctx.font = "28px sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("🧠", cx, gy);
+    ctx.fillText("?", cx, gy);
     gy += 32;
 
     ctx.fillStyle = "#f0b90b";
@@ -855,7 +855,7 @@ export default function LogicPage() {
     y += 12;
 
     ctx.font = "bold 14px sans-serif";
-    const qLines = wrapText(ctx, `❓ ${puzzle.question}`, contentW);
+    const qLines = wrapText(ctx, `? ${puzzle.question}`, contentW);
     y += qLines.length * 20 + 10;
 
     ctx.restore();
@@ -945,7 +945,7 @@ export default function LogicPage() {
     y += 12;
 
     ctx.font = "bold 14px sans-serif";
-    const qLines = wrapText(ctx, `❓ ${puzzle.question}`, contentW);
+    const qLines = wrapText(ctx, `? ${puzzle.question}`, contentW);
     y += qLines.length * 20 + 10;
 
     ctx.restore();
@@ -1237,7 +1237,7 @@ export default function LogicPage() {
         {/* Title + Stats */}
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-xl font-bold text-white">
-            <span className="text-[#a855f7]">🧠 逻辑推理</span>
+            <span className="text-[#a855f7]">? 逻辑推理</span>
           </h1>
           <div className="flex gap-2">
             <div className="text-center px-3 py-1.5 rounded-lg bg-[#1a1a1a] border border-[#333]">
@@ -1269,7 +1269,7 @@ export default function LogicPage() {
             onClick={() => { soundRef.current?.toggleMute(); forceUpdate(n => n + 1); }}
             className="px-3 py-1.5 rounded-lg text-xs border border-[#333] text-[#aaa] hover:text-white hover:border-[#555] transition"
           >
-            {soundRef.current?.isMuted() ? "🔇" : "🔊"}
+            {soundRef.current?.isMuted() ? "?" : "?"}
           </button>
           <button
             onClick={initGame}

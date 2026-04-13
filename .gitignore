@@ -25,8 +25,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# local env files
+# local env files — 宪法第七章
+.env
+.env.*
 .env*.local
+
+# secrets & tokens — 宪法第二章
+*.token
+*.secret
+cloudflared*.yml
 
 # vercel
 .vercel

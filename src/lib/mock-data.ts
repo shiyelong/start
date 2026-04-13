@@ -114,38 +114,25 @@ export const aiSuggestions = [
 ];
 
 export const games = [
+  // 经典三巨头
   { id:'2048', name:'2048', icon:'fa-hashtag', desc:'经典数字合并', color:'from-amber-500 to-orange-600', hot:true },
   { id:'snake', name:'贪吃蛇', icon:'fa-worm', desc:'经典贪吃蛇', color:'from-green-500 to-emerald-600', hot:true },
-  { id:'memory', name:'记忆翻牌', icon:'fa-clone', desc:'考验记忆力', color:'from-blue-500 to-indigo-600', hot:false },
   { id:'tetris', name:'俄罗斯方块', icon:'fa-cubes', desc:'经典方块消除', color:'from-purple-500 to-violet-600', hot:true },
-  { id:'quiz', name:'性格测试', icon:'fa-hat-wizard', desc:'测测你的性格', color:'from-pink-500 to-rose-600', hot:true },
-  { id:'reaction', name:'反应测试', icon:'fa-bolt', desc:'测测反应速度', color:'from-yellow-500 to-amber-600', hot:false },
-  { id:'whackamole', name:'打地鼠', icon:'fa-hammer', desc:'快速点击挑战', color:'from-red-500 to-pink-600', hot:true },
-  { id:'colormatch', name:'颜色挑战', icon:'fa-palette', desc:'考验你的眼力', color:'from-cyan-500 to-blue-600', hot:false },
-  { id:'plusminus', name:'加减消除', icon:'fa-plus-minus', desc:'左减右加停在目标', color:'from-lime-500 to-green-600', hot:true },
-  { id:'farm', name:'开心农场', icon:'fa-seedling', desc:'种菜收菜赚金币', color:'from-emerald-500 to-lime-600', hot:true },
-  { id:'forest', name:'森林冒险', icon:'fa-tree', desc:'横版闯关探索神秘森林', color:'from-green-500 to-emerald-600', hot:true },
-  { id:'tower', name:'塔防守卫', icon:'fa-chess-rook', desc:'建塔防御怪物入侵', color:'from-orange-500 to-red-600', hot:true },
+  // 大型游戏
   { id:'pokemon', name:'宠物大冒险', icon:'fa-dragon', desc:'探索世界收集宠物回合制战斗', color:'from-violet-500 to-purple-600', hot:true },
-  { id:'dungeon', name:'地牢探险', icon:'fa-dungeon', desc:'Roguelike地牢冒险', color:'from-stone-500 to-zinc-700', hot:true },
-  { id:'spaceshoot', name:'太空射击', icon:'fa-rocket', desc:'弹幕射击打Boss', color:'from-blue-600 to-cyan-500', hot:true },
-  { id:'match3', name:'宝石消消乐', icon:'fa-gem', desc:'三消益智停不下来', color:'from-fuchsia-500 to-pink-600', hot:true },
-  { id:'fishing', name:'钓鱼达人', icon:'fa-fish', desc:'休闲钓鱼收集图鉴', color:'from-teal-500 to-cyan-600', hot:false },
-  { id:'typing', name:'打字英雄', icon:'fa-keyboard', desc:'打字速度大挑战', color:'from-indigo-500 to-blue-600', hot:false },
-  { id:'stacktower', name:'难死塔', icon:'fa-cubes-stacked', desc:'精准堆叠越高越难', color:'from-yellow-500 to-red-500', hot:true },
-  { id:'sudoku', name:'数独', icon:'fa-table-cells', desc:'经典9宫格逻辑推理', color:'from-blue-500 to-sky-600', hot:true },
-  { id:'minesweeper', name:'扫雷', icon:'fa-bomb', desc:'经典扫雷逻辑推理', color:'from-gray-500 to-zinc-700', hot:true },
-  { id:'huarong', name:'华容道', icon:'fa-chess-board', desc:'滑块解谜经典益智', color:'from-red-600 to-amber-600', hot:true },
-  { id:'sokoban', name:'推箱子', icon:'fa-box', desc:'经典推箱子闯关', color:'from-amber-600 to-yellow-500', hot:true },
-  { id:'nonogram', name:'数织', icon:'fa-border-all', desc:'根据数字推理填色', color:'from-teal-500 to-emerald-600', hot:true },
-  { id:'lights', name:'关灯游戏', icon:'fa-lightbulb', desc:'翻转逻辑全部关灯', color:'from-yellow-400 to-orange-500', hot:true },
-  { id:'logic', name:'逻辑推理', icon:'fa-brain', desc:'烧脑逻辑谜题挑战', color:'from-rose-500 to-red-700', hot:true },
-  { id:'laser', name:'流光迷宫', icon:'fa-wand-sparkles', desc:'反射激光解谜华丽', color:'from-cyan-400 to-blue-600', hot:true },
-  { id:'hexchain', name:'六角连珠', icon:'fa-hexagon-check', desc:'六角棋盘策略对弈', color:'from-emerald-400 to-teal-600', hot:true },
-  { id:'quantum', name:'量子连线', icon:'fa-atom', desc:'量子纠缠连接解谜', color:'from-violet-400 to-purple-700', hot:true },
   { id:'civilization', name:'文明崛起', icon:'fa-landmark', desc:'4X策略建城征服世界', color:'from-amber-500 to-red-700', hot:true },
-  { id:'survival', name:'荒岛求生', icon:'fa-campground', desc:'采集合成建造生存', color:'from-green-600 to-emerald-800', hot:true },
-  { id:'tycoon', name:'商业帝国', icon:'fa-city', desc:'经营模拟商业大亨', color:'from-blue-500 to-indigo-700', hot:true },
+  // 横版闯关
+  { id:'forest', name:'森林冒险', icon:'fa-tree', desc:'横版闯关探索神秘森林', color:'from-green-500 to-emerald-600', hot:true },
   { id:'mecha', name:'机械城堡', icon:'fa-gear', desc:'科技风横版闯关冒险', color:'from-slate-500 to-blue-600', hot:true },
   { id:'shadow', name:'暗影地牢', icon:'fa-ghost', desc:'黑暗主题横版闯关挑战', color:'from-purple-600 to-zinc-800', hot:true },
+  // 动作射击
+  { id:'spaceshoot', name:'太空射击', icon:'fa-rocket', desc:'弹幕射击打Boss', color:'from-blue-600 to-cyan-500', hot:true },
+  { id:'tower', name:'塔防守卫', icon:'fa-chess-rook', desc:'建塔防御怪物入侵', color:'from-orange-500 to-red-600', hot:true },
+  // 益智
+  { id:'match3', name:'宝石消消乐', icon:'fa-gem', desc:'三消益智停不下来', color:'from-fuchsia-500 to-pink-600', hot:true },
+  { id:'sudoku', name:'数独', icon:'fa-table-cells', desc:'经典9宫格逻辑推理', color:'from-blue-500 to-sky-600', hot:true },
+  { id:'huarong', name:'华容道', icon:'fa-chess-board', desc:'滑块解谜经典益智', color:'from-red-600 to-amber-600', hot:true },
+  { id:'logic', name:'逻辑推理', icon:'fa-brain', desc:'烧脑逻辑谜题挑战', color:'from-rose-500 to-red-700', hot:true },
+  // 休闲
+  { id:'fishing', name:'钓鱼达人', icon:'fa-fish', desc:'休闲钓鱼收集图鉴', color:'from-teal-500 to-cyan-600', hot:false },
 ];

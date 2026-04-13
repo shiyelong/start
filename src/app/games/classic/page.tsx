@@ -21,7 +21,7 @@ export default function ClassicGamesPage() {
           </Link>
         </div>
 
-        <h1 className="text-2xl font-bold mb-1">🎮 经典游戏</h1>
+        <h1 className="text-2xl font-bold mb-1"><i class="fas fa-gamepad" /> 经典游戏</h1>
         <p className="text-muted text-sm mb-6">
           上传ROM，在浏览器中畅玩FC、SFC、GBA、街机等经典主机游戏
         </p>
