@@ -758,9 +758,11 @@
 
 ### 需求 36: 成人服务验证与点评平台
 
-**用户故事:** 作为星聚成人用户，我希望平台提供一个成人服务（如SPA、按摩等）的验证与点评系统，包含服务者的详细资料（外貌、技能、人种等），以便通过真实用户的验证和评价来辨别真假，避免被骗。
+**用户故事:** 作为星聚成人用户，我希望平台提供一个成人服务（如SPA、按摩等）的验证与点评系统，所有内容均为第三方自由投稿（非平台提供），包含服务者的详细资料（外貌、技能、人种等），以便通过真实用户的验证和评价来辨别真假，避免被骗。
 
 #### 验收标准
+
+0. THE Adult_Service_Platform SHALL 在板块顶部明确声明：所有服务信息均为第三方用户自由投稿，平台仅提供信息展示和验证工具，不直接提供任何服务，不对服务质量和安全性负责
 
 1. THE Adult_Service_Platform SHALL 在成人专区内提供"服务验证"板块，用户可浏览和搜索已提交的成人服务者/商家信息
 2. THE Adult_Service_Platform SHALL 为每个服务者/商家展示以下信息：
@@ -1035,6 +1037,20 @@
 14. THE Privacy_Shield SHALL 支持Tor浏览器访问，不屏蔽Tor出口节点的请求
 15. THE Privacy_Shield SHALL 确保用户之间交换的联系方式（微信、QQ、Telegram、WhatsApp等）仅存储在端到端加密的私聊中，平台服务器无法读取
 16. THE Privacy_Shield SHALL 对用户注销请求在72小时内彻底删除所有用户数据，不保留任何备份
+17. THE Privacy_Shield SHALL 确保运营者身份完全匿名：
+    - 域名注册使用隐私保护服务（Whois Privacy），注册信息不可查
+    - Cloudflare账户使用匿名邮箱注册，不绑定真实身份
+    - 所有域名通过不同注册商注册，避免单点关联
+    - NAS通过Cloudflare Tunnel连接，运营商只能看到与Cloudflare的加密流量，无法识别NAS用途
+    - 平台不设置任何"关于我们"、"联系方式"、"公司地址"等可追溯运营者身份的信息
+    - 管理员登录入口使用隐蔽路径（非标准的/admin），且仅允许特定IP或Cloudflare Access授权访问
+18. THE Privacy_Shield SHALL 确保NAS对运营商完全隐身：
+    - NAS零公网端口，仅通过Cloudflare Tunnel出站连接
+    - NAS的DNS请求通过加密DNS（DoH/DoT）发出，运营商无法看到DNS查询内容
+    - NAS与Cloudflare之间的Tunnel流量与普通HTTPS流量无法区分
+    - NAS上不运行任何可被端口扫描发现的服务
+    - NAS的MAC地址和设备指纹不暴露给外部网络
+19. THE Privacy_Shield SHALL 对所有用户生成内容（帖子、点评、验证报告、照片）进行EXIF元数据清除，防止通过照片元数据追踪用户位置
 
 ---
 
