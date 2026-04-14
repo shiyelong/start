@@ -796,7 +796,7 @@ GET  /api/admin/sources/health
 
 ```
 GET  /api/zone/services
-  Query: country?, city?, ethnicity?, serviceType?, status?, rating?, page?
+  Query: country?, city?, ethnicity?, serviceType?, status?, rating?, verificationLevel?, page?
   Response: { providers: ServiceProvider[] }
 
 GET  /api/zone/services/[id]
@@ -804,9 +804,21 @@ GET  /api/zone/services/[id]
 
 POST /api/zone/services
   Body: ServiceProviderSubmission
+  Response: { provider: ServiceProvider }
+
+POST /api/zone/services/[id]/video-verify
+  Body: { videoFile: File }  (multipart/form-data, 自拍视频)
+  Response: { verified: boolean, faceMatchScore: number }
+
+POST /api/zone/services/[id]/health-verify
+  Body: { reportImage: File }  (multipart/form-data, STD检测报告/试纸照片)
+  Response: { verified: boolean, expiresAt: string }
+
+GET  /api/zone/services/[id]/health-status
+  Response: { verified: boolean, expiresAt: string, daysRemaining: number }
 
 POST /api/zone/services/[id]/verify
-  Body: { report: VerificationReport }
+  Body: { report: VerificationReport }  (社区验证报告)
 
 POST /api/zone/services/[id]/review
   Body: { rating: number, text: string, tags: string[] }
@@ -1181,6 +1193,14 @@ CREATE TABLE IF NOT EXISTS service_providers (
   location_type TEXT,              -- home/store/both
   photos TEXT DEFAULT '[]',        -- R2 URL JSON 数组
   status TEXT NOT NULL DEFAULT 'pending', -- pending/verified/warning/fraud
+  video_verified INTEGER NOT NULL DEFAULT 0,
+  video_verified_at TEXT,
+  video_url TEXT,                   -- R2 存储的验证视频 URL
+  face_match_score REAL,            -- AI 人脸比对分数
+  health_verified INTEGER NOT NULL DEFAULT 0,
+  health_report_url TEXT,           -- R2 存储的健康报告照片 URL
+  health_expires_at TEXT,           -- 健康证明过期时间（30天）
+  verification_level TEXT NOT NULL DEFAULT 'none', -- none/video/health/community/full
   verify_count INTEGER NOT NULL DEFAULT 0,
   avg_rating REAL NOT NULL DEFAULT 0,
   review_count INTEGER NOT NULL DEFAULT 0,
