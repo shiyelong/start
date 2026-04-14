@@ -417,3 +417,131 @@ export type SupportedExtension = (typeof SUPPORTED_EXTENSIONS)[number];
 // --- Max File Size ---
 
 export const MAX_ROM_SIZE_BYTES = 67_108_864; // 64 MB
+
+
+// =============================================================================
+// Shared Type Definitions for StarHub Entertainment Platform
+// =============================================================================
+
+// --- MPAA Content Rating ---
+
+/** MPAA content rating levels */
+export type ContentRating = 'G' | 'PG' | 'PG-13' | 'R' | 'NC-17';
+
+/** Ordered rating levels for comparison (lower index = less restrictive) */
+export const RATING_ORDER: readonly ContentRating[] = [
+  'G',
+  'PG',
+  'PG-13',
+  'R',
+  'NC-17',
+] as const;
+
+// --- Source Types ---
+
+/** Aggregation source content type */
+export type SourceType =
+  | 'video'
+  | 'music'
+  | 'comic'
+  | 'novel'
+  | 'anime'
+  | 'live'
+  | 'podcast';
+
+/** Source health status */
+export type SourceHealth = 'online' | 'offline' | 'degraded';
+
+/** Source configuration stored in D1 */
+export interface SourceConfig {
+  id: string;
+  name: string;
+  type: SourceType;
+  enabled: boolean;
+  rating: ContentRating;
+  priority: number;
+  searchUrl: string;
+  parseRules: string;
+  timeout: number;
+  health: SourceHealth;
+  avgResponseTime: number;
+  successRate: number;
+  failCount: number;
+  lastChecked: string;
+}
+
+// --- Aggregated Content ---
+
+/** Universal aggregated search result item */
+export interface AggregatedItem {
+  id: string;
+  title: string;
+  cover: string;
+  source: string;
+  sourceId: string;
+  rating: ContentRating;
+  type: SourceType;
+  url: string;
+  metadata: Record<string, unknown>;
+  tags?: string[];
+}
+
+// --- Search ---
+
+/** Aggregated search request parameters */
+export interface SearchRequest {
+  query: string;
+  type?: SourceType;
+  rating?: ContentRating;
+  tags?: string[];
+  region?: string[];
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'relevance' | 'latest' | 'popular' | 'rating';
+}
+
+/** Source status summary within a search response */
+export interface SearchSourceStatus {
+  name: string;
+  count: number;
+  health: SourceHealth;
+}
+
+/** Aggregated search response */
+export interface SearchResponse {
+  items: AggregatedItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  sources: SearchSourceStatus[];
+}
+
+// --- User Mode (Age Gate) ---
+
+/** User age-gate mode */
+export type UserMode = 'child' | 'teen' | 'mature' | 'adult' | 'elder';
+
+/** Maximum allowed content rating per user mode */
+export const MODE_MAX_RATING: Record<UserMode, ContentRating> = {
+  child: 'G',
+  teen: 'PG-13',
+  mature: 'R',
+  adult: 'NC-17',
+  elder: 'PG',
+};
+
+// --- API Client Types ---
+
+/** Standard API error response shape */
+export interface APIErrorResponse {
+  error: string;
+  message?: string;
+  retryAfter?: number;
+}
+
+/** Options for the fetchAPI helper */
+export interface FetchAPIOptions extends Omit<RequestInit, 'body'> {
+  body?: unknown;
+  /** Skip automatic JSON parsing of the response */
+  rawResponse?: boolean;
+}

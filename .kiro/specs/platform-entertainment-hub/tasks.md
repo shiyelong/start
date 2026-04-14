@@ -13,13 +13,13 @@
 
 ## Phase 1: 基础架构（前端骨架 + 后端骨架 + 数据库 Schema）
 
-- [ ] 1. 前端基础架构搭建
-  - [ ] 1.1 创建共享类型定义和 API 客户端
+- [x] 1. 前端基础架构搭建
+  - [x] 1.1 创建共享类型定义和 API 客户端
     - 创建 `src/lib/types.ts`，定义 `ContentRating`、`SourceType`、`SourceConfig`、`AggregatedItem`、`SearchRequest`、`SearchResponse`、`UserMode` 等前后端共享类型
     - 创建 `src/lib/api-client.ts`，实现 `fetchAPI<T>()` 统一 API 调用封装，自动处理 JWT 认证、401 重定向、429 速率限制和网络错误
     - _需求: 13.2, 41.1_
 
-  - [ ] 1.2 实现 AgeGate 分级控制核心逻辑
+  - [x] 1.2 实现 AgeGate 分级控制核心逻辑
     - 创建 `src/lib/age-gate.ts`，实现 `IAgeGate` 接口：`getMode()`、`canAccess(rating)`、`filterContent(items)`、`switchMode(newMode, pin)`、`checkDailyLimit()`
     - 实现 `MODE_MAX_RATING` 映射（child=G, teen=PG-13, mature=R, adult=NC-17, elder=PG）
     - 使用 localStorage 存储用户模式和加密 PIN，支持每日时长限制
@@ -31,7 +31,7 @@
     - **Property 9: PIN 设置/验证往返一致性** — 验证任意 6 位数字 PIN 设置后用相同 PIN 验证返回 true，不同 PIN 返回 false
     - **验证需求: 14.7**
 
-  - [ ] 1.4 搭建前端页面路由骨架和导航组件
+  - [x] 1.4 搭建前端页面路由骨架和导航组件
     - 创建所有页面路由目录：`src/app/videos/`、`src/app/music/`、`src/app/comics/`、`src/app/novels/`、`src/app/anime/`、`src/app/live/`、`src/app/podcasts/`、`src/app/search/`、`src/app/zone/`、`src/app/admin/`、`src/app/profile/`、`src/app/settings/`
     - 创建 `src/components/layout/Header.tsx` 导航头组件，根据 AgeGate 模式动态显示/隐藏导航入口（成人模式显示完整入口含成人专区，儿童模式仅显示 G 级入口）
     - 创建 `src/components/layout/Sidebar.tsx` 侧边栏组件（桌面端使用）
@@ -46,8 +46,8 @@
     - 测试 `Header` 根据不同 AgeGate 模式显示/隐藏导航入口
     - _需求: 14.13, 14.14_
 
-- [ ] 2. 后端基础架构搭建
-  - [ ] 2.1 扩展数据库 Schema
+- [-] 2. 后端基础架构搭建
+  - [x] 2.1 扩展数据库 Schema
     - 在 `functions/api/_schema.sql` 中新增所有设计文档定义的表：`source_config`、`playback_history`、`favorites`、`bookmarks`、`playlists`、`following`、`danmaku`、`notifications`、`user_settings`、`service_providers`、`service_reviews`、`verification_reports`、`job_listings`、`blacklist`、`private_messages`、`dating_profiles`、`dating_matches`、`adult_posts`、`admins`、`admin_logs`、`cache_index`、`telegram_channels`
     - 创建所有索引（按设计文档定义）
     - _需求: 11.6, 18.8, 23.8, 29.4, 32.3, 36.15, 42.1, 52.5_
