@@ -11,6 +11,8 @@
  *   type     (optional) — video type (剧情片/纯色情/动画3D/业余自拍/直播录像/VR/ASMR)
  *   quality  (optional) — video quality (4K/1080p/720p/480p)
  *   duration (optional) — duration filter (short/medium/long/full)
+ *   tags     (optional) — comma-separated multi-tag filter (incest,mother-son,big-breasts)
+ *                          支持多标签 AND 组合搜索，所有选中标签必须同时匹配
  *   page     (optional) — page number, default 1
  *   pageSize (optional) — results per page, default 20 (max 100)
  *   sortBy   (optional) — relevance/latest/popular/rating
@@ -129,6 +131,17 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     if (typeParam) tags.push(typeParam);
     if (qualityParam) tags.push(qualityParam);
     if (durationParam) tags.push(durationParam);
+
+    // Multi-tag filter (详细标签，支持多标签 AND 组合搜索)
+    // e.g. tags=incest,mother-son,big-breasts
+    const detailTagsParam = url.searchParams.get('tags');
+    if (detailTagsParam) {
+      const detailTags = detailTagsParam
+        .split(',')
+        .map((t) => sanitizeString(t.trim(), 100))
+        .filter(Boolean);
+      tags.push(...detailTags);
+    }
 
     // --- Execute search ---
     const searchRequest: SearchRequest = {

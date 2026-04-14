@@ -9,6 +9,7 @@ import AutoPlayOverlay from '@/components/player/AutoPlayOverlay';
 import { ageGate } from '@/lib/age-gate';
 import type { ContentRating, AggregatedItem } from '@/lib/types';
 import type { AutoPlayCandidate } from '@/lib/player/autoplay-engine';
+import { ALL_TAG_GROUPS, type TagGroup, type TagOption, getTagLabels } from '@/lib/adult-tags';
 import {
   Search,
   X,
@@ -30,6 +31,9 @@ import {
   BarChart3,
   Shuffle,
   Video,
+  Tag,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -119,6 +123,7 @@ interface AdultVideo {
   score: number;
   date: string;
   url: string;
+  tags: string[]; // 多标签：来自 adult-tags.ts 的 tag ID 列表
 }
 
 function generateMockAdultVideos(): AdultVideo[] {
@@ -130,6 +135,50 @@ function generateMockAdultVideos(): AdultVideo[] {
     { cat: 'medium', label: '22:15', seconds: 1335 },
     { cat: 'long', label: '45:00', seconds: 2700 },
     { cat: 'full', label: '1:32:00', seconds: 5520 },
+  ];
+
+  // 每个视频分配多个标签（模拟 NAS 影片打标签后的效果）
+  const tagSets: string[][] = [
+    ['wife', 'ntr', 'big-breasts', 'asian', 'age-30-40', 'hotel'],
+    ['school', 'teacher-student', 'jk', 'small-breasts', 'japanese', 'age-18-20'],
+    ['incest', 'mother-son', 'milf', 'big-breasts', 'japanese', 'age-40-plus', 'creampie'],
+    ['office', 'boss-secretary', 'stockings', 'oral', 'caucasian', 'age-25-30'],
+    ['incest', 'brother-sister', 'slim', 'asian', 'age-18-20', 'first-time'],
+    ['massage', 'oil', 'big-breasts', 'japanese', 'age-25-30', 'hotel'],
+    ['lesbian', 'school', 'classmate', 'small-breasts', 'japanese', 'age-18-20'],
+    ['neighbor-wife', 'cheating', 'milf', 'curvy', 'asian', 'age-30-40'],
+    ['incest', 'father-daughter', 'petite', 'japanese', 'age-18-20', 'sleeping'],
+    ['chikan', 'train', 'stockings', 'slim', 'japanese', 'age-20-25'],
+    ['threesome', 'wife', 'ntr', 'big-breasts', 'asian', 'age-25-30'],
+    ['nurse', 'hospital', 'big-breasts', 'japanese', 'age-25-30', 'oral'],
+    ['incest', 'step-family', 'mother-son', 'milf', 'caucasian', 'age-40-plus', 'big-breasts'],
+    ['maid', 'cosplay', 'small-breasts', 'japanese', 'age-20-25', 'domination'],
+    ['outdoor', 'beach', 'bikini', 'fit', 'caucasian', 'age-20-25'],
+    ['hypnosis', 'school', 'harem', 'japanese', 'age-18-20', 'orgy'],
+    ['incest', 'sister-sister', 'lesbian', 'slim', 'japanese', 'age-18-20'],
+    ['bdsm', 'bondage', 'slave', 'stockings', 'japanese', 'age-25-30'],
+    ['pregnant', 'wife', 'big-breasts', 'asian', 'age-30-40', 'creampie'],
+    ['voyeur', 'bathroom', 'natural-breasts', 'japanese', 'age-20-25'],
+    ['incest', 'aunt-nephew', 'milf', 'big-breasts', 'japanese', 'age-30-40'],
+    ['gangbang', 'office', 'stockings', 'japanese', 'age-25-30', 'facial'],
+    ['cosplay', 'bunny-girl', 'big-breasts', 'japanese', 'age-20-25', 'anal'],
+    ['chijo', 'bus', 'big-breasts', 'japanese', 'age-25-30', 'handjob'],
+    ['incest', 'cousin', 'onsen', 'slim', 'japanese', 'age-18-20'],
+    ['wife-swap', 'couple', 'curvy', 'asian', 'age-30-40', 'orgy'],
+    ['teacher-uniform', 'school', 'glasses', 'medium-breasts', 'japanese', 'age-30-40'],
+    ['lactation', 'pregnant', 'wife', 'big-breasts', 'japanese', 'age-25-30'],
+    ['deepthroat', 'oral', 'blonde', 'caucasian', 'age-20-25', 'facial'],
+    ['pool', 'swimsuit', 'fit', 'latina', 'age-20-25', 'threesome'],
+    ['incest', 'brother-sister', 'creampie', 'petite', 'japanese', 'age-18-20'],
+    ['casting', 'first-time', 'slim', 'caucasian', 'age-18-20', 'amateur'],
+    ['drunk', 'party', 'orgy', 'mixed', 'age-20-25', 'amateur'],
+    ['shrine-maiden', 'cosplay', 'small-breasts', 'japanese', 'age-18-20'],
+    ['exhibitionism', 'outdoor', 'public', 'fit', 'caucasian', 'age-25-30'],
+    ['tentacle', 'monster', 'big-breasts', 'asian', 'age-18-20'],
+    ['footjob', 'stockings', 'feet', 'japanese', 'age-25-30', 'slim'],
+    ['age-gap', 'ugly-man', 'young', 'petite', 'japanese', 'age-18-20'],
+    ['blackmail', 'school', 'jk', 'slim', 'japanese', 'age-18-20'],
+    ['delivery', 'wife', 'cheating', 'big-breasts', 'asian', 'age-30-40'],
   ];
 
   const titles = [
@@ -178,6 +227,7 @@ function generateMockAdultVideos(): AdultVideo[] {
       score: Math.round((Math.random() * 3 + 7) * 10) / 10,
       date: `2026-0${(i % 9) + 1}-${String((i % 28) + 1).padStart(2, '0')}`,
       url: `/api/video/stream/av-${i + 1}`,
+      tags: tagSets[i % tagSets.length],
     });
   }
   return videos;
@@ -307,6 +357,33 @@ export default function ZoneVideosPage() {
   const [activeDuration, setActiveDuration] = useState('all');
   const [activeSort, setActiveSort] = useState('hot');
 
+  // --- Multi-tag selection state (详细标签) ---
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [showTagPanel, setShowTagPanel] = useState(false);
+  const [expandedTagGroups, setExpandedTagGroups] = useState<Set<string>>(new Set(['theme']));
+
+  // --- Tag handlers ---
+  const toggleTag = useCallback((tagId: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tagId)
+        ? prev.filter((t) => t !== tagId)
+        : [...prev, tagId]
+    );
+  }, []);
+
+  const toggleTagGroup = useCallback((groupId: string) => {
+    setExpandedTagGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  const clearTags = useCallback(() => {
+    setSelectedTags([]);
+  }, []);
+
   // --- Player state ---
   const [playingVideo, setPlayingVideo] = useState<AdultVideo | null>(null);
   const [playerTime, setPlayerTime] = useState(0);
@@ -328,6 +405,7 @@ export default function ZoneVideosPage() {
     activeVideoType !== 'all',
     activeQuality !== 'all',
     activeDuration !== 'all',
+    selectedTags.length > 0,
   ].filter(Boolean).length;
 
   // --- Filtered & sorted videos ---
@@ -351,7 +429,15 @@ export default function ZoneVideosPage() {
       list = list.filter(
         (v) =>
           v.title.toLowerCase().includes(q) ||
-          v.source.toLowerCase().includes(q)
+          v.source.toLowerCase().includes(q) ||
+          v.tags.some((t) => t.toLowerCase().includes(q))
+      );
+    }
+
+    // Multi-tag filter: AND 逻辑 — 选中的每个标签都必须匹配
+    if (selectedTags.length > 0) {
+      list = list.filter((v) =>
+        selectedTags.every((tag) => v.tags.includes(tag))
       );
     }
 
@@ -379,7 +465,7 @@ export default function ZoneVideosPage() {
     }
 
     return list;
-  }, [activeRegion, activeVideoType, activeQuality, activeDuration, searchQuery, activeSort]);
+  }, [activeRegion, activeVideoType, activeQuality, activeDuration, searchQuery, activeSort, selectedTags]);
 
   // --- AutoPlay candidate ---
   const autoPlayCandidate = useMemo<AutoPlayCandidate | null>(() => {
@@ -453,6 +539,7 @@ export default function ZoneVideosPage() {
     setActiveQuality('all');
     setActiveDuration('all');
     setSearchQuery('');
+    setSelectedTags([]);
   }, []);
 
   return (
@@ -569,8 +656,98 @@ export default function ZoneVideosPage() {
           </div>
         )}
 
+        {/* ===== 详细标签面板 (Multi-Tag Selection) ===== */}
+        <div className="mb-4">
+          <button
+            onClick={() => setShowTagPanel(!showTagPanel)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition border ${
+              showTagPanel || selectedTags.length > 0
+                ? 'bg-[#3ea6ff]/15 text-[#3ea6ff] border-[#3ea6ff]/40'
+                : 'bg-[#1a1a1a] text-[#888] border-[#333] hover:text-white hover:border-[#555]'
+            }`}
+          >
+            <Tag size={12} />
+            详细标签{selectedTags.length > 0 ? ` (${selectedTags.length})` : ''}
+            {showTagPanel ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </button>
+
+          {/* Selected tags display */}
+          {selectedTags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {selectedTags.map((tagId) => {
+                const label = getTagLabels([tagId])[0] || tagId;
+                return (
+                  <button
+                    key={tagId}
+                    onClick={() => toggleTag(tagId)}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-[#3ea6ff]/20 text-[#3ea6ff] border border-[#3ea6ff]/30 hover:bg-[#3ea6ff]/30 transition"
+                  >
+                    {label}
+                    <X size={10} />
+                  </button>
+                );
+              })}
+              <button
+                onClick={clearTags}
+                className="text-[11px] text-[#666] hover:text-[#3ea6ff] transition px-2"
+              >
+                清除标签
+              </button>
+            </div>
+          )}
+
+          {/* Tag groups panel */}
+          {showTagPanel && (
+            <div className="mt-2 p-4 rounded-xl bg-[#1a1a1a] border border-[#333]/50 space-y-3 max-h-[60vh] overflow-y-auto">
+              {ALL_TAG_GROUPS.map((group) => {
+                const isExpanded = expandedTagGroups.has(group.id);
+                const selectedInGroup = group.tags.filter((t) => selectedTags.includes(t.id)).length;
+                return (
+                  <div key={group.id}>
+                    <button
+                      onClick={() => toggleTagGroup(group.id)}
+                      className="flex items-center justify-between w-full text-left mb-2"
+                    >
+                      <span className="text-[12px] text-[#aaa] font-medium flex items-center gap-1.5">
+                        <Tag size={11} className="text-[#3ea6ff]" />
+                        {group.label}
+                        {selectedInGroup > 0 && (
+                          <span className="text-[10px] bg-[#3ea6ff]/20 text-[#3ea6ff] px-1.5 py-0.5 rounded-full">
+                            {selectedInGroup}
+                          </span>
+                        )}
+                      </span>
+                      {isExpanded ? <ChevronUp size={12} className="text-[#666]" /> : <ChevronDown size={12} className="text-[#666]" />}
+                    </button>
+                    {isExpanded && (
+                      <div className="flex flex-wrap gap-1.5 pl-4">
+                        {group.tags.map((tag) => {
+                          const isSelected = selectedTags.includes(tag.id);
+                          return (
+                            <button
+                              key={tag.id}
+                              onClick={() => toggleTag(tag.id)}
+                              className={`px-2.5 py-1 rounded-full text-[11px] border transition ${
+                                isSelected
+                                  ? 'bg-[#3ea6ff] text-[#0f0f0f] border-[#3ea6ff] font-semibold'
+                                  : 'bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]'
+                              }`}
+                            >
+                              {tag.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* ===== Active filter summary ===== */}
-        {(activeRegion !== 'all' || activeVideoType !== 'all' || activeQuality !== 'all' || activeDuration !== 'all' || searchQuery) && (
+        {(activeRegion !== 'all' || activeVideoType !== 'all' || activeQuality !== 'all' || activeDuration !== 'all' || searchQuery || selectedTags.length > 0) && (
           <div className="flex items-center gap-2 mb-3 text-[12px] text-[#888]">
             <SlidersHorizontal size={12} />
             <span>
@@ -578,6 +755,7 @@ export default function ZoneVideosPage() {
               {activeVideoType !== 'all' && ` · ${VIDEO_TYPE_OPTIONS.find(t => t.id === activeVideoType)?.label}`}
               {activeQuality !== 'all' && ` · ${QUALITY_OPTIONS.find(q => q.id === activeQuality)?.label}`}
               {activeDuration !== 'all' && ` · ${DURATION_OPTIONS.find(d => d.id === activeDuration)?.label}`}
+              {selectedTags.length > 0 && ` · 标签: ${getTagLabels(selectedTags).join('+')}`}
               {searchQuery && ` · "${searchQuery}"`}
             </span>
             <span className="text-[#555]">·</span>
