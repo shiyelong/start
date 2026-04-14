@@ -19,7 +19,7 @@ inclusion: always
 **核心原则：NAS 零公网端口，所有流量走 Cloudflare，真实 IP 永远不可见。禁止让运营商读到我数据量过大防止被检测**
 
 - 路径：`用户 → Cloudflare CDN → Cloudflare Tunnel → NAS`
-- 禁止：端口转发、硬编码 IP、代码中出现内网地址、Git 提交密钥/token/.env
+- 禁止：端口转发、硬编码 IP、代码中出现内网地址
 - 密钥全部走 Cloudflare Workers Secrets，前端代码零敏感信息
 - 认证 API 必须用 `requireAuth()`，密码 bcrypt 哈希存储
 
