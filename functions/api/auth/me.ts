@@ -4,11 +4,12 @@
  * Returns the full profile of the currently authenticated user.
  * Requires a valid JWT token (set by middleware).
  *
- * Validates: Requirement 4 (AC1)
+ * Validates: Requirements 41.1
  */
 
 import { requireAuth } from '../_lib/auth';
-import { queryOne, jsonResponse, errorResponse } from '../_lib/db';
+import { queryOne, jsonResponse } from '../_lib/db';
+import { APIError, handleError } from '../_lib/errors';
 
 interface Env {
   DB: D1Database;
@@ -31,23 +32,27 @@ interface UserRow {
 }
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
-  // Step 1: Require authentication
-  const auth = requireAuth(context);
-  if (auth instanceof Response) return auth;
+  try {
+    // Step 1: Require authentication
+    const auth = requireAuth(context);
+    if (auth instanceof Response) return auth;
 
-  // Step 2: Query user by id (exclude password_hash)
-  const user = await queryOne<UserRow>(
-    context.env.DB,
-    `SELECT id, username, email, nickname, avatar, bio, role,
-            verify_count, reputation, like_count, created_at
-     FROM users WHERE id = ?`,
-    [auth.id],
-  );
+    // Step 2: Query user by id (exclude password_hash)
+    const user = await queryOne<UserRow>(
+      context.env.DB,
+      `SELECT id, username, email, nickname, avatar, bio, role,
+              verify_count, reputation, like_count, created_at
+       FROM users WHERE id = ?`,
+      [auth.id],
+    );
 
-  if (!user) {
-    return errorResponse('User not found', 404);
+    if (!user) {
+      throw new APIError(404, 'User not found');
+    }
+
+    // Step 3: Return full user profile
+    return jsonResponse({ user });
+  } catch (error) {
+    return handleError(error);
   }
-
-  // Step 3: Return full user profile
-  return jsonResponse({ user });
 };

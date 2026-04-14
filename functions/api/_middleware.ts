@@ -1,10 +1,17 @@
 /**
  * Cloudflare Pages Functions middleware for /api/* routes.
- * - Applies rate limiting per IP (general 200/15min, auth 10/1min).
- * - Sets CORS headers on every response (and handles OPTIONS preflight).
- * - Parses JWT from Authorization header using Web Crypto HMAC-SHA256.
- * - Attaches decoded user context { id, role } to context.data.user.
- * - Does NOT block unauthenticated requests — downstream handlers decide.
+ *
+ * Middleware chain (executed in order):
+ * 1. CORS — handle OPTIONS preflight, apply headers to every response.
+ * 2. Rate limiting — per-IP counters stored in KV.
+ * 3. JWT auth parsing — decode token from Authorization header,
+ *    attach user context to `context.data.user`. Never blocks.
+ * 4. MPAA rating permission — reads `x-user-mode` header (set by the
+ *    frontend AgeGate) and attaches the resolved max rating to
+ *    `context.data.maxRating` so downstream handlers can filter content.
+ *
+ * The middleware does NOT block unauthenticated requests — downstream
+ * handlers decide via `requireAuth()` / `requireRole()`.
  */
 
 interface Env {
@@ -23,7 +30,7 @@ interface UserContext {
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-User-Mode',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -42,7 +49,6 @@ function applyCors(response: Response): Response {
 // ── JWT helpers (Web Crypto HMAC-SHA256) ──────────────────────
 
 function base64UrlDecode(str: string): Uint8Array {
-  // Convert base64url → base64, then decode
   const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
   const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
   const binary = atob(padded);
@@ -60,7 +66,6 @@ async function verifyJwt(token: string, secret: string): Promise<UserContext | n
 
     const [headerB64, payloadB64, signatureB64] = parts;
 
-    // Import the secret as a CryptoKey
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
       'raw',
@@ -70,22 +75,18 @@ async function verifyJwt(token: string, secret: string): Promise<UserContext | n
       ['verify'],
     );
 
-    // Verify signature
     const data = encoder.encode(`${headerB64}.${payloadB64}`);
     const signature = base64UrlDecode(signatureB64);
     const valid = await crypto.subtle.verify('HMAC', key, signature, data);
     if (!valid) return null;
 
-    // Decode payload
     const payloadJson = new TextDecoder().decode(base64UrlDecode(payloadB64));
     const payload = JSON.parse(payloadJson);
 
-    // Check expiration
     if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
       return null;
     }
 
-    // Return user context
     if (typeof payload.id !== 'number' || typeof payload.role !== 'string') {
       return null;
     }
@@ -127,11 +128,9 @@ async function checkRateLimit(
     return { allowed: false, retryAfter: config.windowSeconds };
   }
 
-  // Increment counter; set TTL only on first request in the window
   if (count === 0) {
     await kv.put(config.key, '1', { expirationTtl: config.windowSeconds });
   } else {
-    // Preserve existing TTL by not setting a new one — KV keeps the original expiration
     await kv.put(config.key, String(count + 1));
   }
 
@@ -155,15 +154,48 @@ function rateLimitResponse(retryAfter: number): Response {
   );
 }
 
+// ── MPAA rating permission helpers ────────────────────────────
+
+type ContentRating = 'G' | 'PG' | 'PG-13' | 'R' | 'NC-17';
+type UserMode = 'child' | 'teen' | 'mature' | 'adult' | 'elder';
+
+const RATING_ORDER: readonly ContentRating[] = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
+
+const MODE_MAX_RATING: Record<UserMode, ContentRating> = {
+  child: 'G',
+  teen: 'PG-13',
+  mature: 'R',
+  adult: 'NC-17',
+  elder: 'PG',
+};
+
+const VALID_MODES: readonly string[] = ['child', 'teen', 'mature', 'adult', 'elder'];
+
+/**
+ * Resolve the maximum allowed content rating from the `X-User-Mode` header.
+ *
+ * If the header is missing or invalid the middleware defaults to `adult`
+ * (NC-17) — downstream handlers that need stricter enforcement should
+ * check `context.data.maxRating` explicitly.
+ */
+function resolveMaxRating(request: Request): ContentRating {
+  const modeHeader = request.headers.get('X-User-Mode');
+  if (modeHeader && VALID_MODES.includes(modeHeader)) {
+    return MODE_MAX_RATING[modeHeader as UserMode];
+  }
+  // Default: no restriction (adult mode)
+  return 'NC-17';
+}
+
 // ── Middleware entry point ─────────────────────────────────────
 
 export const onRequest: PagesFunction<Env> = async (context) => {
-  // Handle CORS preflight
+  // 1. Handle CORS preflight
   if (context.request.method === 'OPTIONS') {
     return corsResponse();
   }
 
-  // ── Rate limiting (before JWT check) ──
+  // 2. Rate limiting (before JWT check)
   const ip = context.request.headers.get('CF-Connecting-IP') || 'unknown';
   const url = new URL(context.request.url);
   const rlConfig = getRateLimitConfig(ip, url);
@@ -173,7 +205,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     return rateLimitResponse(retryAfter);
   }
 
-  // Try to extract and verify JWT — never block if missing/invalid
+  // 3. JWT auth parsing — never blocks if missing/invalid
   const authHeader = context.request.headers.get('Authorization');
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
@@ -182,6 +214,9 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       context.data.user = user;
     }
   }
+
+  // 4. MPAA rating permission — attach maxRating for downstream handlers
+  context.data.maxRating = resolveMaxRating(context.request);
 
   // Continue to the next handler, then apply CORS headers to the response
   const response = await context.next();

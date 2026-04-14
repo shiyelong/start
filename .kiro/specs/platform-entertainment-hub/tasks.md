@@ -46,13 +46,13 @@
     - 测试 `Header` 根据不同 AgeGate 模式显示/隐藏导航入口
     - _需求: 14.13, 14.14_
 
-- [-] 2. 后端基础架构搭建
+- [x] 2. 后端基础架构搭建
   - [x] 2.1 扩展数据库 Schema
     - 在 `functions/api/_schema.sql` 中新增所有设计文档定义的表：`source_config`、`playback_history`、`favorites`、`bookmarks`、`playlists`、`following`、`danmaku`、`notifications`、`user_settings`、`service_providers`、`service_reviews`、`verification_reports`、`job_listings`、`blacklist`、`private_messages`、`dating_profiles`、`dating_matches`、`adult_posts`、`admins`、`admin_logs`、`cache_index`、`telegram_channels`
     - 创建所有索引（按设计文档定义）
     - _需求: 11.6, 18.8, 23.8, 29.4, 32.3, 36.15, 42.1, 52.5_
 
-  - [ ] 2.2 实现后端核心中间件和工具库
+  - [x] 2.2 实现后端核心中间件和工具库
     - 更新 `functions/api/_middleware.ts`，添加 CORS 处理、JWT 认证解析、MPAA 分级权限校验中间件链
     - 创建 `functions/api/_lib/errors.ts`，实现 `APIError`、`SourceError` 错误类和 `handleError()` 统一错误处理
     - 创建 `functions/api/_lib/cache.ts`，实现 KV 缓存读写和速率限制逻辑
@@ -65,7 +65,7 @@
     - **Property 11: ESRB 到 MPAA 分级映射** — 验证 `esrbToMpaa` 对所有合法 ESRB 值返回正确的 MPAA 分级，映射是双射的
     - **验证需求: 35.4**
 
-  - [ ] 2.4 实现用户认证 API
+  - [x] 2.4 实现用户认证 API
     - 实现 `POST /api/auth/register`（邮箱+密码注册，bcrypt 哈希，禁止第三方登录）
     - 实现 `POST /api/auth/login`（JWT 签发）
     - 实现 `GET /api/auth/me`（获取当前用户信息）
