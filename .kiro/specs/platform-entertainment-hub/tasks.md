@@ -915,13 +915,35 @@
 
 - [ ] 41. NAS 安全缓存系统（后端）
   - [ ] 41.1 实现 NAS 缓存核心逻辑
-    - 实现 Cloudflare Tunnel 连接 NAS 的缓存代理
-    - 实现 AES-256 加密存储（加密/解密文件内容）
-    - 实现文件名混淆（随机哈希命名）
-    - 实现加密索引数据库（混淆文件名↔原始内容映射）
-    - 实现缓存命中/未命中逻辑（命中→从 NAS 返回，未命中→从源站获取+异步缓存）
-    - 实现缓存策略（LRU/按时间/按访问频率自动清理）
-    - 实现流量伪装（速率限制+随机化+每日最大带宽）
+    - 创建 `functions/api/_lib/nas-cache.ts`，实现 NAS 缓存代理层
+    - **Cloudflare Tunnel连接方案**：
+      - NAS 上运行 `cloudflared tunnel`，创建命名隧道连接到 Cloudflare
+      - 隧道配置文件 `config.yml` 将 NAS 本地的缓存服务（如 `localhost:8080`）映射到 Cloudflare 子域名
+      - Cloudflare Workers 通过该子域名访问 NAS 缓存服务
+      - NAS 防火墙仅允许 `cloudflared` 的出站 443 连接，拒绝所有入站
+    - **AES-256加密存储方案**：
+      - 创建 `functions/api/_lib/crypto.ts`，使用 Web Crypto API 实现 AES-256-GCM 加密/解密
+      - 加密密钥存储在 Cloudflare Workers Secrets（`NAS_ENCRYPTION_KEY`）
+      - 每个文件使用随机 IV（初始化向量），IV 与密文一起存储
+      - 加密流程：原始内容 → AES-256-GCM 加密 → 存储到 NAS
+      - 解密流程：从 NAS 读取 → AES-256-GCM 解密 → 返回给用户
+    - **文件名混淆方案**：
+      - 原始文件名通过 SHA-256 哈希生成混淆文件名（如 `a1b2c3d4.enc`）
+      - 目录结构使用哈希前两位分桶（如 `a1/b2/a1b2c3d4.enc`），避免单目录文件过多
+      - 混淆文件名与原始内容的映射关系存储在 D1 的 `cache_index` 表中
+    - **缓存命中/未命中逻辑**：
+      - 用户请求内容 → 查询 `cache_index` 表 → 命中则从 NAS 读取解密返回 → 未命中则从源站获取返回并异步缓存到 NAS
+      - 缓存命中时更新 `access_count` 和 `last_accessed` 字段
+    - **缓存策略方案**：
+      - 支持按内容类型设置缓存优先级（视频 > 音乐 > 漫画 > 小说）
+      - 支持设置最大缓存空间（如 500GB），超出时按 LRU 策略清理
+      - 支持按时间清理（如清理 30 天未访问的内容）
+      - 支持按访问频率清理（保留访问次数最多的内容）
+    - **流量伪装方案**：
+      - 实现速率限制器：NAS 下载速度限制在配置的最大值内（如 50Mbps）
+      - 实现随机化延迟：每次请求添加 0-500ms 随机延迟，避免流量模式被识别
+      - 实现每日带宽上限：超过上限后停止缓存新内容，仅从源站获取
+      - 实现分时段带宽分配：白天低带宽、夜间高带宽，模拟正常使用模式
     - _需求: 52.1, 52.2, 52.3, 52.4, 52.5, 52.6, 52.7, 52.8, 52.9_
 
   - [ ]* 41.2 编写 AES-256 加密属性测试
@@ -929,9 +951,12 @@
     - **验证需求: 52.3**
 
   - [ ] 41.3 实现 NAS 缓存管理 API
-    - 实现 `GET /api/admin/cache/status`（缓存状态）
-    - 实现 `POST /api/admin/cache/clear`（清理缓存）
-    - 实现 `POST /api/admin/cache/destroy`（紧急销毁，需确认密码）
+    - 实现 `GET /api/admin/cache/status`（缓存状态：总大小、文件数、命中率、各类型占比、NAS连接状态）
+    - 实现 `POST /api/admin/cache/clear`（清理缓存：支持按类型/按时间/按访问频率清理）
+    - 实现 `POST /api/admin/cache/destroy`（紧急销毁：需确认管理员密码，删除NAS上所有加密文件+D1索引表所有记录+R2备份索引）
+    - 实现 `PUT /api/admin/cache/config`（更新缓存策略：最大空间/清理策略/带宽限制/分时段配置）
+    - 实现 `GET /api/admin/cache/logs`（缓存操作日志：缓存/清理/销毁记录）
+    - 实现 `POST /api/admin/cache/prefetch`（手动预缓存：指定URL列表批量缓存到NAS）
     - _需求: 52.8, 52.10, 52.11_
 
 - [ ] 42. 隐私防护系统（前端 + 后端）
@@ -1012,11 +1037,26 @@
 
 - [ ] 44. Telegram 频道聚合（后端）
   - [ ] 44.1 实现 Telegram 频道聚合
-    - 实现 Telegram Bot API 代理（通过 Cloudflare Workers）
-    - 实现频道内容定期抓取（可配置间隔，默认 30 分钟）
-    - 实现视频/图片/文字自动提取和 MPAA 分级分类
-    - 实现频道管理 API（添加/删除/配置频道）
-    - 实现频道内容全文搜索
+    - 创建 `functions/api/_lib/telegram-adapter.ts`，实现 Telegram Bot API 代理
+    - **Bot API代理方案**：通过 Cloudflare Workers 代理 `https://api.telegram.org/bot<token>/` 所有请求，避免直连被封
+    - **频道抓取方案**：
+      - 使用 `getUpdates` 或 `getChat` + `getChatHistory` 方法获取频道消息
+      - 实现定时任务（Cloudflare Cron Triggers，可配置间隔，默认30分钟）自动抓取新消息
+      - 解析消息类型：视频（`video`/`animation`）、图片（`photo`）、文字（`text`）
+      - 将视频/图片下载到 R2 存储，文字存储到 D1
+    - **内容分类方案**：
+      - 根据频道配置的默认 MPAA 分级标记内容
+      - 通过关键词匹配自动识别内容类型（电影/动漫/音乐/成人等）
+      - 成人频道内容强制 NC-17 级
+    - 实现频道管理 API：
+      - `POST /api/admin/telegram/channels`（添加频道：频道ID、名称、类型、MPAA分级、抓取间隔）
+      - `DELETE /api/admin/telegram/channels/[id]`（删除频道）
+      - `PUT /api/admin/telegram/channels/[id]`（更新配置）
+      - `GET /api/admin/telegram/channels`（频道列表+抓取状态）
+      - `POST /api/admin/telegram/channels/[id]/fetch`（手动触发抓取）
+    - 实现频道内容搜索 API：`GET /api/telegram/search`（全文搜索，支持频道/类型/分级筛选）
+    - 实现频道内容列表 API：`GET /api/telegram/[channelId]`（分页获取频道内容）
+    - Telegram Bot Token 存储在 Cloudflare Workers Secrets，禁止硬编码
     - _需求: 51.1, 51.2, 51.3, 51.4, 51.7, 51.8, 51.9, 51.10_
 
 - [ ] 45. 通知系统（前端 + 后端）
@@ -1026,26 +1066,54 @@
     - _需求: 42.1, 42.4_
 
   - [ ] 45.2 实现通知系统后端 API
-    - 实现 `GET /api/notify/list`（通知列表，支持 type/unreadOnly 筛选）
-    - 实现 `PUT /api/notify/[id]/read`（标记已读）
-    - 实现 `PUT /api/notify/read-all`（全部已读）
+    - 实现 `GET /api/notify/list`（通知列表，支持 type/unreadOnly 筛选分页）
+    - 实现 `PUT /api/notify/[id]/read`（标记单条已读）
+    - 实现 `PUT /api/notify/read-all`（全部标记已读）
     - 实现 `GET /api/notify/preferences`（获取通知偏好）
-    - 实现 `PUT /api/notify/preferences`（更新通知偏好）
-    - 实现追番更新/主播开播/私信回复/系统公告/评论回复等通知触发逻辑
+    - 实现 `PUT /api/notify/preferences`（更新通知偏好：每种通知类型可独立开关）
+    - **通知触发逻辑实现**：
+      - 追番/追剧更新：动漫源抓取到新集时，查询 `following` 表中关注该动漫的用户，批量插入通知
+      - 关注主播开播：直播源检测到关注主播开播时，查询 `following` 表中关注该主播的用户，批量插入通知
+      - 私信回复：`private_messages` 表插入新消息时，为接收方插入通知
+      - 系统公告：管理员通过后台发送，为所有用户批量插入通知
+      - 评论回复：`comments` 表插入新回复时，为被回复者插入通知
+      - 播客更新：播客源抓取到新单集时，查询订阅该播客的用户，批量插入通知
+    - **推送通知方案**（移动端）：
+      - 使用 Capacitor Push Notifications 插件
+      - 后端通过 Cloudflare Workers 调用 FCM（Android）/ APNs（iOS）发送推送
+      - 推送 token 存储在 D1 的 `user_settings` 表中
     - _需求: 42.1, 42.2, 42.3, 42.4, 42.5_
 
 - [ ] 46. 个性化推荐与评论系统（前端 + 后端）
-  - [ ] 46.1 实现个性化推荐前端
-    - 在首页展示个性化推荐内容
-    - 为每个频道提供"猜你喜欢"板块
-    - 支持"不感兴趣"反馈
-    - 无历史数据时展示热门内容和编辑精选
+  - [ ] 46.1 实现个性化推荐前端和后端
+    - **前端**：
+      - 在首页展示个性化推荐内容（横向滚动卡片列表）
+      - 为每个频道（视频/音乐/漫画/小说/动漫/游戏）提供"猜你喜欢"板块
+      - 支持"不感兴趣"反馈按钮（点击后该内容不再推荐）
+      - 无历史数据时展示热门内容和编辑精选
+    - **后端推荐算法方案**：
+      - 实现 `GET /api/recommend/home`（首页推荐，基于用户历史）
+      - 实现 `GET /api/recommend/[type]`（频道推荐，type=video/music/comic/novel/anime）
+      - 实现 `POST /api/recommend/dislike`（不感兴趣反馈）
+      - 推荐算法：基于用户最近30天的播放历史/收藏/书签，提取高频标签和类型，从同标签/类型的内容中按热度排序推荐
+      - 根据用户 MPAA 分级模式过滤推荐结果
+      - 推荐结果缓存在 KV 中（每用户每小时更新一次）
     - _需求: 28.1, 28.2, 28.3, 28.4, 28.5_
 
-  - [ ] 46.2 实现评论系统
-    - 为所有内容提供评论区组件
-    - 支持评论点赞、回复、举报
-    - 实现基础关键词过滤
+  - [ ] 46.2 实现评论系统（前端 + 后端）
+    - **前端**：
+      - 创建 `src/components/social/CommentSection.tsx` 通用评论区组件
+      - 为所有内容（视频/音乐/漫画/小说/游戏）页面底部集成评论区
+      - 支持评论列表展示（按时间倒序/按热度排序）
+      - 支持发表评论（文字，登录用户可用）
+      - 支持评论点赞、回复（嵌套回复最多2层）、举报
+    - **后端**：
+      - 实现 `GET /api/comments/[contentType]/[contentId]`（获取评论列表，支持分页和排序）
+      - 实现 `POST /api/comments/[contentType]/[contentId]`（发表评论）
+      - 实现 `POST /api/comments/[id]/like`（点赞）
+      - 实现 `POST /api/comments/[id]/reply`（回复）
+      - 实现 `POST /api/comments/[id]/report`（举报）
+      - 实现基础关键词过滤：维护敏感词列表（存储在KV中），发表评论时自动检测并屏蔽含敏感词的内容
     - _需求: 29.5, 29.6, 29.7_
 
 - [ ] 47. 后台管理系统（前端 + 后端）
@@ -1067,17 +1135,41 @@
     - _需求: 55.1, 55.2, 55.6, 55.7_
 
   - [ ] 47.2 实现管理后台后端 API
-    - 实现 `POST /api/admin/auth/login`（管理员登录，独立 token）
-    - 实现 `GET /api/admin/dashboard`（仪表盘统计）
-    - 实现 `GET /api/admin/users`（用户列表）
-    - 实现 `PUT /api/admin/users/[id]/ban`（封禁）
-    - 实现 `PUT /api/admin/users/[id]/unban`（解封）
-    - 实现 `GET /api/admin/content`（内容列表）
-    - 实现 `DELETE /api/admin/content/[id]`（删除内容）
-    - 实现 `GET /api/admin/logs`（操作日志）
-    - 实现管理员权限分级（super/content/source/community）
-    - 实现操作日志记录
-    - 实现敏感操作二次确认
+    - **管理员认证**：
+      - 实现 `POST /api/admin/auth/login`（管理员登录，独立JWT token，与普通用户隔离）
+      - 管理员入口路径使用环境变量配置的隐蔽路径
+    - **仪表盘**：
+      - 实现 `GET /api/admin/dashboard`（平台总览：注册用户数、日活用户数、各频道内容数、今日搜索量、NAS缓存状态、各源健康状态汇总、带宽使用量）
+    - **用户管理**：
+      - 实现 `GET /api/admin/users`（用户列表：支持搜索/分页/按注册时间排序）
+      - 实现 `GET /api/admin/users/[id]`（用户详情：注册信息/AgeGate模式/使用统计/举报记录）
+      - 实现 `PUT /api/admin/users/[id]/ban`（封禁用户：需填写原因，记录操作日志）
+      - 实现 `PUT /api/admin/users/[id]/unban`（解封用户）
+      - 实现 `PUT /api/admin/users/[id]/reset-password`（重置密码：生成临时密码发送到用户邮箱）
+    - **内容管理**：
+      - 实现 `GET /api/admin/content`（内容列表：支持按类型/分级/举报状态筛选）
+      - 实现 `DELETE /api/admin/content/[id]`（删除内容：帖子/评论/弹幕/点评，记录操作日志）
+      - 实现 `PUT /api/admin/content/[id]/rating`（调整内容MPAA分级）
+    - **成人服务管理**：
+      - 实现 `GET /api/admin/services`（服务者列表：支持按验证状态/举报数筛选）
+      - 实现 `PUT /api/admin/services/[id]/status`（手动调整服务者验证状态）
+      - 实现 `GET /api/admin/reports`（举报列表：支持按类型/状态筛选）
+      - 实现 `PUT /api/admin/reports/[id]/resolve`（处理举报：确认/驳回/加入黑名单）
+      - 实现 `GET /api/admin/blacklist`（黑名单管理）
+      - 实现 `POST /api/admin/blacklist`（手动添加黑名单）
+      - 实现 `DELETE /api/admin/blacklist/[id]`（移除黑名单）
+    - **操作日志**：
+      - 实现 `GET /api/admin/logs`（操作日志：支持按管理员/操作类型/时间范围筛选分页）
+      - 所有管理操作自动记录到 `admin_logs` 表（操作者ID、操作类型、目标类型、目标ID、详情、时间）
+    - **权限分级实现**：
+      - 创建 `functions/api/_lib/admin-auth.ts`，实现 `hasPermission(role, action)` 权限检查函数
+      - super：全部权限
+      - content：内容管理+MPAA分级管理
+      - source：聚合源管理+NAS缓存管理+Telegram频道管理
+      - community：用户管理+举报处理+成人服务管理+黑名单管理
+    - **敏感操作保护**：
+      - 删除数据、封禁用户、紧急销毁等操作需要二次输入管理员密码确认
+      - 所有敏感操作记录详细日志
     - _需求: 55.1, 55.2, 55.3, 55.4, 55.5, 55.6, 55.8_
 
   - [ ]* 47.3 编写管理员权限属性测试
@@ -1381,17 +1473,21 @@
 
 - [ ] 64. 性能优化
   - [ ] 64.1 前端性能优化
-    - 实现图片懒加载和虚拟滚动（长列表优化）
-    - 实现路由预加载和代码分割
-    - 优化 Canvas 游戏渲染性能（确保 60fps）
-    - 实现 Service Worker 缓存策略（PWA 离线支持）
+    - **图片优化**：实现图片懒加载（Intersection Observer API），所有图片使用 `loading="lazy"` 和 `srcset` 响应式图片
+    - **长列表优化**：实现虚拟滚动（react-window 或自实现），搜索结果/评论列表/弹幕列表使用虚拟滚动
+    - **路由优化**：实现路由预加载（Next.js `prefetch`），热门页面预加载
+    - **代码分割**：按路由分割代码（Next.js 自动），大型组件（VideoPlayer/ComicReader/NovelReader/GameEngine）动态导入 `dynamic()`
+    - **Canvas游戏优化**：使用 `requestAnimationFrame` 确保60fps，实现对象池减少GC，使用 OffscreenCanvas（Web Worker中渲染）
+    - **PWA离线支持**：配置 Service Worker 缓存策略（Cache First for 静态资源，Network First for API）
+    - **字体优化**：使用 `font-display: swap`，预加载关键字体
     - _需求: 6.1, 13.5_
 
   - [ ] 64.2 后端性能优化
-    - 实现 KV 热数据缓存（搜索结果、热门内容）
-    - 优化 D1 查询（索引优化、分页优化）
-    - 实现聚合搜索并发控制和超时优化
-    - 实现 Cloudflare Workers 代理缓存
+    - **KV热数据缓存**：搜索结果缓存（TTL 5分钟）、热门内容缓存（TTL 1小时）、源健康状态缓存（TTL 1分钟）
+    - **D1查询优化**：确保所有高频查询字段有索引、使用 `LIMIT/OFFSET` 分页、避免 `SELECT *`
+    - **聚合搜索优化**：实现并发控制（最多同时请求10个源）、超时快速失败（10秒）、结果流式返回
+    - **Cloudflare Workers代理缓存**：对第三方API响应设置 `Cache-Control` 头，利用 Cloudflare CDN 边缘缓存
+    - **R2文件访问优化**：使用 Cloudflare CDN 缓存 R2 文件（图片/音频），设置长 TTL
     - _需求: 4.7, 8.13_
 
 - [ ] 65. 最终检查点 — 确保所有测试通过
