@@ -1,498 +1,853 @@
 "use client";
-import { useState } from "react";
+
+import { useState, useMemo, useCallback } from "react";
 import Header from "@/components/Header";
-import { useAuth } from "@/lib/auth";
-import QRVerify from "@/components/QRVerify";
-import GeoVerify from "@/components/GeoVerify";
-import clsx from "clsx";
-import type { VerifyStatus, GeoLocation } from "@/lib/content-verify";
-import { isMobile } from "@/lib/content-verify";
+import RatingBadge from "@/components/ui/RatingBadge";
+import NovelReader from "@/components/reader/NovelReader";
+import type { ContentRating } from "@/lib/types";
+import {
+  BookText,
+  Search,
+  Filter,
+  X,
+  Eye,
+  BookMarked,
+  Layers,
+  Clock,
+  ChevronRight,
+  User,
+  Tag,
+  Library,
+  Bookmark,
+  Play,
+  Globe,
+  Volume2,
+  FileText,
+  PenLine,
+} from "lucide-react";
 
-/* ========== 分类 ========== */
-const genres = [
-  { id: "all", label: "全部" },
-  { id: "verified", label: "? 已验证" },
-  { id: "unverified", label: "? 待验证" },
-  { id: "fantasy", label: "玄幻" },
-  { id: "wuxia", label: "武侠" },
-  { id: "urban", label: "都市" },
-  { id: "romance", label: "言情" },
-  { id: "scifi", label: "科幻" },
-  { id: "mystery", label: "悬疑" },
-  { id: "history", label: "历史" },
-  { id: "game", label: "游戏" },
-  { id: "horror", label: "恐怖" },
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface NovelChapter {
+  id: string;
+  title: string;
+  wordCount: number;
+  date: string;
+}
+
+interface MockNovel {
+  id: string;
+  title: string;
+  cover: string;
+  author: string;
+  genres: string[];
+  status: "连载中" | "已完结";
+  source: string;
+  sourceId: string;
+  rating: ContentRating;
+  chapters: NovelChapter[];
+  totalWords: number;
+  views: number;
+  description: string;
+  lastUpdated: string;
+}
+
+interface NovelBookmark {
+  novelId: string;
+  chapterId: string;
+  position: number;
+  lastRead: string;
+}
+
+// ---------------------------------------------------------------------------
+// Genre / Status / Source filter definitions
+// ---------------------------------------------------------------------------
+
+interface FilterOption {
+  id: string;
+  label: string;
+}
+
+const GENRES: FilterOption[] = [
+  { id: "all", label: "全部类型" },
+  { id: "玄幻", label: "玄幻" },
+  { id: "都市", label: "都市" },
+  { id: "科幻", label: "科幻" },
+  { id: "历史", label: "历史" },
+  { id: "言情", label: "言情" },
+  { id: "武侠", label: "武侠" },
+  { id: "仙侠", label: "仙侠" },
+  { id: "悬疑", label: "悬疑" },
+  { id: "恐怖", label: "恐怖" },
+  { id: "游戏", label: "游戏" },
+  { id: "体育", label: "体育" },
 ];
 
-const statusFilters = [
-  { id: "all", label: "全部" },
-  { id: "ongoing", label: "连载中" },
-  { id: "completed", label: "已完结" },
+const STATUS_OPTIONS: FilterOption[] = [
+  { id: "all", label: "全部状态" },
+  { id: "连载中", label: "连载中" },
+  { id: "已完结", label: "已完结" },
 ];
 
-/* ========== 评论类型 ========== */
-interface NovelComment {
-  id: number; userName: string; content: string; rating: number;
-  isVerifier: boolean; geoVerified: boolean; photos?: string[];
-  createdAt: string; likes: number;
+const SOURCE_PLATFORMS: FilterOption[] = [
+  { id: "all", label: "全部来源" },
+  { id: "笔趣阁", label: "笔趣阁" },
+  { id: "69书吧", label: "69书吧" },
+  { id: "全本小说网", label: "全本小说网" },
+  { id: "Novel Updates", label: "Novel Updates" },
+  { id: "起点中文网", label: "起点中文网" },
+  { id: "纵横中文网", label: "纵横中文网" },
+];
+
+// ---------------------------------------------------------------------------
+// Mock novel data
+// ---------------------------------------------------------------------------
+
+function makeChapters(count: number): NovelChapter[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `ch-${i + 1}`,
+    title: `第${i + 1}章`,
+    wordCount: Math.floor(Math.random() * 3000) + 2000,
+    date: `2026-0${Math.min(4, Math.floor(i / 50) + 1)}-${String(((i * 3) % 28) + 1).padStart(2, "0")}`,
+  }));
 }
 
-/* ========== 数据 ========== */
-interface Novel {
-  id: number; title: string; author: string; genre: string;
-  desc: string; tags: string[]; wordCount: string; chapters: number;
-  status: "ongoing" | "completed"; rating: number; views: string;
-  lastUpdate: string; preview: string[];
-  verifyStatus: VerifyStatus; uploadedBy: string;
-  targetLocation?: GeoLocation; comments: NovelComment[];
-  verifyCount: number;
-}
-
-const novels: Novel[] = [
+const ALL_NOVELS: MockNovel[] = [
   {
-    id: 1, title: "星域征途", author: "银河笔客", genre: "scifi",
-    desc: "2340年，人类踏入星际时代。退役军人陈锋意外获得远古文明遗物，卷入银河系最大的阴谋之中。",
-    tags: ["星际", "硬科幻", "热血"], wordCount: "186万", chapters: 892, status: "ongoing",
-    rating: 4.7, views: "3200万", lastUpdate: "2026-04-10",
-    preview: ["深空站的警报声划破了寂静。陈锋从冷冻舱中醒来，眼前的全息屏幕上闪烁着刺眼的红色警告。", "「未知能量波动检测——距离：0.3光年——威胁等级：S」", "他揉了揉太阳穴，冷冻休眠的后遗症让他的大脑还有些迟钝。但多年的军旅生涯让他的身体比意识更快地做出了反应——他已经穿好了作战服，手指搭在了控制台上。"],
-    verifyStatus: "verified", uploadedBy: "站长", verifyCount: 5,
-    targetLocation: { lat: 31.2304, lng: 121.4737, address: "上海市黄浦区" },
-    comments: [{ id: 1, userName: "科幻迷", content: "硬核科幻，世界观宏大！已实地确认出版信息。", rating: 5, isVerifier: true, geoVerified: true, createdAt: "2026-03-10", likes: 88 }],
+    id: "n-1", title: "星域征途", cover: "https://images.unsplash.com/photo-1614732414444-096e5f1122d5?w=300&q=80",
+    author: "银河笔客", genres: ["科幻", "玄幻"], status: "连载中", source: "笔趣阁", sourceId: "biquge",
+    rating: "PG-13", chapters: makeChapters(892), totalWords: 1860000,
+    views: 32000000, description: "2340年，人类踏入星际时代。退役军人陈锋意外获得远古文明遗物，卷入银河系最大的阴谋之中。",
+    lastUpdated: "2026-04-10",
   },
   {
-    id: 2, title: "九天剑帝", author: "剑舞苍穹", genre: "fantasy",
-    desc: "少年林逸身怀废脉，被家族驱逐。偶得上古剑帝传承，从此踏上逆天修炼之路，剑斩苍穹。",
-    tags: ["修仙", "逆袭", "爽文"], wordCount: "320万", chapters: 1560, status: "ongoing",
-    rating: 4.5, views: "5800万", lastUpdate: "2026-04-10",
-    preview: ["青云城外，少年跪在暴雨中。", "林家大门紧闭，门上的金色匾额在闪电中格外刺眼。", "「废脉之人，不配姓林。」长老的话还回荡在耳边。林逸攥紧了拳头，雨水混着血从指缝间滴落。"],
-    verifyStatus: "verified", uploadedBy: "用户A", verifyCount: 3,
-    comments: [{ id: 2, userName: "修仙党", content: "经典修仙文，节奏很好。", rating: 4, isVerifier: false, geoVerified: false, createdAt: "2026-03-20", likes: 45 }],
+    id: "n-2", title: "九天剑帝", cover: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=300&q=80",
+    author: "剑舞苍穹", genres: ["玄幻", "仙侠"], status: "连载中", source: "起点中文网", sourceId: "qidian",
+    rating: "PG-13", chapters: makeChapters(1560), totalWords: 3200000,
+    views: 58000000, description: "少年林逸身怀废脉，被家族驱逐。偶得上古剑帝传承，从此踏上逆天修炼之路，剑斩苍穹。",
+    lastUpdated: "2026-04-10",
   },
   {
-    id: 3, title: "重生之都市仙尊", author: "墨染青衫", genre: "urban",
-    desc: "修仙界大能渡劫失败，重生回到都市少年时代。这一世，他要弥补所有遗憾，站在世界之巅。",
-    tags: ["重生", "都市", "修仙"], wordCount: "245万", chapters: 1203, status: "completed",
-    rating: 4.6, views: "4100万", lastUpdate: "2026-03-15",
-    preview: ["苏辰睁开眼，看到的是一间破旧的出租屋。", "墙上的日历写着2026年4月1日。他愣了三秒，然后疯狂地笑了起来。"],
-    verifyStatus: "unverified", uploadedBy: "用户B", verifyCount: 0,
-    targetLocation: { lat: 39.9042, lng: 116.4074, address: "北京市朝阳区" },
-    comments: [],
+    id: "n-3", title: "重生之都市仙尊", cover: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&q=80",
+    author: "墨染青衫", genres: ["都市", "仙侠"], status: "已完结", source: "69书吧", sourceId: "69shu",
+    rating: "PG-13", chapters: makeChapters(1203), totalWords: 2450000,
+    views: 41000000, description: "修仙界大能渡劫失败，重生回到都市少年时代。这一世，他要弥补所有遗憾，站在世界之巅。",
+    lastUpdated: "2026-03-15",
   },
   {
-    id: 4, title: "锦绣医妃", author: "浅墨轻烟", genre: "romance",
-    desc: "现代女医生穿越成将军府废材嫡女，凭借医术和智慧，在后宅争斗中步步为营，收获真爱。",
-    tags: ["穿越", "医术", "宫斗"], wordCount: "198万", chapters: 956, status: "completed",
-    rating: 4.8, views: "6200万", lastUpdate: "2026-02-20",
-    preview: ["沈清歌再次睁眼时，入目的是一顶绣着金凤的床帐。", "「小姐醒了！小姐醒了！」一个梳着双丫髻的小丫鬟惊喜地叫了起来。"],
-    verifyStatus: "verified", uploadedBy: "站长", verifyCount: 7,
-    comments: [{ id: 3, userName: "言情控", content: "超好看！女主聪明不圣母。", rating: 5, isVerifier: true, geoVerified: true, createdAt: "2026-02-25", likes: 200 }],
+    id: "n-4", title: "锦绣医妃", cover: "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=300&q=80",
+    author: "浅墨轻烟", genres: ["言情", "历史"], status: "已完结", source: "全本小说网", sourceId: "quanben",
+    rating: "PG", chapters: makeChapters(956), totalWords: 1980000,
+    views: 62000000, description: "现代女医生穿越成将军府废材嫡女，凭借医术和智慧，在后宅争斗中步步为营，收获真爱。",
+    lastUpdated: "2026-02-20",
   },
   {
-    id: 5, title: "诡秘档案", author: "深渊观察者", genre: "mystery",
-    desc: "刑警队长接手一桩离奇失踪案，随着调查深入，他发现这座城市隐藏着一个存在了百年的秘密组织。",
-    tags: ["刑侦", "悬疑", "烧脑"], wordCount: "156万", chapters: 743, status: "ongoing",
-    rating: 4.9, views: "2800万", lastUpdate: "2026-04-09",
-    preview: ["档案室的灯忽明忽暗。", "李沉翻开那份尘封了二十年的卷宗，照片上的失踪者面带微笑，仿佛在看着他。"],
-    verifyStatus: "pending", uploadedBy: "用户C", verifyCount: 1,
-    targetLocation: { lat: 30.5728, lng: 104.0668, address: "成都市武侯区" },
-    comments: [{ id: 4, userName: "推理爱好者", content: "验证中，内容质量很高。", rating: 5, isVerifier: true, geoVerified: false, createdAt: "2026-04-08", likes: 12 }],
+    id: "n-5", title: "诡秘档案", cover: "https://images.unsplash.com/photo-1581833971358-2c8b550f87b3?w=300&q=80",
+    author: "深渊观察者", genres: ["悬疑", "都市"], status: "连载中", source: "笔趣阁", sourceId: "biquge",
+    rating: "R", chapters: makeChapters(743), totalWords: 1560000,
+    views: 28000000, description: "刑警队长接手一桩离奇失踪案，随着调查深入，他发现这座城市隐藏着一个存在了百年的秘密组织。",
+    lastUpdated: "2026-04-09",
   },
   {
-    id: 6, title: "大唐风华录", author: "长安故人", genre: "history",
-    desc: "开元盛世，一个落魄书生凭借超前的见识，在长安城中搅动风云，见证大唐最辉煌的时代。",
-    tags: ["唐朝", "权谋", "历史"], wordCount: "210万", chapters: 1024, status: "ongoing",
-    rating: 4.6, views: "1900万", lastUpdate: "2026-04-08",
-    preview: ["长安，天下之中。", "春日的朱雀大街上人流如织，胡商、僧侣、文人、武将，各色人等汇聚于此。"],
-    verifyStatus: "unverified", uploadedBy: "用户D", verifyCount: 0,
-    comments: [],
+    id: "n-6", title: "大唐风华录", cover: "https://images.unsplash.com/photo-1596727147705-61a532a659bd?w=300&q=80",
+    author: "长安故人", genres: ["历史", "武侠"], status: "连载中", source: "纵横中文网", sourceId: "zongheng",
+    rating: "PG", chapters: makeChapters(1024), totalWords: 2100000,
+    views: 19000000, description: "开元盛世，一个落魄书生凭借超前的见识，在长安城中搅动风云，见证大唐最辉煌的时代。",
+    lastUpdated: "2026-04-08",
   },
   {
-    id: 7, title: "剑来", author: "烽火戏诸侯", genre: "wuxia",
-    desc: "少年陈平安出身贫寒小镇，一步步走出小镇，行走天下，以一把剑问道苍天。",
-    tags: ["江湖", "成长", "经典"], wordCount: "580万", chapters: 2800, status: "completed",
-    rating: 4.9, views: "1.2亿", lastUpdate: "2025-12-01",
-    preview: ["小镇很小，小到只有一条街。", "陈平安蹲在泥瓶巷的墙根下，手里攥着几枚铜钱，盘算着今天的晚饭。"],
-    verifyStatus: "verified", uploadedBy: "站长", verifyCount: 12,
-    comments: [{ id: 5, userName: "武侠迷", content: "神作！陈平安的成长太感人了。", rating: 5, isVerifier: true, geoVerified: true, createdAt: "2025-12-10", likes: 500 }],
+    id: "n-7", title: "剑来", cover: "https://images.unsplash.com/photo-1612036782180-6f0b6cd846fe?w=300&q=80",
+    author: "烽火戏诸侯", genres: ["武侠", "仙侠"], status: "已完结", source: "起点中文网", sourceId: "qidian",
+    rating: "PG-13", chapters: makeChapters(2800), totalWords: 5800000,
+    views: 120000000, description: "少年陈平安出身贫寒小镇，一步步走出小镇，行走天下，以一把剑问道苍天。",
+    lastUpdated: "2025-12-01",
   },
   {
-    id: 8, title: "全球游戏：开局百亿灵能", author: "氪金大佬", genre: "game",
-    desc: "全球进入游戏时代，林凡开局获得百亿灵能点，当别人还在新手村挣扎时，他已经碾压全服。",
-    tags: ["网游", "无敌", "爽文"], wordCount: "167万", chapters: 810, status: "ongoing",
-    rating: 4.3, views: "2400万", lastUpdate: "2026-04-10",
-    preview: ["【叮！全球游戏《神域》正式上线，所有人类将强制进入游戏世界】", "林凡看着眼前的全息面板，嘴角微微上扬。"],
-    verifyStatus: "unverified", uploadedBy: "用户E", verifyCount: 0,
-    targetLocation: { lat: 22.5431, lng: 114.0579, address: "深圳市南山区" },
-    comments: [],
+    id: "n-8", title: "全球游戏：开局百亿灵能", cover: "https://images.unsplash.com/photo-1534423861386-85a16f5d13fd?w=300&q=80",
+    author: "氪金大佬", genres: ["游戏", "玄幻"], status: "连载中", source: "69书吧", sourceId: "69shu",
+    rating: "PG-13", chapters: makeChapters(810), totalWords: 1670000,
+    views: 24000000, description: "全球进入游戏时代，林凡开局获得百亿灵能点，当别人还在新手村挣扎时，他已经碾压全服。",
+    lastUpdated: "2026-04-10",
   },
   {
-    id: 9, title: "午夜凶铃", author: "暗夜行者", genre: "horror",
-    desc: "每到午夜十二点，手机都会收到一条来自未知号码的短信。看过短信的人，都会在七天后离奇死亡。",
-    tags: ["灵异", "恐怖", "都市"], wordCount: "89万", chapters: 420, status: "completed",
-    rating: 4.4, views: "1500万", lastUpdate: "2026-01-30",
-    preview: ["00:00。", "手机屏幕亮了。张伟迷迷糊糊地拿起手机，看到一条新短信。"],
-    verifyStatus: "verified", uploadedBy: "用户F", verifyCount: 4,
-    comments: [{ id: 6, userName: "恐怖小说爱好者", content: "看得我后背发凉，太刺激了！", rating: 4, isVerifier: false, geoVerified: false, createdAt: "2026-02-05", likes: 78 }],
+    id: "n-9", title: "午夜凶铃", cover: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=300&q=80",
+    author: "暗夜行者", genres: ["恐怖", "悬疑"], status: "已完结", source: "全本小说网", sourceId: "quanben",
+    rating: "R", chapters: makeChapters(420), totalWords: 890000,
+    views: 15000000, description: "每到午夜十二点，手机都会收到一条来自未知号码的短信。看过短信的人，都会在七天后离奇死亡。",
+    lastUpdated: "2026-01-30",
+  },
+  {
+    id: "n-10", title: "凡人修仙传", cover: "https://images.unsplash.com/photo-1611457194403-d3f8c5154dc2?w=300&q=80",
+    author: "忘语", genres: ["仙侠", "玄幻"], status: "已完结", source: "Novel Updates", sourceId: "novelupdates",
+    rating: "PG", chapters: makeChapters(2446), totalWords: 7440000,
+    views: 250000000, description: "一个普通山村少年韩立，偶然踏入修仙之途，历经无数艰险，最终成就仙道传奇。",
+    lastUpdated: "2025-08-15",
+  },
+  {
+    id: "n-11", title: "篮球之神", cover: "https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=300&q=80",
+    author: "热血灌篮", genres: ["体育", "都市"], status: "连载中", source: "纵横中文网", sourceId: "zongheng",
+    rating: "G", chapters: makeChapters(560), totalWords: 1120000,
+    views: 8500000, description: "穿越到平行世界的篮球天才，从街头球场打到NBA总决赛的热血传奇。",
+    lastUpdated: "2026-04-07",
+  },
+  {
+    id: "n-12", title: "诡秘之主", cover: "https://images.unsplash.com/photo-1601850494422-3cf14624b0b3?w=300&q=80",
+    author: "爱潜水的乌贼", genres: ["玄幻", "悬疑"], status: "已完结", source: "笔趣阁", sourceId: "biquge",
+    rating: "PG-13", chapters: makeChapters(1432), totalWords: 3980000,
+    views: 180000000, description: "穿越到蒸汽与超凡并存的世界，克莱恩踏上了一条诡秘的晋升之路。",
+    lastUpdated: "2025-06-20",
+  },
+  {
+    id: "n-13", title: "斗破苍穹", cover: "https://images.unsplash.com/photo-1614732414444-096e5f1122d5?w=300&q=80",
+    author: "天蚕土豆", genres: ["玄幻", "仙侠"], status: "已完结", source: "起点中文网", sourceId: "qidian",
+    rating: "PG", chapters: makeChapters(1648), totalWords: 5300000,
+    views: 350000000, description: "三十年河东三十年河西，莫欺少年穷！萧炎从废柴到斗帝的逆袭之路。",
+    lastUpdated: "2025-03-10",
+  },
+  {
+    id: "n-14", title: "庆余年", cover: "https://images.unsplash.com/photo-1596727147705-61a532a659bd?w=300&q=80",
+    author: "猫腻", genres: ["历史", "武侠"], status: "已完结", source: "Novel Updates", sourceId: "novelupdates",
+    rating: "PG-13", chapters: makeChapters(746), totalWords: 3560000,
+    views: 95000000, description: "范闲从澹州走向京都，在权谋与阴谋中寻找母亲的真相，改变这个世界。",
+    lastUpdated: "2025-01-05",
+  },
+  {
+    id: "n-15", title: "天官赐福", cover: "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=300&q=80",
+    author: "墨香铜臭", genres: ["言情", "玄幻"], status: "已完结", source: "全本小说网", sourceId: "quanben",
+    rating: "PG-13", chapters: makeChapters(244), totalWords: 1050000,
+    views: 78000000, description: "仙乐国太子谢怜三次飞升三次被贬，八百年后再次飞升，与神秘鬼王花城相遇。",
+    lastUpdated: "2025-04-18",
   },
 ];
 
-/* ========== 验证徽章 ========== */
-function VerifyBadge({ status, count }: { status: VerifyStatus; count: number }) {
-  const cfg = {
-    verified: { icon: "fa-check-circle", text: "已验证", cls: "bg-[#2ba640]/15 text-[#2ba640] border-[#2ba640]/30" },
-    pending: { icon: "fa-clock", text: "验证中", cls: "bg-[#f0b90b]/15 text-[#f0b90b] border-[#f0b90b]/30" },
-    unverified: { icon: "fa-question-circle", text: "未验证", cls: "bg-[#8a8a8a]/15 text-[#8a8a8a] border-[#8a8a8a]/30" },
-    rejected: { icon: "fa-times-circle", text: "已驳回", cls: "bg-[#ff4444]/15 text-[#ff4444] border-[#ff4444]/30" },
-  }[status];
-  return (
-    <span className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border font-bold ${cfg.cls}`}>
-      <i className={`fas ${cfg.icon}`} />{cfg.text}{count > 0 && ` (${count})`}
-    </span>
-  );
+// ---------------------------------------------------------------------------
+// Mock bookmarks (continue reading)
+// ---------------------------------------------------------------------------
+
+const MOCK_BOOKMARKS: NovelBookmark[] = [
+  { novelId: "n-1", chapterId: "ch-850", position: 3200, lastRead: "2026-04-10" },
+  { novelId: "n-5", chapterId: "ch-720", position: 1500, lastRead: "2026-04-09" },
+  { novelId: "n-2", chapterId: "ch-1400", position: 800, lastRead: "2026-04-08" },
+];
+
+// ---------------------------------------------------------------------------
+// Mock chapter content for reader
+// ---------------------------------------------------------------------------
+
+function generateMockContent(): string {
+  const paragraphs = [
+    "深空站的警报声划破了寂静。陈锋从冷冻舱中醒来，眼前的全息屏幕上闪烁着刺眼的红色警告。",
+    "「未知能量波动检测——距离：0.3光年——威胁等级：S」",
+    "他揉了揉太阳穴，冷冻休眠的后遗症让他的大脑还有些迟钝。但多年的军旅生涯让他的身体比意识更快地做出了反应——他已经穿好了作战服，手指搭在了控制台上。",
+    "窗外是无尽的星海，银河的光芒在远处静静流淌。这片宇宙看起来如此平静，但陈锋知道，平静之下往往隐藏着最致命的危险。",
+    "「舰长，能量波动源正在接近，预计三十分钟后到达有效探测范围。」AI助手的声音在耳边响起，冷静而精确。",
+    "陈锋深吸一口气，目光变得锐利。他打开了全舰广播：「全体注意，一级战备。这不是演习。」",
+    "走廊里响起了急促的脚步声，船员们从各自的休眠舱中醒来，迅速奔向各自的战位。这艘「破晓号」巡洋舰虽然只是一艘中型战舰，但船上的每一个人都是经历过星际战争的老兵。",
+    "「距离目标还有二十五分钟。」AI继续播报。",
+    "陈锋调出了战术地图，一个巨大的红色光点正在以超光速向他们逼近。根据能量特征分析，这不是任何已知文明的飞船。",
+    "「未知文明……」他喃喃自语，手指不自觉地摸向了胸前的那枚古老吊坠。那是他在一次考古任务中发现的远古遗物，上面刻着谁也看不懂的符文。",
+    "就在这时，吊坠突然发出了微弱的蓝光。陈锋低头看去，那些古老的符文正在缓缓旋转，仿佛在回应着什么。",
+    "「这是……」他瞪大了眼睛。在他服役的二十年里，这枚吊坠从未有过任何反应。",
+    "全息屏幕上的红色光点突然停了下来，就悬停在距离他们0.1光年的位置。然后，一道强烈的光束穿透了虚空，直直地照射在「破晓号」上。",
+    "警报声变得更加刺耳。但奇怪的是，那道光束并没有造成任何伤害。相反，它似乎在扫描着什么。",
+    "陈锋胸前的吊坠光芒大盛，整个舰桥都被蓝色的光芒笼罩。符文从吊坠上飞出，在空中组成了一行行文字。",
+    "那是一种他从未见过的语言，但不知为何，他竟然能够理解其中的含义。",
+    "「继承者已确认。远古协议启动。银河守护者权限开放。」",
+  ];
+  return paragraphs.join("\n\n");
 }
 
-/* ========== 评论组件 ========== */
-function CommentItem({ c }: { c: NovelComment }) {
-  return (
-    <div className="p-3 rounded-xl bg-[#1a1a1a]/50 border border-[#333]/30">
-      <div className="flex items-center gap-2 mb-1.5">
-        <div className="w-6 h-6 rounded-full bg-[#f0b90b] flex items-center justify-center text-[10px] font-bold text-[#0f0f0f]">
-          {c.userName.charAt(0)}
-        </div>
-        <span className="text-xs font-medium">{c.userName}</span>
-        {c.isVerifier && (
-          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#2ba640]/15 text-[#2ba640] border border-[#2ba640]/30 font-bold">
-            <i className="fas fa-shield-check mr-0.5" />验证者
-          </span>
-        )}
-        {c.geoVerified && (
-          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#3ea6ff]/15 text-[#3ea6ff] border border-[#3ea6ff]/30 font-bold">
-            <i className="fas fa-map-marker-alt mr-0.5" />实地
-          </span>
-        )}
-        <div className="flex gap-0.5 ml-auto">
-          {[1,2,3,4,5].map(s => <i key={s} className={`fas fa-star text-[8px] ${s <= c.rating ? "text-[#f0b90b]" : "text-[#333]"}`} />)}
-        </div>
-      </div>
-      <p className="text-[12px] text-[#aaa] leading-relaxed">{c.content}</p>
-      <div className="flex items-center gap-3 mt-2 text-[10px] text-[#666]">
-        <span>{c.createdAt}</span>
-        <span><i className="fas fa-heart mr-0.5" />{c.likes}</span>
-      </div>
-    </div>
-  );
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function fmtNum(n: number): string {
+  if (n >= 100_000_000) return (n / 100_000_000).toFixed(1) + "亿";
+  if (n >= 10_000) return (n / 10_000).toFixed(1) + "万";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
 }
 
-/* ========== 上传弹窗 ========== */
-function UploadModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (d: { title: string; author: string; genre: string; desc: string }) => void }) {
-  const [title, setTitle] = useState("");
-  const [author, setAuthor] = useState("");
-  const [genre, setGenre] = useState("fantasy");
-  const [desc, setDesc] = useState("");
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center" onClick={onClose}>
-      <div className="w-full max-w-md bg-[#141414] border border-[#333] rounded-t-2xl md:rounded-2xl p-6 animate-slide-up" onClick={e => e.stopPropagation()}>
-        <h3 className="font-bold text-lg mb-4"><i className="fas fa-upload mr-2 text-[#f0b90b]" />上传小说</h3>
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs text-[#8a8a8a] mb-1 block">书名 *</label>
-            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="输入书名" className="w-full h-9 px-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#f0b90b]" />
-          </div>
-          <div>
-            <label className="text-xs text-[#8a8a8a] mb-1 block">作者 *</label>
-            <input value={author} onChange={e => setAuthor(e.target.value)} placeholder="输入作者名" className="w-full h-9 px-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#f0b90b]" />
-          </div>
-          <div>
-            <label className="text-xs text-[#8a8a8a] mb-1 block">分类</label>
-            <select value={genre} onChange={e => setGenre(e.target.value)} className="w-full h-9 px-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white outline-none focus:border-[#f0b90b]">
-              {genres.filter(g => !["all","verified","unverified"].includes(g.id)).map(g => <option key={g.id} value={g.id}>{g.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-[#8a8a8a] mb-1 block">简介</label>
-            <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="简单描述一下这本小说..." rows={3} className="w-full p-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#f0b90b] resize-none" />
-          </div>
-        </div>
-        <p className="text-[10px] text-[#666] mt-3 mb-4"><i className="fas fa-info-circle mr-1" />上传后状态为"未验证"，需要其他用户实地验证后才会标记为"已验证"。</p>
-        <div className="flex gap-2">
-          <button onClick={() => { if (title && author) onSubmit({ title, author, genre, desc }); }} disabled={!title || !author} className="flex-1 py-2.5 rounded-xl bg-[#f0b90b] text-[#0f0f0f] font-bold text-sm hover:bg-[#f0b90b]/80 transition disabled:opacity-50">
-            <i className="fas fa-cloud-upload-alt mr-1.5" />提交
-          </button>
-          <button onClick={onClose} className="px-5 py-2.5 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa]">取消</button>
-        </div>
-      </div>
-    </div>
-  );
+function fmtWords(n: number): string {
+  if (n >= 10_000) return (n / 10_000).toFixed(0) + "万字";
+  return n + "字";
 }
 
-/* ========== 主组件 ========== */
+// ===========================================================================
+// Main Page Component
+// ===========================================================================
+
 export default function NovelsPage() {
-  const { isLoggedIn } = useAuth();
-  const [genre, setGenre] = useState("all");
-  const [statusF, setStatusF] = useState("all");
-  const [reading, setReading] = useState<Novel | null>(null);
-  const [searchText, setSearchText] = useState("");
-  const [showUpload, setShowUpload] = useState(false);
-  const [showQR, setShowQR] = useState<Novel | null>(null);
-  const [showGeo, setShowGeo] = useState<Novel | null>(null);
-  const [commentText, setCommentText] = useState("");
-  const [allNovels, setAllNovels] = useState(novels);
+  // --- Filter state ---
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeGenre, setActiveGenre] = useState("all");
+  const [activeStatus, setActiveStatus] = useState("all");
+  const [activeSource, setActiveSource] = useState("all");
+  const [showFilters, setShowFilters] = useState(false);
 
-  const filtered = allNovels.filter(n => {
-    if (genre === "verified") return n.verifyStatus === "verified";
-    if (genre === "unverified") return n.verifyStatus === "unverified" || n.verifyStatus === "pending";
-    if (genre !== "all" && n.genre !== genre) return false;
-    if (statusF !== "all" && n.status !== statusF) return false;
-    if (searchText && !n.title.includes(searchText) && !n.author.includes(searchText) && !n.tags.some(t => t.includes(searchText))) return false;
-    return true;
-  });
+  // --- Detail / Reader state ---
+  const [selectedNovel, setSelectedNovel] = useState<MockNovel | null>(null);
+  const [readingChapter, setReadingChapter] = useState<{
+    novel: MockNovel;
+    chapter: NovelChapter;
+  } | null>(null);
 
-  const handleUpload = (d: { title: string; author: string; genre: string; desc: string }) => {
-    const nn: Novel = {
-      id: allNovels.length + 1, title: d.title, author: d.author, genre: d.genre,
-      desc: d.desc, tags: [], wordCount: "0", chapters: 0, status: "ongoing",
-      rating: 0, views: "0", lastUpdate: new Date().toISOString().slice(0, 10),
-      preview: [], verifyStatus: "unverified", uploadedBy: "我", verifyCount: 0, comments: [],
-    };
-    setAllNovels(prev => [nn, ...prev]);
-    setShowUpload(false);
-  };
+  // --- Bookmarks ---
+  const [bookmarks] = useState<NovelBookmark[]>(MOCK_BOOKMARKS);
 
-  const handleStartVerify = (novel: Novel) => {
-    if (isMobile()) setShowGeo(novel);
-    else setShowQR(novel);
-  };
+  // --- Filtered novels ---
+  const filteredNovels = useMemo(() => {
+    let list = ALL_NOVELS;
 
-  const handleGeoSubmit = (data: { comment: string; rating: number; status: "approved" | "rejected" }) => {
-    if (!showGeo) return;
-    const nc: NovelComment = {
-      id: Date.now(), userName: "我", content: data.comment, rating: data.rating,
-      isVerifier: true, geoVerified: true, createdAt: new Date().toISOString().slice(0, 10), likes: 0,
-    };
-    setAllNovels(prev => prev.map(n =>
-      n.id === showGeo.id ? {
-        ...n, comments: [...n.comments, nc], verifyCount: n.verifyCount + 1,
-        verifyStatus: data.status === "approved" ? "verified" as VerifyStatus : n.verifyStatus,
-        rating: n.comments.length > 0 ? (n.comments.reduce((s, c) => s + c.rating, 0) + data.rating) / (n.comments.length + 1) : data.rating,
-      } : n
-    ));
-    if (reading?.id === showGeo.id) {
-      setReading(prev => prev ? { ...prev, comments: [...prev.comments, nc], verifyCount: prev.verifyCount + 1 } : prev);
+    if (activeGenre !== "all") {
+      list = list.filter((n) => n.genres.includes(activeGenre));
     }
-    setShowGeo(null);
-  };
+    if (activeStatus !== "all") {
+      list = list.filter((n) => n.status === activeStatus);
+    }
+    if (activeSource !== "all") {
+      list = list.filter((n) => n.source === activeSource);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(
+        (n) =>
+          n.title.toLowerCase().includes(q) ||
+          n.author.toLowerCase().includes(q) ||
+          n.genres.some((g) => g.includes(q))
+      );
+    }
 
-  const handleAddComment = () => {
-    if (!reading || !commentText.trim()) return;
-    const nc: NovelComment = {
-      id: Date.now(), userName: "我", content: commentText, rating: 4,
-      isVerifier: false, geoVerified: false, createdAt: new Date().toISOString().slice(0, 10), likes: 0,
-    };
-    setAllNovels(prev => prev.map(n => n.id === reading.id ? { ...n, comments: [...n.comments, nc] } : n));
-    setReading(prev => prev ? { ...prev, comments: [...prev.comments, nc] } : prev);
-    setCommentText("");
-  };
+    return list;
+  }, [activeGenre, activeStatus, activeSource, searchQuery]);
 
+  // --- Continue reading novels ---
+  const continueReadingNovels = useMemo(() => {
+    return bookmarks
+      .map((bm) => {
+        const novel = ALL_NOVELS.find((n) => n.id === bm.novelId);
+        if (!novel) return null;
+        return { novel, bookmark: bm };
+      })
+      .filter(Boolean) as { novel: MockNovel; bookmark: NovelBookmark }[];
+  }, [bookmarks]);
+
+  // --- Handlers ---
+  const handleOpenNovel = useCallback((novel: MockNovel) => {
+    setSelectedNovel(novel);
+  }, []);
+
+  const handleStartReading = useCallback(
+    (novel: MockNovel, chapter?: NovelChapter) => {
+      const ch = chapter ?? novel.chapters[0];
+      if (ch) {
+        setReadingChapter({ novel, chapter: ch });
+        setSelectedNovel(null);
+      }
+    },
+    []
+  );
+
+  const handleCloseReader = useCallback(() => {
+    setReadingChapter(null);
+  }, []);
+
+  const handleChapterEnd = useCallback(() => {
+    if (!readingChapter) return;
+    const { novel, chapter } = readingChapter;
+    const idx = novel.chapters.findIndex((ch) => ch.id === chapter.id);
+    if (idx < novel.chapters.length - 1) {
+      setReadingChapter({ novel, chapter: novel.chapters[idx + 1] });
+    }
+  }, [readingChapter]);
+
+  // --- Active filter count ---
+  const activeFilterCount =
+    (activeGenre !== "all" ? 1 : 0) +
+    (activeStatus !== "all" ? 1 : 0) +
+    (activeSource !== "all" ? 1 : 0);
+
+  // =========================================================================
+  // Novel Reader fullscreen overlay
+  // =========================================================================
+  if (readingChapter) {
+    return (
+      <div className="fixed inset-0 z-[70] bg-black flex flex-col">
+        {/* Reader header */}
+        <div className="flex items-center justify-between px-4 py-2 bg-[#0f0f0f] border-b border-white/5 flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={handleCloseReader}
+              className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+              aria-label="Close reader"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <span className="text-sm font-medium text-white truncate">
+              {readingChapter.novel.title}
+            </span>
+            <span className="text-xs text-white/40">
+              {readingChapter.chapter.title}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/30 flex items-center gap-1">
+              <Volume2 size={10} />
+              TTS
+            </span>
+            <RatingBadge rating={readingChapter.novel.rating} />
+          </div>
+        </div>
+        {/* NovelReader component */}
+        <div className="flex-1 min-h-0">
+          <NovelReader
+            content={generateMockContent()}
+            title={`${readingChapter.novel.title} - ${readingChapter.chapter.title}`}
+            mode="scroll"
+            fontSize={18}
+            theme="dark"
+            onChapterEnd={handleChapterEnd}
+            onBookmark={(pos) => {
+              console.log("Bookmarked at position:", pos);
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // Main page render
+  // =========================================================================
   return (
     <>
       <Header />
-      <main className="max-w-5xl mx-auto px-4 py-4 pb-20 md:pb-8">
-        <div className="flex items-center justify-between mb-1">
-          <h1 className="text-xl font-bold"><i className="fas fa-book-open mr-2 text-[#f0b90b]" />小说</h1>
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] text-[#8a8a8a]">{allNovels.length} 部作品</span>
-            {isLoggedIn && (
-              <button onClick={() => setShowUpload(true)} className="px-3 py-1.5 rounded-lg bg-[#f0b90b] text-[#0f0f0f] text-xs font-semibold hover:bg-[#f0b90b]/80 transition">
-                <i className="fas fa-plus mr-1" />上传小说
-              </button>
-            )}
-          </div>
+      <main className="max-w-[1400px] mx-auto px-4 lg:px-6 py-4 pb-20 md:pb-4">
+        {/* ===== Page Title ===== */}
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-xl font-bold flex items-center gap-2">
+            <BookText size={22} className="text-[#3ea6ff]" />
+            小说中心
+          </h1>
+          <span className="text-xs text-[#666]">
+            {ALL_NOVELS.length} 部小说 · {SOURCE_PLATFORMS.length - 1} 个来源
+          </span>
         </div>
-        <p className="text-[#8a8a8a] text-xs mb-4">海量小说免费阅读，用户上传需社区验证。</p>
 
-        {/* 分类 */}
-        <div className="flex gap-1.5 mb-3 overflow-x-auto pb-2 -mx-4 px-4">
-          {genres.map(g => (
-            <button key={g.id} onClick={() => setGenre(g.id)} className={clsx(
-              "px-3 py-1.5 rounded-full text-[12px] whitespace-nowrap border transition shrink-0",
-              genre === g.id ? "bg-[#f0b90b] text-[#0f0f0f] border-[#f0b90b] font-semibold" : "bg-transparent text-[#aaa] border-[#333]/50 hover:bg-[#212121] hover:text-white"
-            )}>{g.label}</button>
+        {/* ===== Search Bar ===== */}
+        <div className="relative mb-4">
+          <Search
+            size={14}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-[#666]"
+          />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索小说名称、作者、类型..."
+            className="w-full h-9 pl-9 pr-20 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition"
+          />
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] transition ${
+              showFilters || activeFilterCount > 0
+                ? "bg-[#3ea6ff]/20 text-[#3ea6ff]"
+                : "bg-[#2a2a2a] text-[#aaa] hover:text-white"
+            }`}
+          >
+            <Filter size={11} />
+            筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+          </button>
+        </div>
+
+        {/* ===== Genre quick-select pills ===== */}
+        <div className="flex gap-2 mb-4 overflow-x-auto pb-2 scrollbar-hide">
+          {GENRES.map((g) => (
+            <button
+              key={g.id}
+              onClick={() => setActiveGenre(g.id)}
+              className={`px-4 py-1.5 rounded-full text-[13px] whitespace-nowrap border transition shrink-0 ${
+                activeGenre === g.id
+                  ? "bg-[#3ea6ff] text-[#0f0f0f] border-[#3ea6ff] font-semibold"
+                  : "bg-transparent text-[#aaa] border-[#333] hover:bg-[#2a2a2a] hover:text-white"
+              }`}
+            >
+              {g.label}
+            </button>
           ))}
         </div>
 
-        {/* 状态 + 搜索 */}
-        <div className="flex flex-col sm:flex-row gap-2 mb-4">
-          <div className="flex-1 relative">
-            <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-[#666] text-xs" />
-            <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="搜索书名、作者、标签..."
-              className="w-full h-9 pl-9 pr-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#f0b90b] transition" />
-          </div>
-          <div className="flex gap-1.5">
-            {statusFilters.map(s => (
-              <button key={s.id} onClick={() => setStatusF(s.id)} className={clsx(
-                "px-3 py-1.5 rounded-lg text-xs border transition",
-                statusF === s.id ? "bg-[#f0b90b]/15 text-[#f0b90b] border-[#f0b90b]/30 font-semibold" : "bg-transparent text-[#8a8a8a] border-[#333]/50 hover:text-white"
-              )}>{s.label}</button>
-            ))}
-          </div>
-        </div>
+        {/* ===== Expanded Filters ===== */}
+        {showFilters && (
+          <div className="mb-4 p-4 rounded-xl bg-[#1a1a1a] border border-[#333]/50 space-y-3">
+            {/* Status filter */}
+            <div>
+              <p className="text-[11px] text-[#666] mb-2 flex items-center gap-1">
+                <Clock size={11} /> 更新状态
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {STATUS_OPTIONS.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setActiveStatus(s.id)}
+                    className={`px-3 py-1 rounded-full text-[12px] border transition ${
+                      activeStatus === s.id
+                        ? "bg-[#3ea6ff]/15 text-[#3ea6ff] border-[#3ea6ff]/40 font-medium"
+                        : "bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]"
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-        {/* 小说列表 */}
-        <div className="space-y-3">
-          {filtered.map(n => (
-            <div key={n.id} onClick={() => setReading(n)}
-              className="flex gap-4 p-4 rounded-xl bg-[#1a1a1a]/50 border border-[#333]/50 hover:border-[#f0b90b]/30 transition cursor-pointer active:scale-[0.995] group">
-              <div className="w-20 h-28 sm:w-24 sm:h-32 rounded-lg bg-gradient-to-br from-[#1a1a2e] to-[#16213e] border border-[#333] flex items-center justify-center shrink-0 overflow-hidden relative">
-                <div className="text-center px-2">
-                  <i className="fas fa-book text-[#f0b90b]/30 text-2xl mb-1" />
-                  <p className="text-[10px] text-[#aaa] font-bold line-clamp-2 leading-tight">{n.title}</p>
+            {/* Source platform filter */}
+            <div>
+              <p className="text-[11px] text-[#666] mb-2 flex items-center gap-1">
+                <Globe size={11} /> 来源平台
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {SOURCE_PLATFORMS.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setActiveSource(p.id)}
+                    className={`px-3 py-1 rounded-full text-[12px] border transition ${
+                      activeSource === p.id
+                        ? "bg-[#3ea6ff]/15 text-[#3ea6ff] border-[#3ea6ff]/40 font-medium"
+                        : "bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Clear filters */}
+            {activeFilterCount > 0 && (
+              <button
+                onClick={() => {
+                  setActiveGenre("all");
+                  setActiveStatus("all");
+                  setActiveSource("all");
+                }}
+                className="text-[11px] text-[#3ea6ff] hover:underline"
+              >
+                清除所有筛选
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ===== Continue Reading Section ===== */}
+        {continueReadingNovels.length > 0 && !searchQuery && activeGenre === "all" && activeStatus === "all" && activeSource === "all" && (
+          <div className="mb-6">
+            <h2 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+              <BookMarked size={16} className="text-[#3ea6ff]" />
+              继续阅读
+            </h2>
+            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+              {continueReadingNovels.map(({ novel, bookmark }) => (
+                <div
+                  key={novel.id}
+                  onClick={() => handleStartReading(novel)}
+                  className="flex-shrink-0 w-[220px] flex gap-3 p-3 rounded-xl bg-[#1a1a1a] border border-[#333]/50 cursor-pointer hover:border-[#3ea6ff]/40 transition group"
+                >
+                  <div className="w-12 h-16 rounded-lg overflow-hidden bg-[#212121] shrink-0">
+                    <img
+                      src={novel.cover}
+                      alt={novel.title}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-xs font-medium text-white truncate group-hover:text-[#3ea6ff] transition">
+                      {novel.title}
+                    </h3>
+                    <p className="text-[10px] text-[#666] mt-0.5">
+                      第{bookmark.chapterId.replace("ch-", "")}章
+                    </p>
+                    <div className="flex items-center gap-1 mt-1">
+                      <Play size={8} className="text-[#3ea6ff]" />
+                      <span className="text-[10px] text-[#3ea6ff]">继续</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="absolute top-1 left-1">
-                  <VerifyBadge status={n.verifyStatus} count={n.verifyCount} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ===== Active filter summary ===== */}
+        {(activeGenre !== "all" || activeStatus !== "all" || activeSource !== "all" || searchQuery) && (
+          <div className="flex items-center gap-2 mb-3 text-[12px] text-[#888]">
+            <Filter size={12} />
+            <span>
+              {activeGenre !== "all" && `${activeGenre}`}
+              {activeStatus !== "all" && ` · ${activeStatus}`}
+              {activeSource !== "all" && ` · ${activeSource}`}
+              {searchQuery && ` · "${searchQuery}"`}
+            </span>
+            <span className="text-[#555]">·</span>
+            <span>{filteredNovels.length} 个结果</span>
+          </div>
+        )}
+
+        {/* ===== Novel Grid ===== */}
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4">
+          {filteredNovels.map((novel) => (
+            <div
+              key={novel.id}
+              onClick={() => handleOpenNovel(novel)}
+              className="group cursor-pointer transition hover:-translate-y-1"
+            >
+              <div className="relative aspect-[3/4] bg-[#1a1a1a] rounded-xl overflow-hidden">
+                <img
+                  src={novel.cover}
+                  alt={novel.title}
+                  loading="lazy"
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+                {/* Source badge */}
+                <span className="absolute top-1.5 left-1.5 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded font-medium">
+                  {novel.source}
+                </span>
+                {/* MPAA Rating badge */}
+                <span className="absolute top-1.5 right-1.5">
+                  <RatingBadge rating={novel.rating} />
+                </span>
+                {/* Bottom info */}
+                <div className="absolute bottom-0 left-0 right-0 p-2 flex items-center justify-between">
+                  <span
+                    className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+                      novel.status === "连载中"
+                        ? "bg-[#3ea6ff] text-[#0f0f0f]"
+                        : "bg-[#2ba640] text-white"
+                    }`}
+                  >
+                    {novel.status}
+                  </span>
+                  <span className="text-[9px] text-white/80 flex items-center gap-0.5">
+                    <FileText size={8} />
+                    {fmtWords(novel.totalWords)}
+                  </span>
                 </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-semibold text-sm group-hover:text-[#f0b90b] transition truncate">{n.title}</h3>
-                  <span className={clsx("text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0",
-                    n.status === "completed" ? "bg-[#2ba640]/15 text-[#2ba640]" : "bg-[#3ea6ff]/15 text-[#3ea6ff]"
-                  )}>{n.status === "completed" ? "完结" : "连载"}</span>
-                </div>
-                <p className="text-[11px] text-[#8a8a8a] mb-1.5">{n.author} · {n.wordCount}字 · {n.chapters}章 · 上传: {n.uploadedBy}</p>
-                <p className="text-[12px] text-[#8a8a8a] line-clamp-2 mb-2">{n.desc}</p>
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {n.tags.map((t, i) => <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-[#f0b90b]/10 text-[#f0b90b] border border-[#f0b90b]/20">{t}</span>)}
-                </div>
-                <div className="flex items-center gap-3 text-[11px] text-[#666]">
-                  {n.rating > 0 && <span className="text-[#f0b90b]"><i className="fas fa-star text-[9px] mr-0.5" />{n.rating.toFixed(1)}</span>}
-                  <span><i className="fas fa-eye mr-1" />{n.views}</span>
-                  <span><i className="fas fa-comments mr-1" />{n.comments.length}</span>
-                  <span><i className="fas fa-clock mr-1" />{n.lastUpdate}</span>
+              <div className="pt-2">
+                <h3 className="text-sm font-medium text-white line-clamp-1 group-hover:text-[#3ea6ff] transition">
+                  {novel.title}
+                </h3>
+                <p className="text-[11px] text-[#8a8a8a] flex items-center gap-1 mt-0.5">
+                  <PenLine size={9} />
+                  {novel.author}
+                </p>
+                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                  {novel.genres.slice(0, 2).map((g) => (
+                    <span
+                      key={g}
+                      className="text-[9px] px-1.5 py-0.5 rounded bg-[#2a2a2a] text-[#888]"
+                    >
+                      {g}
+                    </span>
+                  ))}
+                  <span className="text-[10px] text-[#555] flex items-center gap-0.5 ml-auto">
+                    <Layers size={9} />
+                    {novel.chapters.length}章
+                  </span>
                 </div>
               </div>
             </div>
           ))}
         </div>
 
-        {filtered.length === 0 && (
+        {/* ===== Empty state ===== */}
+        {filteredNovels.length === 0 && (
           <div className="text-center text-[#8a8a8a] py-20">
-            <i className="fas fa-book text-4xl mb-4 opacity-20" />
-            <p className="text-sm">没有找到相关小说</p>
+            <BookText size={48} className="mx-auto mb-4 opacity-30" />
+            <p className="text-sm">暂无匹配的小说</p>
+            <p className="text-xs mt-1 text-[#555]">
+              尝试切换类型、状态或来源筛选
+            </p>
           </div>
         )}
       </main>
 
-      {/* ===== 阅读/详情弹窗 ===== */}
-      {reading && (
-        <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center" onClick={() => setReading(null)}>
-          <div className="w-full max-w-2xl bg-[#141414] border border-[#333] rounded-t-2xl md:rounded-2xl max-h-[92vh] overflow-y-auto animate-slide-up" onClick={e => e.stopPropagation()}>
-            {/* 头部 */}
-            <div className="sticky top-0 z-10 bg-[#141414]/95 backdrop-blur-xl border-b border-[#333]/50 px-5 py-3 flex items-center justify-between">
-              <div className="min-w-0 flex items-center gap-2">
-                <h2 className="font-bold text-base truncate">{reading.title}</h2>
-                <VerifyBadge status={reading.verifyStatus} count={reading.verifyCount} />
-              </div>
-              <button onClick={() => setReading(null)} className="w-8 h-8 rounded-full bg-[#212121] flex items-center justify-center text-[#8a8a8a] hover:text-white transition shrink-0 ml-3">
-                <i className="fas fa-times" />
-              </button>
-            </div>
-
-            {/* 书籍信息 */}
-            <div className="px-5 py-4 border-b border-[#333]/30">
-              <div className="flex flex-wrap gap-1.5 mb-3">
-                {reading.tags.map((t, i) => <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-[#f0b90b]/10 text-[#f0b90b] border border-[#f0b90b]/20">{t}</span>)}
-                <span className={clsx("text-[10px] px-1.5 py-0.5 rounded font-bold",
-                  reading.status === "completed" ? "bg-[#2ba640]/15 text-[#2ba640]" : "bg-[#3ea6ff]/15 text-[#3ea6ff]"
-                )}>{reading.status === "completed" ? "已完结" : "连载中"}</span>
-              </div>
-              <p className="text-sm text-[#aaa] mb-3">{reading.desc}</p>
-              <div className="flex items-center gap-4 text-[11px] text-[#666]">
-                {reading.rating > 0 && <span className="text-[#f0b90b]"><i className="fas fa-star mr-0.5" />{reading.rating.toFixed(1)}</span>}
-                <span>{reading.wordCount}字</span>
-                <span>{reading.chapters}章</span>
-                <span><i className="fas fa-eye mr-1" />{reading.views}</span>
-                <span>上传: {reading.uploadedBy}</span>
-              </div>
-            </div>
-
-            {/* 验证操作区 */}
-            {reading.verifyStatus !== "verified" && isLoggedIn && (
-              <div className="px-5 py-3 border-b border-[#333]/30 bg-[#f0b90b]/5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-[#f0b90b]"><i className="fas fa-shield-check mr-1.5" />需要验证</p>
-                    <p className="text-[11px] text-[#8a8a8a]">前往实地拍照验证，帮助社区确认信息真实性</p>
-                  </div>
-                  <button onClick={() => handleStartVerify(reading)} className="px-3 py-2 rounded-lg bg-[#f0b90b] text-[#0f0f0f] text-xs font-bold hover:bg-[#f0b90b]/80 transition">
-                    <i className="fas fa-camera mr-1" />去验证
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* 试读内容 */}
-            {reading.preview.length > 0 && (
-              <div className="px-5 py-5 border-b border-[#333]/30">
-                <h3 className="text-xs font-semibold text-[#f0b90b] mb-4"><i className="fas fa-book-open mr-1.5" />第一章 · 试读</h3>
-                <div className="space-y-4 text-[15px] leading-[1.9] text-[#ccc] font-[serif]">
-                  {reading.preview.map((p, i) => <p key={i} className="indent-8">{p}</p>)}
-                </div>
-                <div className="mt-6 text-center text-[#666] text-sm py-4 border-t border-[#333]/30">
-                  <i className="fas fa-lock mr-1.5" />试读结束，加入书架继续阅读
-                </div>
-              </div>
-            )}
-
-            {/* 评论区 */}
-            <div className="px-5 py-4">
-              <h3 className="text-sm font-bold mb-3"><i className="fas fa-comments mr-1.5 text-[#f0b90b]" />评论 ({reading.comments.length})</h3>
-              {reading.comments.length > 0 ? (
-                <div className="space-y-2 mb-4">
-                  {reading.comments.map(c => <CommentItem key={c.id} c={c} />)}
-                </div>
-              ) : (
-                <div className="text-center py-6 text-[#666] text-sm mb-4">
-                  <i className="fas fa-comment-slash text-2xl mb-2 opacity-30" />
-                  <p>暂无评论</p>
-                </div>
-              )}
-              {isLoggedIn && (
-                <div className="flex gap-2">
-                  <input value={commentText} onChange={e => setCommentText(e.target.value)} placeholder="写下你的评论..."
-                    className="flex-1 h-9 px-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#f0b90b]"
-                    onKeyDown={e => e.key === "Enter" && handleAddComment()} />
-                  <button onClick={handleAddComment} disabled={!commentText.trim()} className="px-4 h-9 rounded-lg bg-[#f0b90b] text-[#0f0f0f] text-xs font-bold hover:bg-[#f0b90b]/80 transition disabled:opacity-50">发送</button>
-                </div>
-              )}
-            </div>
-
-            {/* 底部操作 */}
-            <div className="sticky bottom-0 bg-[#141414]/95 backdrop-blur-xl border-t border-[#333]/50 px-5 py-3 flex gap-2">
-              <button className="flex-1 py-2.5 rounded-xl bg-[#f0b90b] text-[#0f0f0f] font-bold text-sm hover:bg-[#f0b90b]/80 transition active:scale-95">
-                <i className="fas fa-book-bookmark mr-1.5" />加入书架
-              </button>
-              <button className="flex-1 py-2.5 rounded-xl bg-[#212121] border border-[#333] text-[#ccc] font-semibold text-sm hover:bg-[#2a2a2a] transition active:scale-95">
-                <i className="fas fa-play mr-1.5" />开始阅读
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 上传弹窗 */}
-      {showUpload && <UploadModal onClose={() => setShowUpload(false)} onSubmit={handleUpload} />}
-
-      {/* QR验证（PC端） */}
-      {showQR && (
-        <QRVerify contentId={showQR.id} contentType="novel" contentTitle={showQR.title}
-          onClose={() => setShowQR(null)} onMobileVerify={() => { setShowQR(null); setShowGeo(showQR); }} />
-      )}
-
-      {/* 地理验证（移动端） */}
-      {showGeo && showGeo.targetLocation && (
-        <GeoVerify targetLocation={showGeo.targetLocation} contentTitle={showGeo.title}
-          onSubmit={handleGeoSubmit} onClose={() => setShowGeo(null)} />
+      {/* ===== Novel Detail Modal ===== */}
+      {selectedNovel && (
+        <NovelDetailModal
+          novel={selectedNovel}
+          onClose={() => setSelectedNovel(null)}
+          onStartReading={handleStartReading}
+        />
       )}
     </>
+  );
+}
+
+// ===========================================================================
+// Novel Detail Modal
+// ===========================================================================
+
+function NovelDetailModal({
+  novel,
+  onClose,
+  onStartReading,
+}: {
+  novel: MockNovel;
+  onClose: () => void;
+  onStartReading: (novel: MockNovel, chapter?: NovelChapter) => void;
+}) {
+  const [showAllChapters, setShowAllChapters] = useState(false);
+  const displayedChapters = showAllChapters
+    ? novel.chapters
+    : novel.chapters.slice(0, 20);
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg bg-[#141414] border border-[#333] rounded-t-2xl md:rounded-2xl max-h-[92vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="sticky top-0 z-10 bg-[#141414]/95 backdrop-blur-xl border-b border-[#333]/50 px-5 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="font-bold text-base truncate">{novel.title}</h2>
+            <RatingBadge rating={novel.rating} />
+          </div>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-full bg-[#212121] flex items-center justify-center text-[#8a8a8a] hover:text-white transition shrink-0 ml-3"
+            aria-label="Close"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Novel info */}
+        <div className="px-5 py-4 border-b border-[#333]/30">
+          <div className="flex gap-4 mb-3">
+            <div className="w-24 aspect-[3/4] rounded-xl overflow-hidden shrink-0 bg-[#212121]">
+              <img
+                src={novel.cover}
+                alt={novel.title}
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-[#aaa] mb-1.5 flex items-center gap-1">
+                <PenLine size={12} />
+                {novel.author}
+              </p>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                <span
+                  className={`text-[11px] px-2 py-0.5 rounded ${
+                    novel.status === "连载中"
+                      ? "bg-[#3ea6ff]/15 text-[#3ea6ff]"
+                      : "bg-[#2ba640]/15 text-[#2ba640]"
+                  }`}
+                >
+                  {novel.status}
+                </span>
+                <span className="text-[11px] px-2 py-0.5 rounded bg-[#333] text-[#aaa] flex items-center gap-1">
+                  <Layers size={10} />
+                  {novel.chapters.length} 章
+                </span>
+                <span className="text-[11px] px-2 py-0.5 rounded bg-[#333] text-[#aaa] flex items-center gap-1">
+                  <FileText size={10} />
+                  {fmtWords(novel.totalWords)}
+                </span>
+                <span className="text-[11px] px-2 py-0.5 rounded bg-[#333] text-[#aaa] flex items-center gap-1">
+                  <Eye size={10} />
+                  {fmtNum(novel.views)} 阅读
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1 mb-2">
+                {novel.genres.map((g) => (
+                  <span
+                    key={g}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-[#2a2a2a] text-[#888] flex items-center gap-0.5"
+                  >
+                    <Tag size={8} />
+                    {g}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[11px] text-[#666] flex items-center gap-1">
+                <Globe size={10} />
+                来源: {novel.source}
+              </p>
+            </div>
+          </div>
+          {novel.description && (
+            <p className="text-sm text-[#8a8a8a] leading-relaxed">
+              {novel.description}
+            </p>
+          )}
+        </div>
+
+        {/* Chapter list */}
+        <div className="px-5 py-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold flex items-center gap-1.5">
+              <Library size={14} className="text-[#3ea6ff]" />
+              章节列表
+            </h3>
+            <span className="text-[11px] text-[#666]">
+              更新于 {novel.lastUpdated}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-4 sm:grid-cols-5 gap-1.5 mb-3">
+            {displayedChapters.map((ch) => (
+              <button
+                key={ch.id}
+                onClick={() => onStartReading(novel, ch)}
+                className="px-2 py-2 rounded-lg bg-[#1a1a1a] border border-[#333]/50 text-[11px] text-[#aaa] hover:border-[#3ea6ff]/40 hover:text-[#3ea6ff] hover:bg-[#3ea6ff]/5 transition text-center truncate"
+              >
+                {ch.title}
+              </button>
+            ))}
+          </div>
+
+          {novel.chapters.length > 20 && (
+            <button
+              onClick={() => setShowAllChapters(!showAllChapters)}
+              className="w-full py-2 text-center text-[12px] text-[#3ea6ff] hover:underline flex items-center justify-center gap-1"
+            >
+              {showAllChapters
+                ? "收起"
+                : `展开全部 ${novel.chapters.length} 章`}
+              <ChevronRight
+                size={12}
+                className={`transition-transform ${showAllChapters ? "rotate-90" : ""}`}
+              />
+            </button>
+          )}
+        </div>
+
+        {/* Bottom actions */}
+        <div className="sticky bottom-0 bg-[#141414]/95 backdrop-blur-xl border-t border-[#333]/50 px-5 py-3 flex gap-2">
+          <button
+            onClick={() => onStartReading(novel)}
+            className="flex-1 py-3 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition flex items-center justify-center gap-1.5"
+          >
+            <BookText size={16} />
+            开始阅读
+          </button>
+          <button className="px-5 py-3 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa] hover:bg-[#2a2a2a] transition flex items-center gap-1.5">
+            <Bookmark size={14} />
+            收藏
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

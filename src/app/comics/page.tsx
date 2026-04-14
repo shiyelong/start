@@ -1,431 +1,812 @@
 "use client";
-import { useState } from "react";
+
+import { useState, useMemo, useCallback } from "react";
 import Header from "@/components/Header";
-import { useAuth } from "@/lib/auth";
-import QRVerify from "@/components/QRVerify";
-import GeoVerify from "@/components/GeoVerify";
-import clsx from "clsx";
-import type { VerifyStatus, GeoLocation } from "@/lib/content-verify";
-import { fmtNum, isMobile } from "@/lib/content-verify";
+import RatingBadge from "@/components/ui/RatingBadge";
+import ComicReader, { type ComicPage } from "@/components/reader/ComicReader";
+import type { ContentRating } from "@/lib/types";
+import {
+  BookOpen,
+  Search,
+  Filter,
+  X,
+  Eye,
+  BookMarked,
+  Layers,
+  Clock,
+  ChevronRight,
+  User,
+  Tag,
+  Library,
+  Bookmark,
+  Play,
+  Globe,
+} from "lucide-react";
 
-/* ========== 分类 ========== */
-const cats = [
-  { id: "hot", label: "热门" },
-  { id: "new", label: "最新" },
-  { id: "verified", label: "? 已验证" },
-  { id: "unverified", label: "? 待验证" },
-  { id: "romance", label: "恋爱" },
-  { id: "action", label: "热血" },
-  { id: "fantasy", label: "奇幻" },
-  { id: "funny", label: "搞笑" },
-  { id: "suspense", label: "悬疑" },
-];
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-/* ========== 评论类型 ========== */
-interface ComicComment {
-  id: number;
-  userName: string;
-  content: string;
-  rating: number;
-  isVerifier: boolean;
-  geoVerified: boolean;
-  photos?: string[];
-  createdAt: string;
-  likes: number;
+interface ComicChapter {
+  id: string;
+  title: string;
+  pages: number;
+  date: string;
 }
 
-/* ========== 漫画数据 ========== */
-interface Comic {
-  id: number;
+interface MockComic {
+  id: string;
   title: string;
-  cat: string;
   cover: string;
   author: string;
-  status: string;
-  chapters: number;
+  genres: string[];
+  status: "连载中" | "已完结";
+  source: string;
+  sourceId: string;
+  rating: ContentRating;
+  chapters: ComicChapter[];
   views: number;
-  verifyStatus: VerifyStatus;
-  uploadedBy: string;
-  targetLocation?: GeoLocation;
-  comments: ComicComment[];
-  verifyCount: number;
-  rating: number;
-  description?: string;
+  description: string;
+  lastUpdated: string;
 }
 
-const comics: Comic[] = [
-  { id: 1, title: "独自升级", cat: "action", cover: "https://images.unsplash.com/photo-1612036782180-6f0b6cd846fe?w=300&q=80", author: "DUBU", status: "连载中", chapters: 210, views: 1520000, verifyStatus: "verified", uploadedBy: "站长", targetLocation: { lat: 31.2304, lng: 121.4737, address: "上海市黄浦区" }, comments: [{ id: 1, userName: "漫画迷A", content: "画风超棒，剧情紧凑！实地确认过出版信息。", rating: 5, isVerifier: true, geoVerified: true, createdAt: "2026-03-15", likes: 42 }, { id: 2, userName: "路人B", content: "追了好久了，强推！", rating: 4, isVerifier: false, geoVerified: false, createdAt: "2026-03-20", likes: 15 }], verifyCount: 3, rating: 4.7, description: "一个普通猎人在获得系统后逐渐成长为最强猎人的故事。" },
-  { id: 2, title: "咒术回战", cat: "action", cover: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=300&q=80", author: "芥见下下", status: "已完结", chapters: 271, views: 2800000, verifyStatus: "verified", uploadedBy: "用户C", targetLocation: { lat: 35.6762, lng: 139.6503, address: "东京都涩谷区" }, comments: [{ id: 3, userName: "验证员X", content: "已确认为正版授权，内容完整。", rating: 5, isVerifier: true, geoVerified: true, createdAt: "2026-02-10", likes: 88 }], verifyCount: 5, rating: 4.8, description: "虎杖悠仁吞下诅咒之王两面宿傩的手指后的冒险故事。" },
-  { id: 3, title: "间谍过家家", cat: "funny", cover: "https://images.unsplash.com/photo-1601850494422-3cf14624b0b3?w=300&q=80", author: "远藤达哉", status: "连载中", chapters: 105, views: 1900000, verifyStatus: "verified", uploadedBy: "站长", comments: [{ id: 4, userName: "家庭漫画爱好者", content: "温馨又搞笑，全家都能看。", rating: 5, isVerifier: false, geoVerified: false, createdAt: "2026-04-01", likes: 33 }], verifyCount: 2, rating: 4.6 },
-  { id: 4, title: "药屋少女的呢喃", cat: "romance", cover: "https://images.unsplash.com/photo-1581833971358-2c8b550f87b3?w=300&q=80", author: "日向夏", status: "连载中", chapters: 86, views: 980000, verifyStatus: "unverified", uploadedBy: "用户D", targetLocation: { lat: 39.9042, lng: 116.4074, address: "北京市东城区" }, comments: [], verifyCount: 0, rating: 0, description: "用户上传，等待验证。" },
-  { id: 5, title: "葬送的芙莉莲", cat: "fantasy", cover: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=300&q=80", author: "山田�的", status: "连载中", chapters: 135, views: 1650000, verifyStatus: "unverified", uploadedBy: "用户E", comments: [], verifyCount: 0, rating: 0, description: "用户上传，等待社区验证。" },
-  { id: 6, title: "电锯人", cat: "action", cover: "https://images.unsplash.com/photo-1611457194403-d3f8c5154dc2?w=300&q=80", author: "藤本树", status: "连载中", chapters: 178, views: 3200000, verifyStatus: "verified", uploadedBy: "站长", comments: [{ id: 5, userName: "硬核读者", content: "藤本树的画风太独特了，剧情反转不断。", rating: 5, isVerifier: true, geoVerified: true, createdAt: "2026-01-20", likes: 120 }], verifyCount: 8, rating: 4.9 },
-  { id: 7, title: "我推的孩子", cat: "suspense", cover: "https://images.unsplash.com/photo-1596727147705-61a532a659bd?w=300&q=80", author: "赤坂明", status: "已完结", chapters: 162, views: 2100000, verifyStatus: "verified", uploadedBy: "用户F", comments: [{ id: 6, userName: "追番达人", content: "结局有点争议但整体很棒。", rating: 4, isVerifier: false, geoVerified: false, createdAt: "2026-03-05", likes: 56 }], verifyCount: 4, rating: 4.5 },
-  { id: 8, title: "蓝色监狱", cat: "action", cover: "https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=300&q=80", author: "金城宗幸", status: "连载中", chapters: 280, views: 1800000, verifyStatus: "pending", uploadedBy: "用户G", targetLocation: { lat: 34.6937, lng: 135.5023, address: "大阪市中央区" }, comments: [{ id: 7, userName: "足球迷", content: "验证中，内容看起来是正版。", rating: 4, isVerifier: true, geoVerified: false, createdAt: "2026-04-05", likes: 8 }], verifyCount: 1, rating: 4.0, description: "正在验证中..." },
-  { id: 9, title: "怪兽8号", cat: "action", cover: "https://images.unsplash.com/photo-1534423861386-85a16f5d13fd?w=300&q=80", author: "松本直也", status: "连载中", chapters: 115, views: 1200000, verifyStatus: "unverified", uploadedBy: "用户H", comments: [], verifyCount: 0, rating: 0, description: "用户上传，等待验证。" },
-  { id: 10, title: "恋爱代行", cat: "romance", cover: "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=300&q=80", author: "宫岛礼吏", status: "连载中", chapters: 340, views: 2500000, verifyStatus: "verified", uploadedBy: "站长", comments: [{ id: 8, userName: "恋爱漫画控", content: "甜到掉牙！", rating: 5, isVerifier: false, geoVerified: false, createdAt: "2026-02-14", likes: 200 }], verifyCount: 6, rating: 4.7 },
+interface ComicBookmark {
+  comicId: string;
+  chapterId: string;
+  page: number;
+  lastRead: string;
+}
+
+// ---------------------------------------------------------------------------
+// Genre / Status / Source filter definitions
+// ---------------------------------------------------------------------------
+
+interface FilterOption {
+  id: string;
+  label: string;
+}
+
+const GENRES: FilterOption[] = [
+  { id: "all", label: "全部类型" },
+  { id: "热血", label: "热血" },
+  { id: "恋爱", label: "恋爱" },
+  { id: "搞笑", label: "搞笑" },
+  { id: "冒险", label: "冒险" },
+  { id: "奇幻", label: "奇幻" },
+  { id: "科幻", label: "科幻" },
+  { id: "悬疑", label: "悬疑" },
+  { id: "恐怖", label: "恐怖" },
+  { id: "日常", label: "日常" },
+  { id: "运动", label: "运动" },
 ];
 
-/* ========== 验证状态徽章 ========== */
-function VerifyBadge({ status, count }: { status: VerifyStatus; count: number }) {
-  const cfg = {
-    verified: { icon: "fa-check-circle", text: "已验证", cls: "bg-[#2ba640]/15 text-[#2ba640] border-[#2ba640]/30" },
-    pending: { icon: "fa-clock", text: "验证中", cls: "bg-[#f0b90b]/15 text-[#f0b90b] border-[#f0b90b]/30" },
-    unverified: { icon: "fa-question-circle", text: "未验证", cls: "bg-[#8a8a8a]/15 text-[#8a8a8a] border-[#8a8a8a]/30" },
-    rejected: { icon: "fa-times-circle", text: "已驳回", cls: "bg-[#ff4444]/15 text-[#ff4444] border-[#ff4444]/30" },
-  }[status];
-  return (
-    <span className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border font-bold ${cfg.cls}`}>
-      <i className={`fas ${cfg.icon}`} />
-      {cfg.text}{count > 0 && ` (${count})`}
-    </span>
-  );
+const STATUS_OPTIONS: FilterOption[] = [
+  { id: "all", label: "全部状态" },
+  { id: "连载中", label: "连载中" },
+  { id: "已完结", label: "已完结" },
+];
+
+const SOURCE_PLATFORMS: FilterOption[] = [
+  { id: "all", label: "全部来源" },
+  { id: "漫画柜", label: "漫画柜" },
+  { id: "动漫之家", label: "动漫之家" },
+  { id: "MangaDex", label: "MangaDex" },
+  { id: "Webtoon", label: "Webtoon" },
+  { id: "拷贝漫画", label: "拷贝漫画" },
+  { id: "包子漫画", label: "包子漫画" },
+];
+
+// ---------------------------------------------------------------------------
+// Mock comic data
+// ---------------------------------------------------------------------------
+
+const MOCK_CHAPTERS: ComicChapter[] = Array.from({ length: 20 }, (_, i) => ({
+  id: `ch-${i + 1}`,
+  title: `第${i + 1}话`,
+  pages: Math.floor(Math.random() * 15) + 18,
+  date: `2026-0${Math.min(4, Math.floor(i / 5) + 1)}-${String(((i * 3) % 28) + 1).padStart(2, "0")}`,
+}));
+
+function makeChapters(count: number): ComicChapter[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `ch-${i + 1}`,
+    title: `第${i + 1}话`,
+    pages: Math.floor(Math.random() * 15) + 18,
+    date: `2026-0${Math.min(4, Math.floor(i / 5) + 1)}-${String(((i * 3) % 28) + 1).padStart(2, "0")}`,
+  }));
 }
 
-/* ========== 评论组件 ========== */
-function CommentItem({ c }: { c: ComicComment }) {
-  return (
-    <div className="p-3 rounded-xl bg-[#1a1a1a]/50 border border-[#333]/30">
-      <div className="flex items-center gap-2 mb-1.5">
-        <div className="w-6 h-6 rounded-full bg-[#3ea6ff] flex items-center justify-center text-[10px] font-bold text-[#0f0f0f]">
-          {c.userName.charAt(0)}
-        </div>
-        <span className="text-xs font-medium">{c.userName}</span>
-        {c.isVerifier && (
-          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#2ba640]/15 text-[#2ba640] border border-[#2ba640]/30 font-bold">
-            <i className="fas fa-shield-check mr-0.5" />验证者
-          </span>
-        )}
-        {c.geoVerified && (
-          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#3ea6ff]/15 text-[#3ea6ff] border border-[#3ea6ff]/30 font-bold">
-            <i className="fas fa-map-marker-alt mr-0.5" />实地
-          </span>
-        )}
-        <div className="flex gap-0.5 ml-auto">
-          {[1,2,3,4,5].map(s => (
-            <i key={s} className={`fas fa-star text-[8px] ${s <= c.rating ? "text-[#f0b90b]" : "text-[#333]"}`} />
-          ))}
-        </div>
-      </div>
-      <p className="text-[12px] text-[#aaa] leading-relaxed">{c.content}</p>
-      {c.photos && c.photos.length > 0 && (
-        <div className="flex gap-1.5 mt-2">
-          {c.photos.map((p, i) => (
-            <div key={i} className="w-16 h-16 rounded-lg bg-[#212121] overflow-hidden">
-              <img src={p} alt="" className="w-full h-full object-cover" />
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="flex items-center gap-3 mt-2 text-[10px] text-[#666]">
-        <span>{c.createdAt}</span>
-        <span><i className="fas fa-heart mr-0.5" />{c.likes}</span>
-      </div>
-    </div>
-  );
+const ALL_COMICS: MockComic[] = [
+  {
+    id: "c-1", title: "独自升级", cover: "https://images.unsplash.com/photo-1612036782180-6f0b6cd846fe?w=300&q=80",
+    author: "DUBU", genres: ["热血", "冒险"], status: "连载中", source: "漫画柜", sourceId: "manhuagui",
+    rating: "PG-13", chapters: makeChapters(210), views: 1520000,
+    description: "一个普通猎人在获得系统后逐渐成长为最强猎人的故事。", lastUpdated: "2026-04-10",
+  },
+  {
+    id: "c-2", title: "咒术回战", cover: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=300&q=80",
+    author: "芥见下下", genres: ["热血", "奇幻"], status: "已完结", source: "动漫之家", sourceId: "dmzj",
+    rating: "PG-13", chapters: makeChapters(271), views: 2800000,
+    description: "虎杖悠仁吞下诅咒之王两面宿傩的手指后的冒险故事。", lastUpdated: "2026-02-15",
+  },
+  {
+    id: "c-3", title: "间谍过家家", cover: "https://images.unsplash.com/photo-1601850494422-3cf14624b0b3?w=300&q=80",
+    author: "远藤达哉", genres: ["搞笑", "日常"], status: "连载中", source: "MangaDex", sourceId: "mangadex",
+    rating: "PG", chapters: makeChapters(105), views: 1900000,
+    description: "间谍、杀手和超能力者组成的假家庭的温馨搞笑日常。", lastUpdated: "2026-04-08",
+  },
+  {
+    id: "c-4", title: "药屋少女的呢喃", cover: "https://images.unsplash.com/photo-1581833971358-2c8b550f87b3?w=300&q=80",
+    author: "日向夏", genres: ["恋爱", "悬疑"], status: "连载中", source: "Webtoon", sourceId: "webtoon",
+    rating: "PG", chapters: makeChapters(86), views: 980000,
+    description: "后宫中的药师猫猫凭借药学知识解开一个个谜团。", lastUpdated: "2026-04-05",
+  },
+  {
+    id: "c-5", title: "葬送的芙莉莲", cover: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=300&q=80",
+    author: "山田�的", genres: ["奇幻", "日常"], status: "连载中", source: "拷贝漫画", sourceId: "copymanga",
+    rating: "PG", chapters: makeChapters(135), views: 1650000,
+    description: "魔王被勇者一行打倒后，精灵魔法使芙莉莲踏上了解人类的旅途。", lastUpdated: "2026-04-09",
+  },
+  {
+    id: "c-6", title: "电锯人", cover: "https://images.unsplash.com/photo-1611457194403-d3f8c5154dc2?w=300&q=80",
+    author: "藤本树", genres: ["热血", "恐怖"], status: "连载中", source: "漫画柜", sourceId: "manhuagui",
+    rating: "R", chapters: makeChapters(178), views: 3200000,
+    description: "电次与电锯恶魔波奇塔融合后成为公安猎魔人的故事。", lastUpdated: "2026-04-10",
+  },
+  {
+    id: "c-7", title: "我推的孩子", cover: "https://images.unsplash.com/photo-1596727147705-61a532a659bd?w=300&q=80",
+    author: "赤坂明", genres: ["悬疑", "日常"], status: "已完结", source: "动漫之家", sourceId: "dmzj",
+    rating: "PG-13", chapters: makeChapters(162), views: 2100000,
+    description: "转生为偶像双胞胎的医生在演艺圈追寻母亲被害真相。", lastUpdated: "2026-01-20",
+  },
+  {
+    id: "c-8", title: "蓝色监狱", cover: "https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=300&q=80",
+    author: "金城宗幸", genres: ["运动", "热血"], status: "连载中", source: "MangaDex", sourceId: "mangadex",
+    rating: "PG-13", chapters: makeChapters(280), views: 1800000,
+    description: "为培养世界最强前锋而设立的蓝色监狱计划。", lastUpdated: "2026-04-07",
+  },
+  {
+    id: "c-9", title: "怪兽8号", cover: "https://images.unsplash.com/photo-1534423861386-85a16f5d13fd?w=300&q=80",
+    author: "松本直也", genres: ["热血", "科幻"], status: "连载中", source: "包子漫画", sourceId: "baozimh",
+    rating: "PG-13", chapters: makeChapters(115), views: 1200000,
+    description: "日比野卡夫卡变身为怪兽8号后加入防卫队的故事。", lastUpdated: "2026-04-06",
+  },
+  {
+    id: "c-10", title: "恋爱代行", cover: "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=300&q=80",
+    author: "宫岛礼吏", genres: ["恋爱", "搞笑"], status: "连载中", source: "Webtoon", sourceId: "webtoon",
+    rating: "PG-13", chapters: makeChapters(340), views: 2500000,
+    description: "大学生和田木和也租借女友水原千�的恋爱喜剧。", lastUpdated: "2026-04-10",
+  },
+  {
+    id: "c-11", title: "一拳超人", cover: "https://images.unsplash.com/photo-1534423861386-85a16f5d13fd?w=300&q=80",
+    author: "ONE / 村田雄介", genres: ["热血", "搞笑"], status: "连载中", source: "漫画柜", sourceId: "manhuagui",
+    rating: "PG-13", chapters: makeChapters(195), views: 4100000,
+    description: "一拳就能解决所有敌人的最强英雄埼玉的故事。", lastUpdated: "2026-04-03",
+  },
+  {
+    id: "c-12", title: "排球少年", cover: "https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=300&q=80",
+    author: "古馆春一", genres: ["运动", "热血"], status: "已完结", source: "动漫之家", sourceId: "dmzj",
+    rating: "G", chapters: makeChapters(402), views: 3500000,
+    description: "日向翔阳追逐排球梦想的热血青春故事。", lastUpdated: "2025-12-01",
+  },
+  {
+    id: "c-13", title: "辉夜大小姐想让我告白", cover: "https://images.unsplash.com/photo-1601850494422-3cf14624b0b3?w=300&q=80",
+    author: "赤坂明", genres: ["恋爱", "搞笑"], status: "已完结", source: "拷贝漫画", sourceId: "copymanga",
+    rating: "PG", chapters: makeChapters(281), views: 2200000,
+    description: "两个天才之间的恋爱头脑战。", lastUpdated: "2025-11-15",
+  },
+  {
+    id: "c-14", title: "迷宫饭", cover: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=300&q=80",
+    author: "九井谅子", genres: ["奇幻", "搞笑"], status: "已完结", source: "MangaDex", sourceId: "mangadex",
+    rating: "PG", chapters: makeChapters(97), views: 1400000,
+    description: "在迷宫中用魔物做料理的冒险美食漫画。", lastUpdated: "2025-10-20",
+  },
+  {
+    id: "c-15", title: "暗杀教室", cover: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=300&q=80",
+    author: "松井优征", genres: ["搞笑", "冒险"], status: "已完结", source: "包子漫画", sourceId: "baozimh",
+    rating: "PG-13", chapters: makeChapters(180), views: 1800000,
+    description: "学生们要在毕业前暗杀超生物老师的校园喜剧。", lastUpdated: "2025-09-10",
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Mock bookmarks (continue reading)
+// ---------------------------------------------------------------------------
+
+const MOCK_BOOKMARKS: ComicBookmark[] = [
+  { comicId: "c-1", chapterId: "ch-185", page: 12, lastRead: "2026-04-10" },
+  { comicId: "c-6", chapterId: "ch-170", page: 5, lastRead: "2026-04-09" },
+  { comicId: "c-3", chapterId: "ch-98", page: 20, lastRead: "2026-04-08" },
+];
+
+// ---------------------------------------------------------------------------
+// Mock reader pages
+// ---------------------------------------------------------------------------
+
+function generateMockPages(count: number): ComicPage[] {
+  const placeholders = [
+    "https://images.unsplash.com/photo-1612036782180-6f0b6cd846fe?w=800&q=80",
+    "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&q=80",
+    "https://images.unsplash.com/photo-1601850494422-3cf14624b0b3?w=800&q=80",
+    "https://images.unsplash.com/photo-1581833971358-2c8b550f87b3?w=800&q=80",
+    "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&q=80",
+  ];
+  return Array.from({ length: count }, (_, i) => ({
+    url: placeholders[i % placeholders.length],
+    width: 800,
+    height: 1200,
+  }));
 }
 
-/* ========== 上传弹窗 ========== */
-function UploadModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: { title: string; author: string; cat: string; desc: string }) => void }) {
-  const [title, setTitle] = useState("");
-  const [author, setAuthor] = useState("");
-  const [cat, setCat] = useState("action");
-  const [desc, setDesc] = useState("");
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center" onClick={onClose}>
-      <div className="w-full max-w-md bg-[#141414] border border-[#333] rounded-t-2xl md:rounded-2xl p-6 animate-slide-up" onClick={e => e.stopPropagation()}>
-        <h3 className="font-bold text-lg mb-4"><i className="fas fa-upload mr-2 text-[#3ea6ff]" />上传漫画</h3>
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs text-[#8a8a8a] mb-1 block">漫画名称 *</label>
-            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="输入漫画名称" className="w-full h-9 px-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff]" />
-          </div>
-          <div>
-            <label className="text-xs text-[#8a8a8a] mb-1 block">作者 *</label>
-            <input value={author} onChange={e => setAuthor(e.target.value)} placeholder="输入作者名" className="w-full h-9 px-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff]" />
-          </div>
-          <div>
-            <label className="text-xs text-[#8a8a8a] mb-1 block">分类</label>
-            <select value={cat} onChange={e => setCat(e.target.value)} className="w-full h-9 px-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white outline-none focus:border-[#3ea6ff]">
-              {cats.filter(c => !["hot","new","verified","unverified"].includes(c.id)).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-[#8a8a8a] mb-1 block">简介</label>
-            <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="简单描述一下这部漫画..." rows={3} className="w-full p-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] resize-none" />
-          </div>
-        </div>
-        <p className="text-[10px] text-[#666] mt-3 mb-4"><i className="fas fa-info-circle mr-1" />上传后状态为"未验证"，需要其他用户实地验证后才会标记为"已验证"。</p>
-        <div className="flex gap-2">
-          <button onClick={() => { if (title && author) onSubmit({ title, author, cat, desc }); }} disabled={!title || !author} className="flex-1 py-2.5 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition disabled:opacity-50">
-            <i className="fas fa-cloud-upload-alt mr-1.5" />提交
-          </button>
-          <button onClick={onClose} className="px-5 py-2.5 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa]">取消</button>
-        </div>
-      </div>
-    </div>
-  );
+function fmtNum(n: number): string {
+  if (n >= 100_000_000) return (n / 100_000_000).toFixed(1) + "亿";
+  if (n >= 10_000) return (n / 10_000).toFixed(1) + "万";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
 }
 
-/* ========== 主组件 ========== */
+// ===========================================================================
+// Main Page Component
+// ===========================================================================
+
 export default function ComicsPage() {
-  const { isLoggedIn } = useAuth();
-  const [cat, setCat] = useState("hot");
-  const [selected, setSelected] = useState<Comic | null>(null);
-  const [showUpload, setShowUpload] = useState(false);
-  const [showQR, setShowQR] = useState<Comic | null>(null);
-  const [showGeo, setShowGeo] = useState<Comic | null>(null);
-  const [commentText, setCommentText] = useState("");
-  const [allComics, setAllComics] = useState(comics);
+  // --- Filter state ---
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeGenre, setActiveGenre] = useState("all");
+  const [activeStatus, setActiveStatus] = useState("all");
+  const [activeSource, setActiveSource] = useState("all");
+  const [showFilters, setShowFilters] = useState(false);
 
-  const filtered = (() => {
-    if (cat === "verified") return allComics.filter(c => c.verifyStatus === "verified");
-    if (cat === "unverified") return allComics.filter(c => c.verifyStatus === "unverified" || c.verifyStatus === "pending");
-    if (cat === "hot") return [...allComics].sort((a, b) => b.views - a.views);
-    if (cat === "new") return [...allComics].sort((a, b) => b.id - a.id);
-    return allComics.filter(c => c.cat === cat);
-  })();
+  // --- Detail / Reader state ---
+  const [selectedComic, setSelectedComic] = useState<MockComic | null>(null);
+  const [readingChapter, setReadingChapter] = useState<{
+    comic: MockComic;
+    chapter: ComicChapter;
+  } | null>(null);
 
-  const handleUpload = (data: { title: string; author: string; cat: string; desc: string }) => {
-    const newComic: Comic = {
-      id: allComics.length + 1, title: data.title, cat: data.cat,
-      cover: "https://images.unsplash.com/photo-1534423861386-85a16f5d13fd?w=300&q=80",
-      author: data.author, status: "连载中", chapters: 0, views: 0,
-      verifyStatus: "unverified", uploadedBy: "我", comments: [],
-      verifyCount: 0, rating: 0, description: data.desc,
-    };
-    setAllComics(prev => [newComic, ...prev]);
-    setShowUpload(false);
-  };
+  // --- Bookmarks ---
+  const [bookmarks] = useState<ComicBookmark[]>(MOCK_BOOKMARKS);
 
-  const handleStartVerify = (comic: Comic) => {
-    if (isMobile()) {
-      setShowGeo(comic);
-    } else {
-      setShowQR(comic);
+  // --- Filtered comics ---
+  const filteredComics = useMemo(() => {
+    let list = ALL_COMICS;
+
+    if (activeGenre !== "all") {
+      list = list.filter((c) => c.genres.includes(activeGenre));
     }
-  };
-
-  const handleGeoSubmit = (data: { comment: string; rating: number; status: "approved" | "rejected" }) => {
-    if (!showGeo) return;
-    const newComment: ComicComment = {
-      id: Date.now(), userName: "我", content: data.comment, rating: data.rating,
-      isVerifier: true, geoVerified: true, createdAt: new Date().toISOString().slice(0, 10), likes: 0,
-    };
-    setAllComics(prev => prev.map(c =>
-      c.id === showGeo.id ? {
-        ...c,
-        comments: [...c.comments, newComment],
-        verifyCount: c.verifyCount + 1,
-        verifyStatus: data.status === "approved" ? "verified" as VerifyStatus : c.verifyStatus,
-        rating: c.comments.length > 0
-          ? (c.comments.reduce((s, cm) => s + cm.rating, 0) + data.rating) / (c.comments.length + 1)
-          : data.rating,
-      } : c
-    ));
-    if (selected?.id === showGeo.id) {
-      setSelected(prev => prev ? { ...prev, comments: [...prev.comments, newComment], verifyCount: prev.verifyCount + 1 } : prev);
+    if (activeStatus !== "all") {
+      list = list.filter((c) => c.status === activeStatus);
     }
-    setShowGeo(null);
-  };
+    if (activeSource !== "all") {
+      list = list.filter((c) => c.source === activeSource);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.title.toLowerCase().includes(q) ||
+          c.author.toLowerCase().includes(q) ||
+          c.genres.some((g) => g.includes(q))
+      );
+    }
 
-  const handleAddComment = () => {
-    if (!selected || !commentText.trim()) return;
-    const newComment: ComicComment = {
-      id: Date.now(), userName: "我", content: commentText, rating: 4,
-      isVerifier: false, geoVerified: false, createdAt: new Date().toISOString().slice(0, 10), likes: 0,
-    };
-    setAllComics(prev => prev.map(c =>
-      c.id === selected.id ? { ...c, comments: [...c.comments, newComment] } : c
-    ));
-    setSelected(prev => prev ? { ...prev, comments: [...prev.comments, newComment] } : prev);
-    setCommentText("");
-  };
+    return list;
+  }, [activeGenre, activeStatus, activeSource, searchQuery]);
 
+  // --- Continue reading comics ---
+  const continueReadingComics = useMemo(() => {
+    return bookmarks
+      .map((bm) => {
+        const comic = ALL_COMICS.find((c) => c.id === bm.comicId);
+        if (!comic) return null;
+        return { comic, bookmark: bm };
+      })
+      .filter(Boolean) as { comic: MockComic; bookmark: ComicBookmark }[];
+  }, [bookmarks]);
+
+  // --- Handlers ---
+  const handleOpenComic = useCallback((comic: MockComic) => {
+    setSelectedComic(comic);
+  }, []);
+
+  const handleStartReading = useCallback(
+    (comic: MockComic, chapter?: ComicChapter) => {
+      const ch = chapter ?? comic.chapters[0];
+      if (ch) {
+        setReadingChapter({ comic, chapter: ch });
+        setSelectedComic(null);
+      }
+    },
+    []
+  );
+
+  const handleCloseReader = useCallback(() => {
+    setReadingChapter(null);
+  }, []);
+
+  const handleChapterEnd = useCallback(() => {
+    if (!readingChapter) return;
+    const { comic, chapter } = readingChapter;
+    const idx = comic.chapters.findIndex((ch) => ch.id === chapter.id);
+    if (idx < comic.chapters.length - 1) {
+      setReadingChapter({ comic, chapter: comic.chapters[idx + 1] });
+    }
+  }, [readingChapter]);
+
+  // --- Active filter count ---
+  const activeFilterCount =
+    (activeGenre !== "all" ? 1 : 0) +
+    (activeStatus !== "all" ? 1 : 0) +
+    (activeSource !== "all" ? 1 : 0);
+
+  // =========================================================================
+  // Comic Reader fullscreen overlay
+  // =========================================================================
+  if (readingChapter) {
+    return (
+      <div className="fixed inset-0 z-[70] bg-black flex flex-col">
+        {/* Reader header */}
+        <div className="flex items-center justify-between px-4 py-2 bg-[#0f0f0f] border-b border-white/5 flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={handleCloseReader}
+              className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+              aria-label="Close reader"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <span className="text-sm font-medium text-white truncate">
+              {readingChapter.comic.title}
+            </span>
+            <span className="text-xs text-white/40">
+              {readingChapter.chapter.title}
+            </span>
+          </div>
+          <RatingBadge rating={readingChapter.comic.rating} />
+        </div>
+        {/* ComicReader component */}
+        <div className="flex-1 min-h-0">
+          <ComicReader
+            pages={generateMockPages(readingChapter.chapter.pages)}
+            mode="scroll"
+            currentPage={0}
+            onChapterEnd={handleChapterEnd}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // Main page render
+  // =========================================================================
   return (
     <>
       <Header />
       <main className="max-w-[1400px] mx-auto px-4 lg:px-6 py-4 pb-20 md:pb-4">
+        {/* ===== Page Title ===== */}
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl font-bold"><i className="fas fa-book-open mr-2 text-[#3ea6ff]" />漫画中心</h1>
-          {isLoggedIn && (
-            <button onClick={() => setShowUpload(true)} className="px-3 py-1.5 rounded-lg bg-[#3ea6ff] text-[#0f0f0f] text-xs font-semibold hover:bg-[#65b8ff] transition">
-              <i className="fas fa-plus mr-1" />上传漫画
-            </button>
-          )}
+          <h1 className="text-xl font-bold flex items-center gap-2">
+            <BookOpen size={22} className="text-[#3ea6ff]" />
+            漫画中心
+          </h1>
+          <span className="text-xs text-[#666]">
+            {ALL_COMICS.length} 部漫画 · {SOURCE_PLATFORMS.length - 1} 个来源
+          </span>
         </div>
 
-        {/* 分类标签 */}
-        <div className="flex gap-2 mb-5 overflow-x-auto pb-2">
-          {cats.map(c => (
-            <button key={c.id} onClick={() => setCat(c.id)} className={clsx(
-              "px-4 py-1.5 rounded-full text-[13px] whitespace-nowrap border transition",
-              cat === c.id ? "bg-[#3ea6ff] text-[#0f0f0f] border-[#3ea6ff] font-semibold" : "bg-transparent text-[#aaa] border-[#333] hover:bg-[#2a2a2a] hover:text-white"
-            )}>{c.label}</button>
+        {/* ===== Search Bar ===== */}
+        <div className="relative mb-4">
+          <Search
+            size={14}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-[#666]"
+          />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索漫画名称、作者、类型..."
+            className="w-full h-9 pl-9 pr-20 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition"
+          />
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] transition ${
+              showFilters || activeFilterCount > 0
+                ? "bg-[#3ea6ff]/20 text-[#3ea6ff]"
+                : "bg-[#2a2a2a] text-[#aaa] hover:text-white"
+            }`}
+          >
+            <Filter size={11} />
+            筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+          </button>
+        </div>
+
+        {/* ===== Genre quick-select pills ===== */}
+        <div className="flex gap-2 mb-4 overflow-x-auto pb-2 scrollbar-hide">
+          {GENRES.map((g) => (
+            <button
+              key={g.id}
+              onClick={() => setActiveGenre(g.id)}
+              className={`px-4 py-1.5 rounded-full text-[13px] whitespace-nowrap border transition shrink-0 ${
+                activeGenre === g.id
+                  ? "bg-[#3ea6ff] text-[#0f0f0f] border-[#3ea6ff] font-semibold"
+                  : "bg-transparent text-[#aaa] border-[#333] hover:bg-[#2a2a2a] hover:text-white"
+              }`}
+            >
+              {g.label}
+            </button>
           ))}
         </div>
 
-        {/* 漫画网格 */}
-        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4">
-          {filtered.map(c => (
-            <div key={c.id} onClick={() => setSelected(c)} className="group cursor-pointer transition hover:-translate-y-1">
-              <div className="relative aspect-[3/4] bg-[#1a1a1a] rounded-xl overflow-hidden">
-                <img src={c.cover} alt={c.title} loading="lazy" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-                {/* 验证状态 */}
-                <div className="absolute top-1.5 left-1.5">
-                  <VerifyBadge status={c.verifyStatus} count={c.verifyCount} />
+        {/* ===== Expanded Filters ===== */}
+        {showFilters && (
+          <div className="mb-4 p-4 rounded-xl bg-[#1a1a1a] border border-[#333]/50 space-y-3">
+            {/* Status filter */}
+            <div>
+              <p className="text-[11px] text-[#666] mb-2 flex items-center gap-1">
+                <Clock size={11} /> 更新状态
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {STATUS_OPTIONS.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setActiveStatus(s.id)}
+                    className={`px-3 py-1 rounded-full text-[12px] border transition ${
+                      activeStatus === s.id
+                        ? "bg-[#3ea6ff]/15 text-[#3ea6ff] border-[#3ea6ff]/40 font-medium"
+                        : "bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]"
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Source platform filter */}
+            <div>
+              <p className="text-[11px] text-[#666] mb-2 flex items-center gap-1">
+                <Globe size={11} /> 来源平台
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {SOURCE_PLATFORMS.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setActiveSource(p.id)}
+                    className={`px-3 py-1 rounded-full text-[12px] border transition ${
+                      activeSource === p.id
+                        ? "bg-[#3ea6ff]/15 text-[#3ea6ff] border-[#3ea6ff]/40 font-medium"
+                        : "bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Clear filters */}
+            {activeFilterCount > 0 && (
+              <button
+                onClick={() => {
+                  setActiveGenre("all");
+                  setActiveStatus("all");
+                  setActiveSource("all");
+                }}
+                className="text-[11px] text-[#3ea6ff] hover:underline"
+              >
+                清除所有筛选
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ===== Continue Reading Section ===== */}
+        {continueReadingComics.length > 0 && !searchQuery && activeGenre === "all" && activeStatus === "all" && activeSource === "all" && (
+          <div className="mb-6">
+            <h2 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+              <BookMarked size={16} className="text-[#3ea6ff]" />
+              继续阅读
+            </h2>
+            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+              {continueReadingComics.map(({ comic, bookmark }) => (
+                <div
+                  key={comic.id}
+                  onClick={() => handleStartReading(comic)}
+                  className="flex-shrink-0 w-[200px] flex gap-3 p-3 rounded-xl bg-[#1a1a1a] border border-[#333]/50 cursor-pointer hover:border-[#3ea6ff]/40 transition group"
+                >
+                  <div className="w-12 h-16 rounded-lg overflow-hidden bg-[#212121] shrink-0">
+                    <img
+                      src={comic.cover}
+                      alt={comic.title}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-xs font-medium text-white truncate group-hover:text-[#3ea6ff] transition">
+                      {comic.title}
+                    </h3>
+                    <p className="text-[10px] text-[#666] mt-0.5">
+                      {bookmark.chapterId.replace("ch-", "第")}话 · 第{bookmark.page}页
+                    </p>
+                    <div className="flex items-center gap-1 mt-1">
+                      <Play size={8} className="text-[#3ea6ff]" />
+                      <span className="text-[10px] text-[#3ea6ff]">继续</span>
+                    </div>
+                  </div>
                 </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ===== Active filter summary ===== */}
+        {(activeGenre !== "all" || activeStatus !== "all" || activeSource !== "all" || searchQuery) && (
+          <div className="flex items-center gap-2 mb-3 text-[12px] text-[#888]">
+            <Filter size={12} />
+            <span>
+              {activeGenre !== "all" && `${activeGenre}`}
+              {activeStatus !== "all" && ` · ${activeStatus}`}
+              {activeSource !== "all" && ` · ${activeSource}`}
+              {searchQuery && ` · "${searchQuery}"`}
+            </span>
+            <span className="text-[#555]">·</span>
+            <span>{filteredComics.length} 个结果</span>
+          </div>
+        )}
+
+        {/* ===== Comic Grid ===== */}
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4">
+          {filteredComics.map((comic) => (
+            <div
+              key={comic.id}
+              onClick={() => handleOpenComic(comic)}
+              className="group cursor-pointer transition hover:-translate-y-1"
+            >
+              <div className="relative aspect-[3/4] bg-[#1a1a1a] rounded-xl overflow-hidden">
+                <img
+                  src={comic.cover}
+                  alt={comic.title}
+                  loading="lazy"
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+                {/* Source badge */}
+                <span className="absolute top-1.5 left-1.5 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded font-medium">
+                  {comic.source}
+                </span>
+                {/* MPAA Rating badge */}
+                <span className="absolute top-1.5 right-1.5">
+                  <RatingBadge rating={comic.rating} />
+                </span>
+                {/* Bottom info */}
                 <div className="absolute bottom-0 left-0 right-0 p-2 flex items-center justify-between">
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${c.status === "连载中" ? "bg-[#3ea6ff] text-[#0f0f0f]" : "bg-[#2ba640] text-white"}`}>{c.status}</span>
-                  {c.rating > 0 && (
-                    <span className="text-[9px] text-[#f0b90b]"><i className="fas fa-star mr-0.5" />{c.rating.toFixed(1)}</span>
-                  )}
+                  <span
+                    className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+                      comic.status === "连载中"
+                        ? "bg-[#3ea6ff] text-[#0f0f0f]"
+                        : "bg-[#2ba640] text-white"
+                    }`}
+                  >
+                    {comic.status}
+                  </span>
+                  <span className="text-[9px] text-white/80 flex items-center gap-0.5">
+                    <Layers size={8} />
+                    {comic.chapters.length}话
+                  </span>
                 </div>
               </div>
               <div className="pt-2">
-                <h3 className="text-sm font-medium text-white line-clamp-1">{c.title}</h3>
-                <p className="text-[11px] text-[#8a8a8a]">{c.author} · {c.chapters}话 · {fmtNum(c.views)}阅读</p>
+                <h3 className="text-sm font-medium text-white line-clamp-1 group-hover:text-[#3ea6ff] transition">
+                  {comic.title}
+                </h3>
+                <p className="text-[11px] text-[#8a8a8a] flex items-center gap-1 mt-0.5">
+                  <User size={9} />
+                  {comic.author}
+                </p>
+                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                  {comic.genres.slice(0, 2).map((g) => (
+                    <span
+                      key={g}
+                      className="text-[9px] px-1.5 py-0.5 rounded bg-[#2a2a2a] text-[#888]"
+                    >
+                      {g}
+                    </span>
+                  ))}
+                  <span className="text-[10px] text-[#555] flex items-center gap-0.5 ml-auto">
+                    <Eye size={9} />
+                    {fmtNum(comic.views)}
+                  </span>
+                </div>
               </div>
             </div>
           ))}
         </div>
 
-        {filtered.length === 0 && (
+        {/* ===== Empty state ===== */}
+        {filteredComics.length === 0 && (
           <div className="text-center text-[#8a8a8a] py-20">
-            <i className="fas fa-book-open text-4xl mb-4 opacity-20" />
-            <p className="text-sm">该分类暂无漫画</p>
+            <BookOpen size={48} className="mx-auto mb-4 opacity-30" />
+            <p className="text-sm">暂无匹配的漫画</p>
+            <p className="text-xs mt-1 text-[#555]">
+              尝试切换类型、状态或来源筛选
+            </p>
           </div>
         )}
       </main>
 
-      {/* ===== 详情弹窗 ===== */}
-      {selected && (
-        <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center" onClick={() => setSelected(null)}>
-          <div className="w-full max-w-lg bg-[#141414] border border-[#333] rounded-t-2xl md:rounded-2xl max-h-[92vh] overflow-y-auto animate-slide-up" onClick={e => e.stopPropagation()}>
-            {/* 头部 */}
-            <div className="sticky top-0 z-10 bg-[#141414]/95 backdrop-blur-xl border-b border-[#333]/50 px-5 py-3 flex items-center justify-between">
-              <div className="flex items-center gap-2 min-w-0">
-                <h2 className="font-bold text-base truncate">{selected.title}</h2>
-                <VerifyBadge status={selected.verifyStatus} count={selected.verifyCount} />
-              </div>
-              <button onClick={() => setSelected(null)} className="w-8 h-8 rounded-full bg-[#212121] flex items-center justify-center text-[#8a8a8a] hover:text-white transition shrink-0 ml-3">
-                <i className="fas fa-times" />
-              </button>
-            </div>
-
-            {/* 漫画信息 */}
-            <div className="px-5 py-4 border-b border-[#333]/30">
-              <div className="flex gap-4 mb-3">
-                <div className="w-24 aspect-[3/4] rounded-xl overflow-hidden shrink-0 bg-[#212121]">
-                  <img src={selected.cover} alt={selected.title} className="w-full h-full object-cover" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-[#aaa] mb-2">{selected.author}</p>
-                  <div className="flex flex-wrap gap-2 text-xs mb-2">
-                    <span className={`px-2 py-0.5 rounded ${selected.status === "连载中" ? "bg-[#3ea6ff]/15 text-[#3ea6ff]" : "bg-[#2ba640]/15 text-[#2ba640]"}`}>{selected.status}</span>
-                    <span className="px-2 py-0.5 rounded bg-[#333] text-[#aaa]">{selected.chapters} 话</span>
-                    <span className="px-2 py-0.5 rounded bg-[#333] text-[#aaa]">{fmtNum(selected.views)} 阅读</span>
-                  </div>
-                  {selected.rating > 0 && (
-                    <div className="flex items-center gap-1 mb-2">
-                      {[1,2,3,4,5].map(s => <i key={s} className={`fas fa-star text-xs ${s <= Math.round(selected.rating) ? "text-[#f0b90b]" : "text-[#333]"}`} />)}
-                      <span className="text-xs text-[#f0b90b] ml-1">{selected.rating.toFixed(1)}</span>
-                    </div>
-                  )}
-                  <p className="text-[11px] text-[#666]">上传者: {selected.uploadedBy}</p>
-                </div>
-              </div>
-              {selected.description && <p className="text-sm text-[#8a8a8a]">{selected.description}</p>}
-            </div>
-
-            {/* 验证操作区 */}
-            {selected.verifyStatus !== "verified" && isLoggedIn && (
-              <div className="px-5 py-3 border-b border-[#333]/30 bg-[#f0b90b]/5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-[#f0b90b]"><i className="fas fa-shield-check mr-1.5" />需要验证</p>
-                    <p className="text-[11px] text-[#8a8a8a]">前往实地拍照验证，帮助社区确认信息真实性</p>
-                  </div>
-                  <button onClick={() => handleStartVerify(selected)} className="px-3 py-2 rounded-lg bg-[#f0b90b] text-[#0f0f0f] text-xs font-bold hover:bg-[#f0b90b]/80 transition">
-                    <i className="fas fa-camera mr-1" />去验证
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* 评论区 */}
-            <div className="px-5 py-4">
-              <h3 className="text-sm font-bold mb-3">
-                <i className="fas fa-comments mr-1.5 text-[#3ea6ff]" />
-                评论 ({selected.comments.length})
-              </h3>
-
-              {selected.comments.length > 0 ? (
-                <div className="space-y-2 mb-4">
-                  {selected.comments.map(c => <CommentItem key={c.id} c={c} />)}
-                </div>
-              ) : (
-                <div className="text-center py-6 text-[#666] text-sm mb-4">
-                  <i className="fas fa-comment-slash text-2xl mb-2 opacity-30" />
-                  <p>暂无评论，来说两句吧</p>
-                </div>
-              )}
-
-              {/* 发表评论 */}
-              {isLoggedIn && (
-                <div className="flex gap-2">
-                  <input
-                    value={commentText}
-                    onChange={e => setCommentText(e.target.value)}
-                    placeholder="写下你的评论..."
-                    className="flex-1 h-9 px-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff]"
-                    onKeyDown={e => e.key === "Enter" && handleAddComment()}
-                  />
-                  <button onClick={handleAddComment} disabled={!commentText.trim()} className="px-4 h-9 rounded-lg bg-[#3ea6ff] text-[#0f0f0f] text-xs font-bold hover:bg-[#65b8ff] transition disabled:opacity-50">
-                    发送
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* 底部操作 */}
-            <div className="sticky bottom-0 bg-[#141414]/95 backdrop-blur-xl border-t border-[#333]/50 px-5 py-3 flex gap-2">
-              <button className="flex-1 py-3 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition">
-                <i className="fas fa-book-open mr-1" /> 开始阅读
-              </button>
-              <button onClick={() => setSelected(null)} className="px-6 py-3 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa] hover:bg-[#2a2a2a] transition">
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 上传弹窗 */}
-      {showUpload && <UploadModal onClose={() => setShowUpload(false)} onSubmit={handleUpload} />}
-
-      {/* QR验证弹窗（PC端） */}
-      {showQR && (
-        <QRVerify
-          contentId={showQR.id}
-          contentType="comic"
-          contentTitle={showQR.title}
-          onClose={() => setShowQR(null)}
-          onMobileVerify={() => { setShowQR(null); setShowGeo(showQR); }}
-        />
-      )}
-
-      {/* 地理验证弹窗（移动端） */}
-      {showGeo && showGeo.targetLocation && (
-        <GeoVerify
-          targetLocation={showGeo.targetLocation}
-          contentTitle={showGeo.title}
-          onSubmit={handleGeoSubmit}
-          onClose={() => setShowGeo(null)}
+      {/* ===== Comic Detail Modal ===== */}
+      {selectedComic && (
+        <ComicDetailModal
+          comic={selectedComic}
+          onClose={() => setSelectedComic(null)}
+          onStartReading={handleStartReading}
         />
       )}
     </>
+  );
+}
+
+// ===========================================================================
+// Comic Detail Modal
+// ===========================================================================
+
+function ComicDetailModal({
+  comic,
+  onClose,
+  onStartReading,
+}: {
+  comic: MockComic;
+  onClose: () => void;
+  onStartReading: (comic: MockComic, chapter?: ComicChapter) => void;
+}) {
+  const [showAllChapters, setShowAllChapters] = useState(false);
+  const displayedChapters = showAllChapters
+    ? comic.chapters
+    : comic.chapters.slice(0, 20);
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg bg-[#141414] border border-[#333] rounded-t-2xl md:rounded-2xl max-h-[92vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="sticky top-0 z-10 bg-[#141414]/95 backdrop-blur-xl border-b border-[#333]/50 px-5 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="font-bold text-base truncate">{comic.title}</h2>
+            <RatingBadge rating={comic.rating} />
+          </div>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-full bg-[#212121] flex items-center justify-center text-[#8a8a8a] hover:text-white transition shrink-0 ml-3"
+            aria-label="Close"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Comic info */}
+        <div className="px-5 py-4 border-b border-[#333]/30">
+          <div className="flex gap-4 mb-3">
+            <div className="w-24 aspect-[3/4] rounded-xl overflow-hidden shrink-0 bg-[#212121]">
+              <img
+                src={comic.cover}
+                alt={comic.title}
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-[#aaa] mb-1.5 flex items-center gap-1">
+                <User size={12} />
+                {comic.author}
+              </p>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                <span
+                  className={`text-[11px] px-2 py-0.5 rounded ${
+                    comic.status === "连载中"
+                      ? "bg-[#3ea6ff]/15 text-[#3ea6ff]"
+                      : "bg-[#2ba640]/15 text-[#2ba640]"
+                  }`}
+                >
+                  {comic.status}
+                </span>
+                <span className="text-[11px] px-2 py-0.5 rounded bg-[#333] text-[#aaa] flex items-center gap-1">
+                  <Layers size={10} />
+                  {comic.chapters.length} 话
+                </span>
+                <span className="text-[11px] px-2 py-0.5 rounded bg-[#333] text-[#aaa] flex items-center gap-1">
+                  <Eye size={10} />
+                  {fmtNum(comic.views)} 阅读
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1 mb-2">
+                {comic.genres.map((g) => (
+                  <span
+                    key={g}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-[#2a2a2a] text-[#888] flex items-center gap-0.5"
+                  >
+                    <Tag size={8} />
+                    {g}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[11px] text-[#666] flex items-center gap-1">
+                <Globe size={10} />
+                来源: {comic.source}
+              </p>
+            </div>
+          </div>
+          {comic.description && (
+            <p className="text-sm text-[#8a8a8a] leading-relaxed">
+              {comic.description}
+            </p>
+          )}
+        </div>
+
+        {/* Chapter list */}
+        <div className="px-5 py-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold flex items-center gap-1.5">
+              <Library size={14} className="text-[#3ea6ff]" />
+              章节列表
+            </h3>
+            <span className="text-[11px] text-[#666]">
+              更新于 {comic.lastUpdated}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-4 sm:grid-cols-5 gap-1.5 mb-3">
+            {displayedChapters.map((ch) => (
+              <button
+                key={ch.id}
+                onClick={() => onStartReading(comic, ch)}
+                className="px-2 py-2 rounded-lg bg-[#1a1a1a] border border-[#333]/50 text-[11px] text-[#aaa] hover:border-[#3ea6ff]/40 hover:text-[#3ea6ff] hover:bg-[#3ea6ff]/5 transition text-center truncate"
+              >
+                {ch.title}
+              </button>
+            ))}
+          </div>
+
+          {comic.chapters.length > 20 && (
+            <button
+              onClick={() => setShowAllChapters(!showAllChapters)}
+              className="w-full py-2 text-center text-[12px] text-[#3ea6ff] hover:underline flex items-center justify-center gap-1"
+            >
+              {showAllChapters
+                ? "收起"
+                : `展开全部 ${comic.chapters.length} 话`}
+              <ChevronRight
+                size={12}
+                className={`transition-transform ${showAllChapters ? "rotate-90" : ""}`}
+              />
+            </button>
+          )}
+        </div>
+
+        {/* Bottom actions */}
+        <div className="sticky bottom-0 bg-[#141414]/95 backdrop-blur-xl border-t border-[#333]/50 px-5 py-3 flex gap-2">
+          <button
+            onClick={() => onStartReading(comic)}
+            className="flex-1 py-3 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition flex items-center justify-center gap-1.5"
+          >
+            <BookOpen size={16} />
+            开始阅读
+          </button>
+          <button className="px-5 py-3 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa] hover:bg-[#2a2a2a] transition flex items-center gap-1.5">
+            <Bookmark size={14} />
+            收藏
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
