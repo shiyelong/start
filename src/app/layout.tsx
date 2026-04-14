@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import MusicPlayerProvider from "@/components/player/MusicPlayerProvider";
+import MusicPlayer from "@/components/player/MusicPlayer";
 
 export const metadata: Metadata = {
   title: "星聚 — 视频·游戏·漫画·社区·AI",
@@ -38,7 +40,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-startup-image" href="/logo.svg" />
       </head>
       <body className="bg-[#0f0f0f] text-white min-h-screen antialiased overscroll-none">
-        {children}
+        <MusicPlayerProvider>
+          {children}
+          <MusicPlayer />
+        </MusicPlayerProvider>
       </body>
     </html>
   );
