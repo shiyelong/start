@@ -943,26 +943,59 @@
     - _需求: 47.5, 47.8_
 
   - [ ] 42.2 实现隐私防护后端功能
-    - 创建 `functions/api/_lib/privacy.ts`
-    - 实现不记录用户真实 IP（仅存储 Cloudflare 匿名标识）
-    - 实现多域名访问策略（至少 3 个备用域名，主域名被封自动切换）
-    - 实现智能路由（检测用户地区，受限地区启用额外混淆层）
-    - 实现 DDoS 防护、WAF 和 Bot 管理配置
-    - 实现速率限制（防爬虫和暴力破解）
-    - 实现定期自动备份到多地区 R2 存储桶
-    - 实现紧急响应方案（大规模攻击时自动启用备用域名和备用账户）
-    - 支持 Tor 浏览器访问
-    - 实现用户注销 72 小时内彻底删除所有数据
-    - 实现运营者身份完全匿名：
-      - 管理员登录入口使用隐蔽路径（非标准路径），仅允许 Cloudflare Access 授权访问
-      - 平台不设置任何"关于我们"/"联系方式"/"公司地址"等可追溯信息
-      - 所有对外页面不包含任何运营者身份线索
-    - 实现 NAS 对运营商完全隐身：
-      - NAS 零公网端口，仅通过 Cloudflare Tunnel 出站连接
-      - NAS 的 DNS 请求通过加密 DNS（DoH/DoT）发出
-      - NAS 与 Cloudflare 之间的 Tunnel 流量与普通 HTTPS 流量无法区分
-      - NAS 上不运行任何可被端口扫描发现的服务
-    - 实现用户上传内容 EXIF 元数据自动清除（照片/视频去除 GPS、设备信息等元数据）
+    - 创建 `functions/api/_lib/privacy.ts`，实现以下具体方案：
+    - **IP匿名化方案**：
+      - 在 `_middleware.ts` 中拦截所有请求，将 `CF-Connecting-IP` 头替换为 Cloudflare Ray ID 的哈希值作为匿名标识
+      - 所有 D1 数据库表中禁止存储 IP 字段，仅存储 `cf_anonymous_id`（Cloudflare Ray ID SHA-256 哈希）
+      - 服务器日志（console.log）中禁止输出任何 IP 相关信息
+    - **多域名访问策略方案**：
+      - 创建 `functions/api/_lib/domain-manager.ts`，维护域名列表（至少3个不同注册商的域名）
+      - 实现域名健康检测：每5分钟通过 Cloudflare Workers 检测各域名可访问性
+      - 实现客户端域名切换：前端 `src/lib/domain-fallback.ts` 在主域名请求失败时自动切换到备用域名
+      - 域名列表存储在 Cloudflare KV 中，管理员可通过后台动态更新
+    - **智能路由方案**：
+      - 在 Cloudflare Workers 中通过 `request.cf.country` 检测用户所在国家
+      - 对中国大陆用户（CN）：成人专区入口隐藏、URL中性化、页面标题中性化
+      - 对其他受限地区：根据 KV 中的受限国家列表动态调整
+      - 实现 `X-Region` 响应头，前端根据此头调整UI行为
+    - **DDoS/WAF/Bot防护方案**：
+      - 配置 Cloudflare WAF 规则：屏蔽已知恶意IP段、限制单IP请求频率（100次/分钟）
+      - 配置 Cloudflare Bot Management：启用 JS Challenge 对可疑流量
+      - 配置 Cloudflare Rate Limiting：API端点 60次/分钟/IP，搜索端点 30次/分钟/IP
+      - 在 `functions/api/_lib/rate-limit.ts` 中实现基于 KV 的二级速率限制
+    - **数据备份方案**：
+      - 创建 `functions/api/admin/backup.ts`，实现 D1 数据库每日自动导出到 R2
+      - 备份到至少2个不同地区的 R2 存储桶（如 US 和 EU）
+      - 备份文件使用 AES-256 加密，密钥存储在 Cloudflare Workers Secrets
+      - 保留最近30天的备份，自动清理过期备份
+    - **紧急响应方案**：
+      - 创建 `functions/api/admin/emergency.ts`，实现一键切换备用域名
+      - 实现一键切换备用 Cloudflare 账户（预配置的备用 Pages 项目）
+      - 实现管理员 Telegram Bot 告警通知（检测到攻击时自动发送）
+      - 实现一键暂停所有成人专区访问（降级为纯娱乐平台）
+    - **Tor支持方案**：
+      - 在 Cloudflare WAF 中将 Tor 出口节点 IP 加入白名单
+      - 对 Tor 用户不启用 JS Challenge（避免 Tor 浏览器兼容问题）
+    - **运营者匿名方案**：
+      - 管理员入口路径使用随机字符串（如 `/api/mgmt-[随机hash]`），路径存储在环境变量中
+      - 配置 Cloudflare Access 策略：管理员入口仅允许特定邮箱通过 Cloudflare Zero Trust 访问
+      - 平台所有页面的 HTML/JS 中不包含任何公司名称、地址、联系方式
+      - `robots.txt` 禁止搜索引擎索引管理员入口和成人专区
+    - **NAS隐身方案**：
+      - NAS 仅安装 `cloudflared` 服务，通过 Tunnel 出站连接到 Cloudflare
+      - NAS 防火墙规则：仅允许 `cloudflared` 进程的出站 HTTPS 连接（443端口），拒绝所有入站连接
+      - NAS 的 DNS 配置为 Cloudflare DoH（`https://1.1.1.1/dns-query`），运营商无法看到 DNS 查询
+      - NAS 的 MAC 地址随机化（每次启动生成随机 MAC）
+      - NAS 上禁止运行 SSH/FTP/SMB 等可被扫描发现的服务（仅通过 Cloudflare Tunnel 管理）
+    - **EXIF清除方案**：
+      - 创建 `functions/api/_lib/exif-strip.ts`，使用 `exif-js` 或自实现的 JPEG/PNG 元数据清除
+      - 所有用户上传的图片在存储到 R2 前自动清除 EXIF 数据（GPS坐标、设备型号、拍摄时间等）
+      - 所有用户上传的视频在存储前清除元数据（使用 FFmpeg WASM 或服务端处理）
+    - **用户注销方案**：
+      - 实现 `DELETE /api/users/me` 触发异步删除任务
+      - 删除任务在72小时内执行：清除 D1 中该用户所有数据（历史/收藏/书签/播放列表/设置/帖子/评论/私信/约会档案）
+      - 清除 R2 中该用户上传的所有文件（头像/照片/音乐）
+      - 删除完成后发送确认邮件
     - _需求: 47.1, 47.2, 47.3, 47.6, 47.7, 47.8, 47.9, 47.10, 47.11, 47.12, 47.13, 47.14, 47.15, 47.16, 47.17, 47.18, 47.19_
 
 - [ ] 43. 离线下载管理（前端）
