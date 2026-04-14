@@ -145,7 +145,7 @@
     - 测试弹幕发送和关键词过滤
     - _需求: 11.1, 29.4_
 
-- [-] 6. 音乐播放器（前端）
+- [x] 6. 音乐播放器（前端）
   - [x] 6.1 实现 MusicPlayer 音乐播放器组件
     - 创建 `src/components/player/MusicPlayer.tsx`，实现 `MusicPlayerProps` 接口
     - 实现迷你播放条（页面底部常驻）：歌曲名称、歌手、专辑封面、进度、暂停/播放、上一首/下一首
@@ -156,7 +156,7 @@
     - 支持 LRC 歌词同步滚动显示
     - _需求: 8.4, 8.5, 8.6, 8.7, 8.9, 8.12, 24.7_
 
-  - [ ] 6.2 实现播放列表管理
+  - [x] 6.2 实现播放列表管理
     - 支持创建、编辑、删除自定义播放列表
     - 支持本地音乐文件上传（MP3/FLAC/WAV → R2 存储）
     - _需求: 8.8, 8.10_
@@ -167,16 +167,16 @@
     - 测试歌词同步逻辑
     - _需求: 8.7, 8.12_
 
-- [ ] 7. 音乐播放器后端 API
-  - [ ] 7.1 实现音乐 API
+- [x] 7. 音乐播放器后端 API
+  - [x] 7.1 实现音乐 API
     - 实现 `POST /api/music/playlist`（创建播放列表）
     - 实现 `GET /api/music/playlists`（获取用户播放列表）
     - 实现 `PUT /api/music/playlist/[id]`（更新播放列表）
     - 实现 `DELETE /api/music/playlist/[id]`（删除播放列表）
     - _需求: 8.8_
 
-- [ ] 8. 漫画阅读器（前端）
-  - [ ] 8.1 实现 ComicReader 漫画阅读器组件
+- [x] 8. 漫画阅读器（前端）
+  - [x] 8.1 实现 ComicReader 漫画阅读器组件
     - 创建 `src/components/reader/ComicReader.tsx`，实现 `ComicReaderProps` 接口
     - 支持翻页模式（左右翻页）和条漫模式（上下滚动）
     - 支持双指缩放、双击放大、拖拽平移手势
@@ -189,8 +189,8 @@
     - 测试手势交互逻辑
     - _需求: 18.5, 18.6_
 
-- [ ] 9. 小说阅读器（前端）
-  - [ ] 9.1 实现 NovelReader 小说阅读器组件
+- [x] 9. 小说阅读器（前端）
+  - [x] 9.1 实现 NovelReader 小说阅读器组件
     - 创建 `src/components/reader/NovelReader.tsx`，实现 `NovelReaderProps` 和 `NovelReaderAPI` 接口
     - 支持字体大小调节（5 档：14/16/18/20/24）、字体选择、行间距调节
     - 支持页面背景色切换（dark/light/sepia/green）
