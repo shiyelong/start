@@ -906,6 +906,26 @@ GET  /api/ai/dubbing/[taskId]
   Response: { status, audioUrl? }
 ```
 
+#### 3.15.1 AI 聊天 API
+
+```
+POST /api/ai/chat
+  Body: { messages: ChatMessage[], model?: string }
+  Response: SSE stream of { content: string, done: boolean }
+
+GET  /api/ai/chat/history
+  Query: page?, pageSize?
+  Response: { conversations: Conversation[] }
+
+GET  /api/ai/chat/history/[conversationId]
+  Response: { messages: ChatMessage[] }
+
+DELETE /api/ai/chat/history/[conversationId]
+
+DELETE /api/ai/chat/history
+  (清除所有聊天历史)
+```
+
 #### 3.16 弹幕 API
 
 ```
@@ -1393,6 +1413,29 @@ CREATE TABLE IF NOT EXISTS telegram_channels (
   fetch_interval INTEGER NOT NULL DEFAULT 1800, -- 秒
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+```
+
+#### AI 聊天会话表
+
+```sql
+CREATE TABLE IF NOT EXISTS ai_conversations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  title TEXT,                      -- 会话标题（取第一条消息摘要）
+  model TEXT NOT NULL DEFAULT 'auto',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_conv_user ON ai_conversations(user_id);
+
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL REFERENCES ai_conversations(id),
+  role TEXT NOT NULL,              -- user/assistant/system
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_msg_conv ON ai_messages(conversation_id);
 ```
 
 ### 数据模型 ER 关系图
