@@ -82,15 +82,15 @@
     - 测试 JWT 认证中间件（有效/过期/无效 token）
     - _需求: 41.1_
 
-- [ ] 3. 检查点 — 确保所有测试通过
+- [x] 3. 检查点 — 确保所有测试通过
   - 确保所有测试通过，如有问题请询问用户。
 
 ---
 
 ## Phase 2: 核心组件（播放器、阅读器、游戏引擎、搜索）
 
-- [ ] 4. 视频播放器与自动播放引擎（前端）
-  - [ ] 4.1 实现 VideoPlayer 视频播放器组件
+- [x] 4. 视频播放器与自动播放引擎（前端）
+  - [x] 4.1 实现 VideoPlayer 视频播放器组件
     - 创建 `src/components/player/VideoPlayer.tsx`，实现 `VideoPlayerProps` 接口
     - 支持播放控件：进度条、音量、全屏、画质选择、播放速度调节
     - 支持键盘快捷键（空格暂停、左右快进快退、上下音量）
@@ -99,14 +99,14 @@
     - 支持字幕轨道显示（SRT/ASS）
     - _需求: 1.1, 1.2, 1.5, 1.6, 1.7, 1.8_
 
-  - [ ] 4.2 实现弹幕层组件
+  - [x] 4.2 实现弹幕层组件
     - 创建 `src/components/player/DanmakuLayer.tsx`，支持滚动/顶部/底部弹幕
     - 支持弹幕样式设置（颜色、字体大小、位置）
     - 支持弹幕密度调节和一键关闭
     - 支持发送弹幕
     - _需求: 29.1, 29.2, 29.3_
 
-  - [ ] 4.3 实现 AutoPlayEngine 自动播放引擎
+  - [x] 4.3 实现 AutoPlayEngine 自动播放引擎
     - 创建 `src/lib/player/autoplay-engine.ts`，实现 `IAutoPlayEngine` 接口
     - 实现优先级规则：同系列下一集 > 同频道推荐 > 平台推荐
     - 实现 5 秒倒计时界面组件 `src/components/player/AutoPlayOverlay.tsx`
