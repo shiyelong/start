@@ -1287,7 +1287,7 @@
     - 创建 `src/app/games/adult-rpg/page.tsx`
     - _需求: 34.7_
 
-  - [ ] 52.3 实现成人模拟经营
+  - [x] 52.3 实现成人模拟经营
     - Canvas 渲染，经营成人场所、NPC 互动、剧情解锁
     - 创建 `src/app/games/adult-sim/page.tsx`
     - _需求: 34.7_
