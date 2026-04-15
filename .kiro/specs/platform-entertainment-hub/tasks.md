@@ -1307,7 +1307,7 @@
     - 创建 `src/app/games/adult-puzzle/page.tsx`
     - _需求: 34.7_
 
-  - [ ] 52.7 实现成人养成
+  - [x] 52.7 实现成人养成
     - Canvas 渲染，角色养成+亲密度系统、多角色路线
     - 创建 `src/app/games/adult-raise/page.tsx`
     - _需求: 34.7_
