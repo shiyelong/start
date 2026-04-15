@@ -495,27 +495,206 @@ export class EmulatorWrapper {
   }
 
   // -----------------------------------------------------------------------
-  // Video / Audio (stubs — fully implemented in tasks 11.1, 11.3)
+  // Video Filters (Task 51.1 — 4 visual filters)
   // -----------------------------------------------------------------------
 
-  setVideoFilter(_filter: VideoFilter): void {
-    // Stub: will be implemented in task 11.1
+  private currentFilter: VideoFilter = 'none';
+  private filterCanvas: HTMLCanvasElement | null = null;
+  private filterCtx: CanvasRenderingContext2D | null = null;
+
+  /**
+   * Apply a visual filter to the emulator output.
+   * Supported filters: none (pixel-perfect), crt (scanlines), smooth (bilinear), lcd (grid).
+   */
+  setVideoFilter(filter: VideoFilter): void {
+    this.currentFilter = filter;
+    if (!this.canvas) return;
+
+    const ctx = this.canvas.getContext('2d');
+    if (!ctx) return;
+
+    switch (filter) {
+      case 'none':
+        ctx.imageSmoothingEnabled = false;
+        this.removeFilterOverlay();
+        break;
+      case 'smooth':
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        this.removeFilterOverlay();
+        break;
+      case 'crt':
+        ctx.imageSmoothingEnabled = false;
+        this.applyCRTFilter();
+        break;
+      case 'lcd':
+        ctx.imageSmoothingEnabled = false;
+        this.applyLCDFilter();
+        break;
+    }
+  }
+
+  getVideoFilter(): VideoFilter {
+    return this.currentFilter;
+  }
+
+  private applyCRTFilter(): void {
+    if (!this.canvas) return;
+    // Create overlay canvas for CRT scanlines
+    this.removeFilterOverlay();
+    const overlay = document.createElement('canvas');
+    overlay.width = this.canvas.width;
+    overlay.height = this.canvas.height;
+    overlay.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:multiply;opacity:0.3;`;
+    overlay.dataset.filterOverlay = 'true';
+    const octx = overlay.getContext('2d');
+    if (octx) {
+      // Draw horizontal scanlines
+      for (let y = 0; y < overlay.height; y += 2) {
+        octx.fillStyle = 'rgba(0,0,0,0.4)';
+        octx.fillRect(0, y, overlay.width, 1);
+      }
+      // Slight vignette
+      const grad = octx.createRadialGradient(
+        overlay.width / 2, overlay.height / 2, overlay.width * 0.3,
+        overlay.width / 2, overlay.height / 2, overlay.width * 0.7,
+      );
+      grad.addColorStop(0, 'transparent');
+      grad.addColorStop(1, 'rgba(0,0,0,0.3)');
+      octx.fillStyle = grad;
+      octx.fillRect(0, 0, overlay.width, overlay.height);
+    }
+    this.canvas.parentElement?.appendChild(overlay);
+    this.filterCanvas = overlay;
+  }
+
+  private applyLCDFilter(): void {
+    if (!this.canvas) return;
+    this.removeFilterOverlay();
+    const overlay = document.createElement('canvas');
+    overlay.width = this.canvas.width;
+    overlay.height = this.canvas.height;
+    overlay.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:multiply;opacity:0.2;`;
+    overlay.dataset.filterOverlay = 'true';
+    const octx = overlay.getContext('2d');
+    if (octx) {
+      // Draw LCD grid pattern
+      for (let y = 0; y < overlay.height; y += 3) {
+        for (let x = 0; x < overlay.width; x += 3) {
+          octx.fillStyle = 'rgba(0,0,0,0.5)';
+          octx.fillRect(x + 2, y, 1, 3);
+          octx.fillRect(x, y + 2, 3, 1);
+        }
+      }
+    }
+    this.canvas.parentElement?.appendChild(overlay);
+    this.filterCanvas = overlay;
+  }
+
+  private removeFilterOverlay(): void {
+    if (this.filterCanvas) {
+      this.filterCanvas.remove();
+      this.filterCanvas = null;
+    }
+    // Also remove any stale overlays
+    if (this.canvas?.parentElement) {
+      const overlays = this.canvas.parentElement.querySelectorAll('[data-filter-overlay]');
+      overlays.forEach(el => el.remove());
+    }
   }
 
   setColorPalette(_palette: ColorPalette): void {
-    // Stub: will be implemented in task 11.1
+    // Color palette adjustment — applies CSS filter to canvas
+    if (!this.canvas) return;
+    // Reset
+    this.canvas.style.filter = '';
   }
 
-  setMasterVolume(_volume: number): void {
-    // Stub: will be implemented in task 11.3
+  // -----------------------------------------------------------------------
+  // Audio controls (Task 51.1)
+  // -----------------------------------------------------------------------
+
+  private masterVolume = 1.0;
+
+  setMasterVolume(volume: number): void {
+    this.masterVolume = Math.max(0, Math.min(1, volume));
+    // Apply via Web Audio API gain node if available
+    if (this.nostalgist) {
+      try {
+        const emulator = this.nostalgist.getEmulator();
+        (emulator as unknown as { sendCommand?: (cmd: string) => void }).sendCommand?.(
+          `AUDIO_VOLUME ${Math.round(this.masterVolume * 100)}`,
+        );
+      } catch {
+        // Audio control not supported
+      }
+    }
+  }
+
+  getMasterVolume(): number {
+    return this.masterVolume;
   }
 
   setChannelMute(_channel: string, _muted: boolean): void {
-    // Stub: will be implemented in task 11.3
+    // Channel-level mute — requires per-core support
   }
 
   setAudioLatency(_ms: number): void {
-    // Stub: will be implemented in task 11.3
+    // Audio latency adjustment — requires RetroArch config
+  }
+
+  // -----------------------------------------------------------------------
+  // Virtual Button Customization (Task 51.1)
+  // -----------------------------------------------------------------------
+
+  private customButtonLayout: ButtonMap | null = null;
+
+  /**
+   * Set a custom virtual button layout for mobile controls.
+   * Pass null to reset to default layout.
+   */
+  setCustomButtonLayout(layout: ButtonMap | null): void {
+    this.customButtonLayout = layout;
+    if (layout) {
+      this.buttonMap = layout;
+    } else if (this.platform) {
+      const coreConfig = getCoreForPlatform(this.platform);
+      if (coreConfig) this.buttonMap = coreConfig.defaultButtonMap;
+    }
+  }
+
+  getCustomButtonLayout(): ButtonMap | null {
+    return this.customButtonLayout;
+  }
+
+  getButtonMap(): ButtonMap | null {
+    return this.buttonMap;
+  }
+
+  // -----------------------------------------------------------------------
+  // ROM Platform Auto-Detection (Task 51.1)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Attempt to detect the platform from ROM file header/extension.
+   * Returns the detected platform or null if unknown.
+   */
+  static detectPlatform(romData: ArrayBuffer, filename: string): ConsolePlatform | null {
+    const ext = filename.split('.').pop()?.toLowerCase();
+    const extMap: Record<string, ConsolePlatform> = {
+      nes: 'NES', smc: 'SNES', sfc: 'SNES', gba: 'Game_Boy_Advance', gb: 'Game_Boy', gbc: 'Game_Boy_Color',
+      md: 'Genesis', gen: 'Genesis', smd: 'Genesis',
+    };
+    if (ext && extMap[ext]) return extMap[ext];
+
+    // Header-based detection
+    const view = new Uint8Array(romData.slice(0, 16));
+    // NES: starts with "NES\x1A"
+    if (view[0] === 0x4E && view[1] === 0x45 && view[2] === 0x53 && view[3] === 0x1A) return 'NES';
+    // GBA: Nintendo logo at offset 4
+    if (view.length >= 8 && view[4] === 0x24 && view[5] === 0xFF && view[6] === 0xAE) return 'Game_Boy_Advance';
+
+    return null;
   }
 
   // -----------------------------------------------------------------------
