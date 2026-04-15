@@ -62,12 +62,12 @@ const ZONE_SUBNAV: NavItem[] = [
   { href: '/zone/music',    label: '成人音乐', icon: <Music size={18} /> },
   { href: '/zone/podcasts', label: '成人播客', icon: <Podcast size={18} /> },
   { href: '/zone/games',    label: '成人游戏', icon: <Gamepad2 size={18} /> },
-  { href: '/zone/services', label: '服务验证', icon: <ShieldAlert size={18} /> },
-  { href: '/zone/jobs',     label: '求职招聘', icon: <Briefcase size={18} /> },
+  { href: '/zone/services', label: '服务点评', icon: <ShieldAlert size={18} /> },
+  { href: '/zone/jobs',     label: '行业招聘', icon: <Briefcase size={18} /> },
   { href: '/zone/safety',   label: '安全中心', icon: <Shield size={18} /> },
   { href: '/zone/forum',    label: '论坛',     icon: <MessagesSquare size={18} /> },
   { href: '/zone/chat',     label: '私聊',     icon: <MessageSquare size={18} /> },
-  { href: '/zone/dating',   label: '约会交友', icon: <Heart size={18} /> },
+  { href: '/zone/dating',   label: '自由约会', icon: <Heart size={18} /> },
 ];
 
 /* ------------------------------------------------------------------ */

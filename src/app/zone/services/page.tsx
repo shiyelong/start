@@ -424,7 +424,7 @@ export default function ZoneServicesPage() {
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-bold flex items-center gap-2">
             <UserCheck size={22} className="text-red-400" />
-            <span>成人服务验证</span>
+            <span>服务点评</span>
             <RatingBadge rating="NC-17" size="md" />
           </h1>
         </div>

@@ -222,7 +222,7 @@ export default function ZoneDatingPage() {
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-bold flex items-center gap-2">
             <Heart size={22} className="text-pink-400" />
-            <span>约会交友</span>
+            <span>自由约会</span>
             <RatingBadge rating="NC-17" size="md" />
           </h1>
           <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-[13px] transition ${showFilters || activeFilterCount > 0 ? 'bg-[#3ea6ff]/20 text-[#3ea6ff]' : 'bg-[#1a1a1a] text-[#aaa] hover:text-white'}`}>

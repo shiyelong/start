@@ -196,7 +196,7 @@ export default function ZoneJobsPage() {
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-bold flex items-center gap-2">
             <Briefcase size={22} className="text-purple-400" />
-            <span>求职招聘</span>
+            <span>行业招聘</span>
             <RatingBadge rating="NC-17" size="md" />
           </h1>
         </div>

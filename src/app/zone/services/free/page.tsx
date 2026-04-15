@@ -167,7 +167,7 @@ export default function ZoneFreeServicesPage() {
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-bold flex items-center gap-2">
             <Gift size={22} className="text-green-400" />
-            <span>免费服务板块</span>
+            <span>免费交友</span>
             <RatingBadge rating="NC-17" size="md" />
           </h1>
           <button onClick={() => setShowPostForm(!showPostForm)} className="flex items-center gap-1 px-3 py-1.5 bg-[#3ea6ff] text-[#0f0f0f] rounded-lg text-[13px] font-medium hover:bg-[#3ea6ff]/80 transition">
