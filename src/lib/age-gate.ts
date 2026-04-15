@@ -21,7 +21,7 @@ const STORAGE_MODE_KEY = 'starhub_age_gate_mode';
 const STORAGE_PIN_KEY = 'starhub_age_gate_pin';
 const STORAGE_CONFIG_KEY = 'starhub_age_gate_config';
 
-const DEFAULT_MODE: UserMode = 'adult';
+const DEFAULT_MODE: UserMode = 'teen'; // 默认青少年模式，首次访问需选择
 
 /** Default daily limits per mode (minutes). 0 = unlimited. */
 const DEFAULT_DAILY_LIMITS: Record<UserMode, number> = {
@@ -86,12 +86,23 @@ function ratingIndex(rating: ContentRating): number {
 export class AgeGate {
   // ---- Mode ---------------------------------------------------------------
 
-  /** Get the current user mode. Defaults to 'adult'. */
+  /** Get the current user mode. Defaults to 'teen' if never set. */
   getMode(): UserMode {
     if (!isBrowser()) return DEFAULT_MODE;
     const stored = localStorage.getItem(STORAGE_MODE_KEY);
     if (stored && isValidMode(stored)) return stored;
     return DEFAULT_MODE;
+  }
+
+  /** Check if the user has explicitly chosen a mode (first-time setup done). */
+  hasChosenMode(): boolean {
+    if (!isBrowser()) return false;
+    return localStorage.getItem(STORAGE_MODE_KEY) !== null;
+  }
+
+  /** Set mode directly (for first-time selection, no PIN required). */
+  selectMode(mode: UserMode): void {
+    this.setMode(mode);
   }
 
   /** Persist a mode value to localStorage. */
