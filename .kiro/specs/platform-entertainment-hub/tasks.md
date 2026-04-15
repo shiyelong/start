@@ -1297,12 +1297,12 @@
     - 创建 `src/app/games/adult-fight/page.tsx`
     - _需求: 34.7_
 
-  - [ ] 52.5 实现成人卡牌对战
+  - [x] 52.5 实现成人卡牌对战
     - Canvas 渲染，收集成人卡牌、对战、卡牌升级
     - 创建 `src/app/games/adult-cards/page.tsx`
     - _需求: 34.7_
 
-  - [ ] 52.6 实现成人解谜
+  - [x] 52.6 实现成人解谜
     - Canvas 渲染，解谜+色情奖励、多关卡
     - 创建 `src/app/games/adult-puzzle/page.tsx`
     - _需求: 34.7_
