@@ -1292,7 +1292,7 @@
     - 创建 `src/app/games/adult-sim/page.tsx`
     - _需求: 34.7_
 
-  - [ ] 52.4 实现成人动作格斗
+  - [x] 52.4 实现成人动作格斗
     - Canvas 渲染，格斗+色情奖励、多角色、连招系统
     - 创建 `src/app/games/adult-fight/page.tsx`
     - _需求: 34.7_
