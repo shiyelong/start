@@ -340,21 +340,21 @@ export default function AdultPuzzle() {
       }
 
       // Merge extra clears
-      for (const ec of extraClears) {
+      Array.from(extraClears).forEach(ec => {
         if (!matches.has(ec)) {
           totalCleared++;
           matches.add(ec);
         }
-      }
+      });
 
       // Spawn particles for cleared gems
-      for (const coord of matches) {
+      Array.from(matches).forEach(coord => {
         const [mr, mc] = parseCoord(coord);
         const val = g.board[mr][mc];
         const color = val >= 0 && val < NUM_COLORS ? GEM_COLORS[val] : val === BOMB_GEM ? "#ff8800" : "#ffffff";
         spawnParticles(g.particles, mr, mc, color, 6);
         g.board[mr][mc] = -1;
-      }
+      });
 
       // Gravity
       applyGravity(g.board, levelCfg);
