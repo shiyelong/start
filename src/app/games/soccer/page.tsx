@@ -2,177 +2,1199 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Header from "@/components/Header";
 import Link from "next/link";
-import { ChevronLeft, RotateCcw, CircleDot } from "lucide-react";
+import GameLeaderboard from "@/components/GameLeaderboard";
+import GameSaveLoad from "@/components/GameSaveLoad";
+import { fetchWithAuth } from "@/lib/auth";
+import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import {
+  ChevronLeft, RotateCcw, Volume2, VolumeX, CircleDot, Trophy,
+  Play, ArrowUp, ArrowDown, ArrowLeft, ArrowRight
+} from "lucide-react";
 
-const W = 400, H = 500;
-type Phase = "title" | "playing" | "goal" | "gameover";
+/* ================================================================
+   常量 & 类型
+   ================================================================ */
+const GAME_ID = "soccer";
+const W = 480, H = 640;
+const HALF_TIME = 120; // 每半场120秒
+const GOAL_W = 100, GOAL_H = 12;
+const BALL_R = 6;
+const PLAYER_R = 12;
+const FRICTION = 0.985;
+const SHOOT_POWER = 420;
+const PASS_POWER = 280;
 
+type Phase = "title" | "playing" | "halftime" | "goal" | "matchover" | "leagueresult";
+type Difficulty = "easy" | "normal" | "hard";
+type Half = "first" | "second";
+
+interface Vec2 { x: number; y: number }
+interface Ball { x: number; y: number; vx: number; vy: number }
+interface Player {
+  x: number; y: number; vx: number; vy: number;
+  homeX: number; homeY: number; isGoalkeeper: boolean;
+}
+interface Team { players: Player[]; color: string; name: string }
+
+interface MatchResult { playerGoals: number; cpuGoals: number; matchIndex: number }
+
+interface GameState {
+  ball: Ball;
+  teamA: Team; // 玩家队伍（向上进攻）
+  teamB: Team; // AI队伍（向下进攻）
+  half: Half;
+  time: number; // 当前半场剩余秒数
+  playerGoals: number;
+  cpuGoals: number;
+  selectedIdx: number; // 当前控制的球员索引
+  goalMsg: string;
+  goalTimer: number;
+  difficulty: Difficulty;
+  matchIndex: number; // 联赛第几场 (0,1,2)
+  leagueResults: MatchResult[];
+  leagueScore: number; // 联赛总积分
+}
+
+const DIFF_LABELS: Record<Difficulty, string> = { easy: "简单", normal: "普通", hard: "困难" };
+const DIFF_SPEED: Record<Difficulty, number> = { easy: 100, normal: 150, hard: 200 };
+const DIFF_REACT: Record<Difficulty, number> = { easy: 0.02, normal: 0.04, hard: 0.07 };
+const DIFF_SHOOT: Record<Difficulty, number> = { easy: 250, normal: 340, hard: 420 };
+
+const LEAGUE_TEAMS = ["蓝色闪电", "红色风暴", "绿色旋风"];
+
+/* ================================================================
+   工具函数
+   ================================================================ */
+function dist(a: Vec2, b: Vec2): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+}
+function normalize(vx: number, vy: number): [number, number] {
+  const len = Math.sqrt(vx * vx + vy * vy);
+  if (len < 0.001) return [0, -1];
+  return [vx / len, vy / len];
+}
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+function createTeamA(): Player[] {
+  // 玩家队伍：1 GK + 2 DEF + 2 FWD (向上进攻)
+  return [
+    { x: W / 2, y: H - 50, vx: 0, vy: 0, homeX: W / 2, homeY: H - 50, isGoalkeeper: true },
+    { x: W / 3, y: H - 180, vx: 0, vy: 0, homeX: W / 3, homeY: H - 180, isGoalkeeper: false },
+    { x: (2 * W) / 3, y: H - 180, vx: 0, vy: 0, homeX: (2 * W) / 3, homeY: H - 180, isGoalkeeper: false },
+    { x: W / 3, y: H / 2 - 40, vx: 0, vy: 0, homeX: W / 3, homeY: H / 2 - 40, isGoalkeeper: false },
+    { x: (2 * W) / 3, y: H / 2 - 40, vx: 0, vy: 0, homeX: (2 * W) / 3, homeY: H / 2 - 40, isGoalkeeper: false },
+  ];
+}
+
+function createTeamB(): Player[] {
+  // AI队伍：1 GK + 2 DEF + 2 FWD (向下进攻)
+  return [
+    { x: W / 2, y: 50, vx: 0, vy: 0, homeX: W / 2, homeY: 50, isGoalkeeper: true },
+    { x: W / 3, y: 180, vx: 0, vy: 0, homeX: W / 3, homeY: 180, isGoalkeeper: false },
+    { x: (2 * W) / 3, y: 180, vx: 0, vy: 0, homeX: (2 * W) / 3, homeY: 180, isGoalkeeper: false },
+    { x: W / 3, y: H / 2 + 40, vx: 0, vy: 0, homeX: W / 3, homeY: H / 2 + 40, isGoalkeeper: false },
+    { x: (2 * W) / 3, y: H / 2 + 40, vx: 0, vy: 0, homeX: (2 * W) / 3, homeY: H / 2 + 40, isGoalkeeper: false },
+  ];
+}
+
+function resetPositions(teamA: Player[], teamB: Player[]) {
+  const a = createTeamA();
+  const b = createTeamB();
+  for (let i = 0; i < teamA.length; i++) {
+    teamA[i].x = a[i].x; teamA[i].y = a[i].y;
+    teamA[i].vx = 0; teamA[i].vy = 0;
+    teamA[i].homeX = a[i].homeX; teamA[i].homeY = a[i].homeY;
+  }
+  for (let i = 0; i < teamB.length; i++) {
+    teamB[i].x = b[i].x; teamB[i].y = b[i].y;
+    teamB[i].vx = 0; teamB[i].vy = 0;
+    teamB[i].homeX = b[i].homeX; teamB[i].homeY = b[i].homeY;
+  }
+}
+
+
+/* ================================================================
+   主组件
+   ================================================================ */
 export default function SoccerGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<Phase>("title");
-  const [score, setScore] = useState({ player: 0, cpu: 0 });
-  const sRef = useRef({
-    ball: { x: W / 2, y: H / 2, vx: 0, vy: 0 },
-    player: { x: W / 2, y: H - 60 },
-    cpu: { x: W / 2, y: 60 },
-    time: 90, goalMsg: "", playerScore: 0, cpuScore: 0,
-  });
+  const [difficulty, setDifficulty] = useState<Difficulty>("normal");
+  const [muted, setMuted] = useState(false);
+  const [displayScore, setDisplayScore] = useState({ player: 0, cpu: 0 });
+  const [displayHalf, setDisplayHalf] = useState<Half>("first");
+  const [displayTime, setDisplayTime] = useState(HALF_TIME);
+  const [goalText, setGoalText] = useState("");
+  const [leagueResults, setLeagueResults] = useState<MatchResult[]>([]);
+  const [matchIndex, setMatchIndex] = useState(0);
+  const [leagueMode, setLeagueMode] = useState(false);
+
+  const sRef = useRef<GameState | null>(null);
   const keysRef = useRef(new Set<string>());
   const rafRef = useRef(0);
   const lastRef = useRef(0);
+  const soundRef = useRef<SoundEngine | null>(null);
+  const phaseRef = useRef<Phase>("title");
 
-  const startGame = useCallback(() => {
-    sRef.current = { ball: { x: W / 2, y: H / 2, vx: 0, vy: 0 }, player: { x: W / 2, y: H - 60 }, cpu: { x: W / 2, y: 60 }, time: 90, goalMsg: "", playerScore: 0, cpuScore: 0 };
-    setScore({ player: 0, cpu: 0 }); setPhase("playing"); lastRef.current = 0;
-  }, []);
+  // Keep phaseRef in sync
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
 
-  const resetBall = useCallback(() => {
-    const s = sRef.current;
-    s.ball = { x: W / 2, y: H / 2, vx: (Math.random() - 0.5) * 100, vy: (Math.random() > 0.5 ? 1 : -1) * 80 };
-    s.player.x = W / 2; s.cpu.x = W / 2;
-  }, []);
-
+  // Sound engine
   useEffect(() => {
-    const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext("2d"); if (!ctx) return;
+    soundRef.current = new SoundEngine(GAME_ID);
+    return () => { soundRef.current?.dispose(); };
+  }, []);
+
+  const playKick = useCallback(() => {
+    if (!soundRef.current) return;
+    soundRef.current.playTone(220, 0.06, "triangle");
+  }, []);
+  const playGoalSound = useCallback(() => {
+    if (!soundRef.current) return;
+    soundRef.current.playLevelUp();
+  }, []);
+  const playWhistle = useCallback(() => {
+    if (!soundRef.current) return;
+    soundRef.current.playTone(880, 0.3, "sine");
+    setTimeout(() => soundRef.current?.playTone(880, 0.5, "sine"), 350);
+  }, []);
+  const playBounce = useCallback(() => {
+    if (!soundRef.current) return;
+    soundRef.current.playTone(330, 0.04, "square");
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    if (!soundRef.current) return;
+    const m = soundRef.current.toggleMute();
+    setMuted(m);
+  }, []);
+
+  /* ----------------------------------------------------------------
+     创建新比赛状态
+     ---------------------------------------------------------------- */
+  const createGameState = useCallback((diff: Difficulty, mIdx: number, results: MatchResult[]): GameState => {
+    return {
+      ball: { x: W / 2, y: H / 2, vx: 0, vy: 0 },
+      teamA: { players: createTeamA(), color: "#3ea6ff", name: "我的球队" },
+      teamB: { players: createTeamB(), color: "#ff4757", name: LEAGUE_TEAMS[mIdx % LEAGUE_TEAMS.length] },
+      half: "first",
+      time: HALF_TIME,
+      playerGoals: 0,
+      cpuGoals: 0,
+      selectedIdx: 3, // 默认控制前锋
+      goalMsg: "",
+      goalTimer: 0,
+      difficulty: diff,
+      matchIndex: mIdx,
+      leagueResults: results,
+      leagueScore: results.reduce((s, r) => {
+        if (r.playerGoals > r.cpuGoals) return s + 3;
+        if (r.playerGoals === r.cpuGoals) return s + 1;
+        return s;
+      }, 0),
+    };
+  }, []);
+
+  /* ----------------------------------------------------------------
+     开始比赛
+     ---------------------------------------------------------------- */
+  const startMatch = useCallback((diff: Difficulty, mIdx: number, results: MatchResult[], league: boolean) => {
+    const gs = createGameState(diff, mIdx, results);
+    sRef.current = gs;
+    lastRef.current = 0;
+    setDifficulty(diff);
+    setMatchIndex(mIdx);
+    setLeagueResults(results);
+    setLeagueMode(league);
+    setDisplayScore({ player: 0, cpu: 0 });
+    setDisplayHalf("first");
+    setDisplayTime(HALF_TIME);
+    setPhase("playing");
+    playWhistle();
+  }, [createGameState, playWhistle]);
+
+  const startSingleMatch = useCallback((diff: Difficulty) => {
+    startMatch(diff, 0, [], false);
+  }, [startMatch]);
+
+  const startLeague = useCallback((diff: Difficulty) => {
+    startMatch(diff, 0, [], true);
+  }, [startMatch]);
+
+  /* ----------------------------------------------------------------
+     提交分数
+     ---------------------------------------------------------------- */
+  const submitScore = useCallback(async (score: number) => {
+    try {
+      await fetchWithAuth("/api/games/scores", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game_id: GAME_ID, score }),
+      });
+    } catch { /* ignore */ }
+  }, []);
+
+  /* ----------------------------------------------------------------
+     存档/读档
+     ---------------------------------------------------------------- */
+  const handleSave = useCallback(() => {
+    const s = sRef.current;
+    if (!s) return null;
+    return {
+      ball: { ...s.ball },
+      teamAPlayers: s.teamA.players.map(p => ({ ...p })),
+      teamBPlayers: s.teamB.players.map(p => ({ ...p })),
+      half: s.half, time: s.time,
+      playerGoals: s.playerGoals, cpuGoals: s.cpuGoals,
+      selectedIdx: s.selectedIdx, difficulty: s.difficulty,
+      matchIndex: s.matchIndex, leagueResults: [...s.leagueResults],
+      leagueScore: s.leagueScore,
+    };
+  }, []);
+
+  const handleLoad = useCallback((data: unknown) => {
+    const d = data as Record<string, unknown>;
+    if (!d || !d.teamAPlayers) return;
+    const gs = createGameState(
+      (d.difficulty as Difficulty) || "normal",
+      (d.matchIndex as number) || 0,
+      (d.leagueResults as MatchResult[]) || [],
+    );
+    gs.ball = d.ball as Ball;
+    gs.teamA.players = (d.teamAPlayers as Player[]).map(p => ({ ...p }));
+    gs.teamB.players = (d.teamBPlayers as Player[]).map(p => ({ ...p }));
+    gs.half = (d.half as Half) || "first";
+    gs.time = (d.time as number) || HALF_TIME;
+    gs.playerGoals = (d.playerGoals as number) || 0;
+    gs.cpuGoals = (d.cpuGoals as number) || 0;
+    gs.selectedIdx = (d.selectedIdx as number) || 3;
+    sRef.current = gs;
+    lastRef.current = 0;
+    setDifficulty(gs.difficulty);
+    setMatchIndex(gs.matchIndex);
+    setLeagueResults(gs.leagueResults);
+    setDisplayScore({ player: gs.playerGoals, cpu: gs.cpuGoals });
+    setDisplayHalf(gs.half);
+    setDisplayTime(gs.time);
+    setPhase("playing");
+  }, [createGameState]);
+
+
+  /* ----------------------------------------------------------------
+     找到离球最近的己方球员
+     ---------------------------------------------------------------- */
+  const findClosestToball = useCallback((players: Player[], ball: Ball): number => {
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < players.length; i++) {
+      const d = dist(players[i], ball);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }, []);
+
+  /* ----------------------------------------------------------------
+     游戏主循环
+     ---------------------------------------------------------------- */
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr; canvas.height = H * dpr;
-    canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = `${W}px`;
+    canvas.style.height = `${H}px`;
 
     const loop = (ts: number) => {
       if (!lastRef.current) lastRef.current = ts;
       const dt = Math.min((ts - lastRef.current) / 1000, 0.05);
       lastRef.current = ts;
       const s = sRef.current;
+      const currentPhase = phaseRef.current;
 
-      if (phase === "playing") {
+      /* ============ UPDATE ============ */
+      if (currentPhase === "playing" && s) {
         const keys = keysRef.current;
-        const spd = 250;
-        if (keys.has("ArrowLeft") || keys.has("a")) s.player.x = Math.max(30, s.player.x - spd * dt);
-        if (keys.has("ArrowRight") || keys.has("d")) s.player.x = Math.min(W - 30, s.player.x + spd * dt);
-        // CPU AI
-        const cpuSpd = 150 + s.cpuScore * 20;
-        if (s.ball.x < s.cpu.x - 10) s.cpu.x -= cpuSpd * dt;
-        if (s.ball.x > s.cpu.x + 10) s.cpu.x += cpuSpd * dt;
-        s.cpu.x = Math.max(30, Math.min(W - 30, s.cpu.x));
-        // Ball physics
-        s.ball.x += s.ball.vx * dt; s.ball.y += s.ball.vy * dt;
-        // Wall bounce
-        if (s.ball.x < 10 || s.ball.x > W - 10) { s.ball.vx *= -1; s.ball.x = Math.max(10, Math.min(W - 10, s.ball.x)); }
-        // Player paddle collision
-        if (s.ball.vy > 0 && Math.abs(s.ball.y - s.player.y) < 16 && Math.abs(s.ball.x - s.player.x) < 40) {
-          s.ball.vy = -Math.abs(s.ball.vy) * 1.05;
-          s.ball.vx += (s.ball.x - s.player.x) * 3;
+        const diff = s.difficulty;
+        const playerSpeed = 200;
+
+        // --- 玩家控制 ---
+        const cp = s.teamA.players[s.selectedIdx];
+        let dx = 0, dy = 0;
+        if (keys.has("a") || keys.has("ArrowLeft")) dx -= 1;
+        if (keys.has("d") || keys.has("ArrowRight")) dx += 1;
+        if (keys.has("w") || keys.has("ArrowUp")) dy -= 1;
+        if (keys.has("s") || keys.has("ArrowDown")) dy += 1;
+        if (dx !== 0 || dy !== 0) {
+          const [nx, ny] = normalize(dx, dy);
+          cp.vx = nx * playerSpeed;
+          cp.vy = ny * playerSpeed;
+        } else {
+          cp.vx *= 0.85;
+          cp.vy *= 0.85;
         }
-        // CPU paddle collision
-        if (s.ball.vy < 0 && Math.abs(s.ball.y - s.cpu.y) < 16 && Math.abs(s.ball.x - s.cpu.x) < 40) {
-          s.ball.vy = Math.abs(s.ball.vy) * 1.05;
-          s.ball.vx += (s.ball.x - s.cpu.x) * 3;
+        cp.x = clamp(cp.x + cp.vx * dt, PLAYER_R, W - PLAYER_R);
+        cp.y = clamp(cp.y + cp.vy * dt, PLAYER_R, H - PLAYER_R);
+
+        // 射门/传球 (空格)
+        if (keys.has(" ")) {
+          keys.delete(" ");
+          const d = dist(cp, s.ball);
+          if (d < PLAYER_R + BALL_R + 8) {
+            // 射门方向：向对方球门
+            const goalX = W / 2;
+            const goalY = 0;
+            const [sx, sy] = normalize(goalX - cp.x, goalY - cp.y);
+            s.ball.vx = sx * SHOOT_POWER;
+            s.ball.vy = sy * SHOOT_POWER;
+            playKick();
+          }
         }
-        // Goals
-        const goalW = 100;
-        if (s.ball.y < 10 && Math.abs(s.ball.x - W / 2) < goalW / 2) {
-          s.playerScore++; setScore({ player: s.playerScore, cpu: s.cpuScore });
-          s.goalMsg = "GOAL!"; setPhase("goal");
-          setTimeout(() => { resetBall(); setPhase("playing"); }, 1500);
+
+        // 切换球员 (Q/E)
+        if (keys.has("q") || keys.has("e")) {
+          keys.delete("q"); keys.delete("e");
+          s.selectedIdx = findClosestToball(s.teamA.players, s.ball);
         }
-        if (s.ball.y > H - 10 && Math.abs(s.ball.x - W / 2) < goalW / 2) {
-          s.cpuScore++; setScore({ player: s.playerScore, cpu: s.cpuScore });
-          s.goalMsg = "CPU Goal..."; setPhase("goal");
-          setTimeout(() => { resetBall(); setPhase("playing"); }, 1500);
+
+        // --- 己方AI（非控制球员） ---
+        for (let i = 0; i < s.teamA.players.length; i++) {
+          if (i === s.selectedIdx) continue;
+          const p = s.teamA.players[i];
+          // 回到阵型位置，但如果球在附近则追球
+          const dBall = dist(p, s.ball);
+          let tx = p.homeX, ty = p.homeY;
+          if (dBall < 120 && !p.isGoalkeeper) {
+            tx = s.ball.x; ty = s.ball.y;
+          } else if (p.isGoalkeeper) {
+            // 守门员跟踪球的x位置
+            tx = clamp(s.ball.x, W / 2 - 60, W / 2 + 60);
+            ty = H - 40;
+          }
+          const [nx, ny] = normalize(tx - p.x, ty - p.y);
+          const spd = p.isGoalkeeper ? 160 : 120;
+          p.x += nx * spd * dt;
+          p.y += ny * spd * dt;
+          p.x = clamp(p.x, PLAYER_R, W - PLAYER_R);
+          p.y = clamp(p.y, PLAYER_R, H - PLAYER_R);
+
+          // 自动踢球
+          if (dBall < PLAYER_R + BALL_R + 4) {
+            const [bx, by] = normalize(W / 2 - p.x, -1);
+            s.ball.vx += bx * PASS_POWER * 0.5;
+            s.ball.vy += by * PASS_POWER * 0.5;
+          }
         }
-        // Bounce off top/bottom walls (outside goal)
-        if (s.ball.y < 10) { s.ball.vy = Math.abs(s.ball.vy); }
-        if (s.ball.y > H - 10) { s.ball.vy = -Math.abs(s.ball.vy); }
-        // Timer
+
+        // --- AI队伍 ---
+        const aiSpeed = DIFF_SPEED[diff];
+        const aiReact = DIFF_REACT[diff];
+        const aiShoot = DIFF_SHOOT[diff];
+        for (let i = 0; i < s.teamB.players.length; i++) {
+          const p = s.teamB.players[i];
+          const dBall = dist(p, s.ball);
+          let tx = p.homeX, ty = p.homeY;
+
+          if (p.isGoalkeeper) {
+            tx = clamp(s.ball.x, W / 2 - 60, W / 2 + 60);
+            ty = 40;
+          } else {
+            // 最近的AI球员追球
+            const closestAI = findClosestToball(s.teamB.players, s.ball);
+            if (i === closestAI) {
+              tx = s.ball.x;
+              ty = s.ball.y;
+            } else {
+              // 其他AI球员向进攻方向移动
+              tx = p.homeX + (s.ball.x - W / 2) * 0.3;
+              ty = p.homeY + (s.ball.y - H / 2) * aiReact * 10;
+            }
+          }
+
+          const [nx, ny] = normalize(tx - p.x, ty - p.y);
+          p.x += nx * aiSpeed * dt;
+          p.y += ny * aiSpeed * dt;
+          p.x = clamp(p.x, PLAYER_R, W - PLAYER_R);
+          p.y = clamp(p.y, PLAYER_R, H - PLAYER_R);
+
+          // AI踢球
+          if (dBall < PLAYER_R + BALL_R + 4) {
+            if (p.y < H / 2 && !p.isGoalkeeper) {
+              // 在对方半场，射门
+              const [sx, sy] = normalize(W / 2 - p.x, H - p.y);
+              s.ball.vx = sx * aiShoot;
+              s.ball.vy = sy * aiShoot;
+            } else {
+              // 传球向前
+              const [bx, by] = normalize(W / 2 - p.x + (Math.random() - 0.5) * 100, 1);
+              s.ball.vx += bx * PASS_POWER * 0.6;
+              s.ball.vy += by * PASS_POWER * 0.6;
+            }
+            playKick();
+          }
+        }
+
+        // --- 球物理 ---
+        s.ball.vx *= FRICTION;
+        s.ball.vy *= FRICTION;
+        s.ball.x += s.ball.vx * dt;
+        s.ball.y += s.ball.vy * dt;
+
+        // 墙壁反弹
+        if (s.ball.x < BALL_R) { s.ball.x = BALL_R; s.ball.vx = Math.abs(s.ball.vx) * 0.8; playBounce(); }
+        if (s.ball.x > W - BALL_R) { s.ball.x = W - BALL_R; s.ball.vx = -Math.abs(s.ball.vx) * 0.8; playBounce(); }
+
+        // 上下边界（球门区域除外）
+        const goalLeft = W / 2 - GOAL_W / 2;
+        const goalRight = W / 2 + GOAL_W / 2;
+        const inGoalX = s.ball.x > goalLeft && s.ball.x < goalRight;
+
+        if (s.ball.y < BALL_R && !inGoalX) {
+          s.ball.y = BALL_R; s.ball.vy = Math.abs(s.ball.vy) * 0.8; playBounce();
+        }
+        if (s.ball.y > H - BALL_R && !inGoalX) {
+          s.ball.y = H - BALL_R; s.ball.vy = -Math.abs(s.ball.vy) * 0.8; playBounce();
+        }
+
+        // 球员与球碰撞
+        const allPlayers = [...s.teamA.players, ...s.teamB.players];
+        for (const p of allPlayers) {
+          const d = dist(p, s.ball);
+          if (d < PLAYER_R + BALL_R) {
+            const [nx, ny] = normalize(s.ball.x - p.x, s.ball.y - p.y);
+            const overlap = PLAYER_R + BALL_R - d;
+            s.ball.x += nx * overlap;
+            s.ball.y += ny * overlap;
+            // 反弹
+            const dot = s.ball.vx * nx + s.ball.vy * ny;
+            if (dot < 0) {
+              s.ball.vx -= 1.5 * dot * nx;
+              s.ball.vy -= 1.5 * dot * ny;
+            }
+          }
+        }
+
+        // 速度上限
+        const maxV = 500;
+        const spd = Math.sqrt(s.ball.vx ** 2 + s.ball.vy ** 2);
+        if (spd > maxV) {
+          s.ball.vx = (s.ball.vx / spd) * maxV;
+          s.ball.vy = (s.ball.vy / spd) * maxV;
+        }
+
+        // --- 进球检测 ---
+        // 玩家进球（球进入上方球门）
+        if (s.ball.y < 0 && inGoalX) {
+          s.playerGoals++;
+          setDisplayScore({ player: s.playerGoals, cpu: s.cpuGoals });
+          s.goalMsg = "进球!";
+          setGoalText("进球!");
+          s.goalTimer = 1.5;
+          setPhase("goal");
+          playGoalSound();
+          // 重置位置
+          s.ball = { x: W / 2, y: H / 2, vx: 0, vy: 0 };
+          resetPositions(s.teamA.players, s.teamB.players);
+        }
+        // CPU进球（球进入下方球门）
+        if (s.ball.y > H && inGoalX) {
+          s.cpuGoals++;
+          setDisplayScore({ player: s.playerGoals, cpu: s.cpuGoals });
+          s.goalMsg = "对方进球...";
+          setGoalText("对方进球...");
+          s.goalTimer = 1.5;
+          setPhase("goal");
+          playGoalSound();
+          s.ball = { x: W / 2, y: H / 2, vx: 0, vy: 0 };
+          resetPositions(s.teamA.players, s.teamB.players);
+        }
+
+        // --- 计时 ---
         s.time -= dt;
-        if (s.time <= 0) { s.time = 0; setPhase("gameover"); }
-        // Speed cap
-        const maxV = 400;
-        s.ball.vx = Math.max(-maxV, Math.min(maxV, s.ball.vx));
-        s.ball.vy = Math.max(-maxV, Math.min(maxV, s.ball.vy));
+        setDisplayTime(Math.max(0, s.time));
+        if (s.time <= 0) {
+          if (s.half === "first") {
+            // 中场休息
+            s.half = "second";
+            s.time = HALF_TIME;
+            s.ball = { x: W / 2, y: H / 2, vx: 0, vy: 0 };
+            resetPositions(s.teamA.players, s.teamB.players);
+            setDisplayHalf("second");
+            setPhase("halftime");
+            playWhistle();
+          } else {
+            // 比赛结束
+            playWhistle();
+            const result: MatchResult = {
+              playerGoals: s.playerGoals,
+              cpuGoals: s.cpuGoals,
+              matchIndex: s.matchIndex,
+            };
+            const newResults = [...s.leagueResults, result];
+            s.leagueResults = newResults;
+            setLeagueResults(newResults);
+            // 计算分数提交
+            const totalGoals = newResults.reduce((sum, r) => sum + r.playerGoals, 0);
+            const wins = newResults.filter(r => r.playerGoals > r.cpuGoals).length;
+            submitScore(totalGoals * 100 + wins * 500);
+            setPhase("matchover");
+          }
+        }
       }
 
-      ctx.save(); ctx.scale(dpr, dpr);
-      // Field
-      ctx.fillStyle = "#0a2e0a"; ctx.fillRect(0, 0, W, H);
-      ctx.strokeStyle = "#1a4a1a"; ctx.lineWidth = 1;
-      ctx.strokeRect(20, 20, W - 40, H - 40);
-      ctx.beginPath(); ctx.arc(W / 2, H / 2, 50, 0, Math.PI * 2); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(20, H / 2); ctx.lineTo(W - 20, H / 2); ctx.stroke();
-      // Goals
-      ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
-      ctx.strokeRect(W / 2 - 50, 0, 100, 10);
-      ctx.strokeRect(W / 2 - 50, H - 10, 100, 10);
+      // 进球动画计时
+      if (currentPhase === "goal" && s) {
+        s.goalTimer -= dt;
+        if (s.goalTimer <= 0) {
+          setPhase("playing");
+        }
+      }
 
-      if (phase === "title") {
-        ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = "#3ea6ff"; ctx.font = "bold 30px sans-serif"; ctx.textAlign = "center";
-        ctx.fillText("Soccer Mini", W / 2, H / 2 - 30);
-        ctx.fillStyle = "#aaa"; ctx.font = "14px sans-serif";
-        ctx.fillText("Arrow keys to move", W / 2, H / 2 + 5);
-        ctx.fillText("Click to Start", W / 2, H / 2 + 30);
-      } else {
-        // CPU paddle
-        ctx.fillStyle = "#ff4757";
-        ctx.beginPath(); ctx.roundRect(s.cpu.x - 30, s.cpu.y - 8, 60, 16, 8); ctx.fill();
-        // Player paddle
+
+      /* ============ RENDER ============ */
+      ctx.save();
+      ctx.scale(dpr, dpr);
+
+      // 球场背景
+      ctx.fillStyle = "#0d3d0d";
+      ctx.fillRect(0, 0, W, H);
+
+      // 球场线条
+      ctx.strokeStyle = "rgba(255,255,255,0.2)";
+      ctx.lineWidth = 1.5;
+      // 边界
+      ctx.strokeRect(16, 16, W - 32, H - 32);
+      // 中线
+      ctx.beginPath();
+      ctx.moveTo(16, H / 2);
+      ctx.lineTo(W - 16, H / 2);
+      ctx.stroke();
+      // 中圈
+      ctx.beginPath();
+      ctx.arc(W / 2, H / 2, 50, 0, Math.PI * 2);
+      ctx.stroke();
+      // 中点
+      ctx.fillStyle = "rgba(255,255,255,0.3)";
+      ctx.beginPath();
+      ctx.arc(W / 2, H / 2, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 上方禁区
+      ctx.strokeStyle = "rgba(255,255,255,0.2)";
+      ctx.strokeRect(W / 2 - 80, 16, 160, 60);
+      // 下方禁区
+      ctx.strokeRect(W / 2 - 80, H - 76, 160, 60);
+
+      // 球门
+      ctx.fillStyle = "rgba(255,255,255,0.15)";
+      ctx.fillRect(W / 2 - GOAL_W / 2, 0, GOAL_W, GOAL_H);
+      ctx.fillRect(W / 2 - GOAL_W / 2, H - GOAL_H, GOAL_W, GOAL_H);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      // 上球门
+      ctx.beginPath();
+      ctx.moveTo(W / 2 - GOAL_W / 2, GOAL_H);
+      ctx.lineTo(W / 2 - GOAL_W / 2, 0);
+      ctx.lineTo(W / 2 + GOAL_W / 2, 0);
+      ctx.lineTo(W / 2 + GOAL_W / 2, GOAL_H);
+      ctx.stroke();
+      // 下球门
+      ctx.beginPath();
+      ctx.moveTo(W / 2 - GOAL_W / 2, H - GOAL_H);
+      ctx.lineTo(W / 2 - GOAL_W / 2, H);
+      ctx.lineTo(W / 2 + GOAL_W / 2, H);
+      ctx.lineTo(W / 2 + GOAL_W / 2, H - GOAL_H);
+      ctx.stroke();
+
+      if (currentPhase === "title") {
+        // 标题画面
+        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        ctx.fillRect(0, 0, W, H);
+
         ctx.fillStyle = "#3ea6ff";
-        ctx.beginPath(); ctx.roundRect(s.player.x - 30, s.player.y - 8, 60, 16, 8); ctx.fill();
-        // Ball
-        ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(s.ball.x, s.ball.y, 8, 0, Math.PI * 2); ctx.fill();
-        // HUD
-        ctx.fillStyle = "#fff"; ctx.font = "bold 20px sans-serif"; ctx.textAlign = "center";
-        ctx.fillText(`${s.playerScore} - ${s.cpuScore}`, W / 2, H / 2 + 6);
-        ctx.fillStyle = "#aaa"; ctx.font = "14px sans-serif";
-        ctx.fillText(`${Math.ceil(s.time)}s`, W / 2, H / 2 + 26);
+        ctx.font = "bold 36px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("绿茵风暴", W / 2, H / 2 - 100);
 
-        if (phase === "goal") {
-          ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, H / 2 - 40, W, 80);
-          ctx.fillStyle = "#ffd700"; ctx.font = "bold 32px sans-serif"; ctx.textAlign = "center";
-          ctx.fillText(s.goalMsg, W / 2, H / 2 + 10);
+        ctx.fillStyle = "#aaa";
+        ctx.font = "13px sans-serif";
+        ctx.fillText("WASD/方向键 移动 | 空格 射门 | Q/E 切换球员", W / 2, H / 2 - 60);
+
+        // 难度选择
+        const diffs: Difficulty[] = ["easy", "normal", "hard"];
+        const diffColors = ["#2ed573", "#f0b90b", "#ff4757"];
+        for (let i = 0; i < diffs.length; i++) {
+          const bx = W / 2 - 120 + i * 85;
+          const by = H / 2 - 20;
+          const isHover = difficulty === diffs[i];
+          ctx.fillStyle = isHover ? diffColors[i] : "#333";
+          ctx.beginPath();
+          ctx.roundRect(bx, by, 75, 32, 6);
+          ctx.fill();
+          ctx.fillStyle = isHover ? "#000" : "#aaa";
+          ctx.font = "bold 13px sans-serif";
+          ctx.fillText(DIFF_LABELS[diffs[i]], bx + 37, by + 21);
         }
-        if (phase === "gameover") {
-          ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(0, 0, W, H);
-          ctx.fillStyle = s.playerScore > s.cpuScore ? "#2ed573" : "#ff4757";
-          ctx.font = "bold 28px sans-serif"; ctx.textAlign = "center";
-          ctx.fillText(s.playerScore > s.cpuScore ? "You Win!" : s.playerScore < s.cpuScore ? "CPU Wins" : "Draw", W / 2, H / 2 - 20);
-          ctx.fillStyle = "#fff"; ctx.font = "18px sans-serif";
-          ctx.fillText(`${s.playerScore} - ${s.cpuScore}`, W / 2, H / 2 + 14);
-          ctx.fillStyle = "#aaa"; ctx.font = "14px sans-serif";
-          ctx.fillText("Click to Restart", W / 2, H / 2 + 44);
+
+        // 开始按钮
+        ctx.fillStyle = "#3ea6ff";
+        ctx.beginPath();
+        ctx.roundRect(W / 2 - 80, H / 2 + 30, 160, 40, 8);
+        ctx.fill();
+        ctx.fillStyle = "#000";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillText("开始比赛", W / 2, H / 2 + 56);
+
+        // 联赛按钮
+        ctx.fillStyle = "#f0b90b";
+        ctx.beginPath();
+        ctx.roundRect(W / 2 - 80, H / 2 + 85, 160, 40, 8);
+        ctx.fill();
+        ctx.fillStyle = "#000";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillText("联赛模式 (3场)", W / 2, H / 2 + 111);
+
+      } else if (s) {
+        // 绘制球员
+        const drawPlayer = (p: Player, color: string, idx: number, isSelected: boolean) => {
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, PLAYER_R, 0, Math.PI * 2);
+          ctx.fill();
+          if (isSelected) {
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, PLAYER_R + 3, 0, Math.PI * 2);
+            ctx.stroke();
+            // 选中指示器
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y - PLAYER_R - 8);
+            ctx.lineTo(p.x - 4, p.y - PLAYER_R - 14);
+            ctx.lineTo(p.x + 4, p.y - PLAYER_R - 14);
+            ctx.closePath();
+            ctx.fill();
+          }
+          // 球员编号
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 9px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(`${idx + 1}`, p.x, p.y + 3);
+        };
+
+        // 队伍A（玩家）
+        for (let i = 0; i < s.teamA.players.length; i++) {
+          drawPlayer(s.teamA.players[i], s.teamA.color, i, i === s.selectedIdx);
+        }
+        // 队伍B（AI）
+        for (let i = 0; i < s.teamB.players.length; i++) {
+          drawPlayer(s.teamB.players[i], s.teamB.color, i, false);
+        }
+
+        // 球
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(s.ball.x, s.ball.y, BALL_R, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#999";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(s.ball.x, s.ball.y, BALL_R, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // HUD
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(0, 0, W, 36);
+        ctx.fillStyle = "#3ea6ff";
+        ctx.font = "bold 14px sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText("我的球队", 12, 24);
+        ctx.fillStyle = "#ff4757";
+        ctx.textAlign = "right";
+        ctx.fillText(s.teamB.name, W - 12, 24);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 18px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(`${s.playerGoals} - ${s.cpuGoals}`, W / 2, 26);
+        // 时间和半场
+        ctx.fillStyle = "#aaa";
+        ctx.font = "11px sans-serif";
+        const halfLabel = s.half === "first" ? "上半场" : "下半场";
+        const timeStr = `${halfLabel} ${Math.ceil(s.time)}s`;
+        ctx.fillText(timeStr, W / 2, 12);
+
+        // 进球动画
+        if (currentPhase === "goal") {
+          ctx.fillStyle = "rgba(0,0,0,0.5)";
+          ctx.fillRect(0, H / 2 - 40, W, 80);
+          ctx.fillStyle = "#ffd700";
+          ctx.font = "bold 36px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(s.goalMsg, W / 2, H / 2 + 12);
+        }
+
+        // 中场休息
+        if (currentPhase === "halftime") {
+          ctx.fillStyle = "rgba(0,0,0,0.7)";
+          ctx.fillRect(0, 0, W, H);
+          ctx.fillStyle = "#3ea6ff";
+          ctx.font = "bold 28px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("中场休息", W / 2, H / 2 - 30);
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 22px sans-serif";
+          ctx.fillText(`${s.playerGoals} - ${s.cpuGoals}`, W / 2, H / 2 + 10);
+          ctx.fillStyle = "#aaa";
+          ctx.font = "14px sans-serif";
+          ctx.fillText("点击继续下半场", W / 2, H / 2 + 45);
+        }
+
+        // 比赛结束
+        if (currentPhase === "matchover") {
+          ctx.fillStyle = "rgba(0,0,0,0.8)";
+          ctx.fillRect(0, 0, W, H);
+          const won = s.playerGoals > s.cpuGoals;
+          const draw = s.playerGoals === s.cpuGoals;
+          ctx.fillStyle = won ? "#2ed573" : draw ? "#f0b90b" : "#ff4757";
+          ctx.font = "bold 30px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(won ? "胜利!" : draw ? "平局" : "失败", W / 2, H / 2 - 60);
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 24px sans-serif";
+          ctx.fillText(`${s.playerGoals} - ${s.cpuGoals}`, W / 2, H / 2 - 20);
+          ctx.fillStyle = "#aaa";
+          ctx.font = "14px sans-serif";
+          ctx.fillText("比赛结束", W / 2, H / 2 + 10);
+
+          if (leagueMode && s.matchIndex < 2) {
+            ctx.fillStyle = "#3ea6ff";
+            ctx.beginPath();
+            ctx.roundRect(W / 2 - 70, H / 2 + 30, 140, 36, 6);
+            ctx.fill();
+            ctx.fillStyle = "#000";
+            ctx.font = "bold 14px sans-serif";
+            ctx.fillText("下一场比赛", W / 2, H / 2 + 53);
+          } else if (leagueMode && s.matchIndex >= 2) {
+            ctx.fillStyle = "#f0b90b";
+            ctx.beginPath();
+            ctx.roundRect(W / 2 - 70, H / 2 + 30, 140, 36, 6);
+            ctx.fill();
+            ctx.fillStyle = "#000";
+            ctx.font = "bold 14px sans-serif";
+            ctx.fillText("查看联赛结果", W / 2, H / 2 + 53);
+          } else {
+            ctx.fillStyle = "#3ea6ff";
+            ctx.beginPath();
+            ctx.roundRect(W / 2 - 60, H / 2 + 30, 120, 36, 6);
+            ctx.fill();
+            ctx.fillStyle = "#000";
+            ctx.font = "bold 14px sans-serif";
+            ctx.fillText("再来一局", W / 2, H / 2 + 53);
+          }
+        }
+
+        // 联赛结果
+        if (currentPhase === "leagueresult") {
+          ctx.fillStyle = "rgba(0,0,0,0.85)";
+          ctx.fillRect(0, 0, W, H);
+          ctx.fillStyle = "#f0b90b";
+          ctx.font = "bold 28px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("联赛结果", W / 2, 80);
+
+          let totalPts = 0;
+          for (let i = 0; i < s.leagueResults.length; i++) {
+            const r = s.leagueResults[i];
+            const won = r.playerGoals > r.cpuGoals;
+            const draw = r.playerGoals === r.cpuGoals;
+            const pts = won ? 3 : draw ? 1 : 0;
+            totalPts += pts;
+            const y = 130 + i * 50;
+            ctx.fillStyle = "#aaa";
+            ctx.font = "13px sans-serif";
+            ctx.textAlign = "left";
+            ctx.fillText(`第${i + 1}场 vs ${LEAGUE_TEAMS[i]}`, 60, y);
+            ctx.fillStyle = won ? "#2ed573" : draw ? "#f0b90b" : "#ff4757";
+            ctx.font = "bold 16px sans-serif";
+            ctx.textAlign = "right";
+            ctx.fillText(`${r.playerGoals} - ${r.cpuGoals}`, W - 100, y);
+            ctx.fillStyle = "#fff";
+            ctx.font = "12px sans-serif";
+            ctx.fillText(`+${pts}分`, W - 50, y);
+          }
+
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 20px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(`总积分: ${totalPts} / 9`, W / 2, 310);
+
+          ctx.fillStyle = totalPts >= 7 ? "#2ed573" : totalPts >= 4 ? "#f0b90b" : "#ff4757";
+          ctx.font = "bold 22px sans-serif";
+          ctx.fillText(
+            totalPts >= 7 ? "冠军! 太强了!" : totalPts >= 4 ? "不错的成绩!" : "继续加油!",
+            W / 2, 350
+          );
+
+          ctx.fillStyle = "#3ea6ff";
+          ctx.beginPath();
+          ctx.roundRect(W / 2 - 60, 390, 120, 36, 6);
+          ctx.fill();
+          ctx.fillStyle = "#000";
+          ctx.font = "bold 14px sans-serif";
+          ctx.fillText("返回主页", W / 2, 413);
         }
       }
+
       ctx.restore();
       rafRef.current = requestAnimationFrame(loop);
     };
-    rafRef.current = requestAnimationFrame(loop);
 
-    const onKey = (e: KeyboardEvent) => { keysRef.current.add(e.key); if ((e.key === "Enter" || e.key === " ") && phase !== "playing" && phase !== "goal") startGame(); };
-    const onKeyUp = (e: KeyboardEvent) => keysRef.current.delete(e.key);
-    const onClick = () => { if (phase !== "playing" && phase !== "goal") startGame(); };
-    let touchX = 0;
-    const onTouchStart = (e: TouchEvent) => { e.preventDefault(); touchX = e.touches[0].clientX; if (phase !== "playing" && phase !== "goal") startGame(); };
-    const onTouchMove = (e: TouchEvent) => {
-      e.preventDefault(); const dx = e.touches[0].clientX - touchX; touchX = e.touches[0].clientX;
-      sRef.current.player.x = Math.max(30, Math.min(W - 30, sRef.current.player.x + dx));
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [phase, difficulty, leagueMode, playKick, playGoalSound, playWhistle, playBounce, findClosestToball, submitScore]);
+
+
+  /* ----------------------------------------------------------------
+     键盘事件
+     ---------------------------------------------------------------- */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      keysRef.current.add(e.key);
+      if (e.key === " " || e.key === "ArrowUp" || e.key === "ArrowDown") e.preventDefault();
+      if ((e.key === "Enter" || e.key === " ") && phase === "halftime") {
+        setPhase("playing");
+      }
     };
-    window.addEventListener("keydown", onKey); window.addEventListener("keyup", onKeyUp);
-    canvas.addEventListener("click", onClick);
+    const onKeyUp = (e: KeyboardEvent) => {
+      keysRef.current.delete(e.key);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [phase]);
+
+  /* ----------------------------------------------------------------
+     Canvas 点击事件
+     ---------------------------------------------------------------- */
+  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W / rect.width);
+    const y = (e.clientY - rect.top) * (H / rect.height);
+
+    if (phase === "title") {
+      // 难度选择
+      const diffs: Difficulty[] = ["easy", "normal", "hard"];
+      for (let i = 0; i < diffs.length; i++) {
+        const bx = W / 2 - 120 + i * 85;
+        const by = H / 2 - 20;
+        if (x >= bx && x <= bx + 75 && y >= by && y <= by + 32) {
+          setDifficulty(diffs[i]);
+          return;
+        }
+      }
+      // 开始比赛
+      if (x >= W / 2 - 80 && x <= W / 2 + 80 && y >= H / 2 + 30 && y <= H / 2 + 70) {
+        startSingleMatch(difficulty);
+        return;
+      }
+      // 联赛模式
+      if (x >= W / 2 - 80 && x <= W / 2 + 80 && y >= H / 2 + 85 && y <= H / 2 + 125) {
+        startLeague(difficulty);
+        return;
+      }
+    }
+
+    if (phase === "halftime") {
+      setPhase("playing");
+      return;
+    }
+
+    if (phase === "matchover") {
+      const s = sRef.current;
+      if (!s) return;
+      if (leagueMode && s.matchIndex < 2) {
+        // 下一场
+        const nextIdx = s.matchIndex + 1;
+        startMatch(s.difficulty, nextIdx, s.leagueResults, true);
+      } else if (leagueMode && s.matchIndex >= 2) {
+        setPhase("leagueresult");
+      } else {
+        startSingleMatch(difficulty);
+      }
+      return;
+    }
+
+    if (phase === "leagueresult") {
+      setPhase("title");
+      return;
+    }
+  }, [phase, difficulty, leagueMode, startSingleMatch, startLeague, startMatch]);
+
+  /* ----------------------------------------------------------------
+     触摸控制
+     ---------------------------------------------------------------- */
+  const touchRef = useRef<{ id: number; sx: number; sy: number } | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      touchRef.current = { id: t.identifier, sx: t.clientX, sy: t.clientY };
+
+      // 如果不在playing状态，模拟点击
+      if (phase !== "playing" && phase !== "goal") {
+        const rect = canvas.getBoundingClientRect();
+        const x = (t.clientX - rect.left) * (W / rect.width);
+        const y = (t.clientY - rect.top) * (H / rect.height);
+
+        if (phase === "title") {
+          const diffs: Difficulty[] = ["easy", "normal", "hard"];
+          for (let i = 0; i < diffs.length; i++) {
+            const bx = W / 2 - 120 + i * 85;
+            const by = H / 2 - 20;
+            if (x >= bx && x <= bx + 75 && y >= by && y <= by + 32) {
+              setDifficulty(diffs[i]);
+              return;
+            }
+          }
+          if (x >= W / 2 - 80 && x <= W / 2 + 80 && y >= H / 2 + 30 && y <= H / 2 + 70) {
+            startSingleMatch(difficulty);
+            return;
+          }
+          if (x >= W / 2 - 80 && x <= W / 2 + 80 && y >= H / 2 + 85 && y <= H / 2 + 125) {
+            startLeague(difficulty);
+            return;
+          }
+        }
+        if (phase === "halftime") { setPhase("playing"); return; }
+        if (phase === "matchover") {
+          const s = sRef.current;
+          if (s && leagueMode && s.matchIndex < 2) {
+            startMatch(s.difficulty, s.matchIndex + 1, s.leagueResults, true);
+          } else if (s && leagueMode && s.matchIndex >= 2) {
+            setPhase("leagueresult");
+          } else {
+            startSingleMatch(difficulty);
+          }
+          return;
+        }
+        if (phase === "leagueresult") { setPhase("title"); return; }
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      if (!touchRef.current || phase !== "playing") return;
+      const t = Array.from(e.changedTouches).find(tt => tt.identifier === touchRef.current!.id);
+      if (!t) return;
+      const dx = t.clientX - touchRef.current.sx;
+      const dy = t.clientY - touchRef.current.sy;
+      touchRef.current.sx = t.clientX;
+      touchRef.current.sy = t.clientY;
+
+      const s = sRef.current;
+      if (!s) return;
+      const cp = s.teamA.players[s.selectedIdx];
+      cp.x = clamp(cp.x + dx * 1.5, PLAYER_R, W - PLAYER_R);
+      cp.y = clamp(cp.y + dy * 1.5, PLAYER_R, H - PLAYER_R);
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+      touchRef.current = null;
+    };
+
     canvas.addEventListener("touchstart", onTouchStart, { passive: false });
     canvas.addEventListener("touchmove", onTouchMove, { passive: false });
-    return () => { cancelAnimationFrame(rafRef.current); window.removeEventListener("keydown", onKey); window.removeEventListener("keyup", onKeyUp); canvas.removeEventListener("click", onClick); canvas.removeEventListener("touchstart", onTouchStart); canvas.removeEventListener("touchmove", onTouchMove); };
-  }, [phase, startGame, resetBall]);
+    canvas.addEventListener("touchend", onTouchEnd, { passive: false });
+    return () => {
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [phase, difficulty, leagueMode, startSingleMatch, startLeague, startMatch]);
 
+  /* ----------------------------------------------------------------
+     触摸射门按钮
+     ---------------------------------------------------------------- */
+  const handleShoot = useCallback(() => {
+    if (phase !== "playing") return;
+    const s = sRef.current;
+    if (!s) return;
+    const cp = s.teamA.players[s.selectedIdx];
+    const d = dist(cp, s.ball);
+    if (d < PLAYER_R + BALL_R + 12) {
+      const [sx, sy] = normalize(W / 2 - cp.x, -cp.y);
+      s.ball.vx = sx * SHOOT_POWER;
+      s.ball.vy = sy * SHOOT_POWER;
+      playKick();
+    }
+  }, [phase, playKick]);
+
+  const handleSwitchPlayer = useCallback(() => {
+    if (phase !== "playing") return;
+    const s = sRef.current;
+    if (!s) return;
+    s.selectedIdx = findClosestToball(s.teamA.players, s.ball);
+  }, [phase, findClosestToball]);
+
+
+  /* ----------------------------------------------------------------
+     JSX 渲染
+     ---------------------------------------------------------------- */
   return (
     <div className="min-h-screen bg-[#0f0f0f] text-white">
       <Header />
-      <div className="max-w-lg mx-auto px-4 py-6">
-        <Link href="/games" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-[#3ea6ff] mb-4"><ChevronLeft size={16} /> Back</Link>
-        <div className="flex items-center gap-2 mb-4"><CircleDot size={24} className="text-[#3ea6ff]" /><h1 className="text-xl font-bold">Soccer Mini</h1></div>
-        <canvas ref={canvasRef} className="w-full rounded-lg border border-white/10" />
-        <button onClick={startGame} className="mt-4 flex items-center gap-2 px-4 py-2 bg-[#3ea6ff] rounded-lg text-sm font-medium hover:bg-[#3ea6ff]/80"><RotateCcw size={14} /> Restart</button>
-      </div>
+      <main className="max-w-2xl mx-auto px-4 py-6">
+        <Link href="/games" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-[#3ea6ff] mb-4">
+          <ChevronLeft size={16} /> 返回游戏中心
+        </Link>
+
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <CircleDot size={24} className="text-[#3ea6ff]" />
+            <h1 className="text-xl font-bold">绿茵风暴</h1>
+          </div>
+          <button
+            onClick={toggleMute}
+            className="p-2 rounded-lg bg-[#1a1a1a] border border-[#333] hover:bg-[#252525] transition"
+            title={muted ? "取消静音" : "静音"}
+          >
+            {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+          </button>
+        </div>
+
+        {/* 比赛信息栏 */}
+        {phase !== "title" && phase !== "leagueresult" && (
+          <div className="flex items-center justify-between mb-3 px-3 py-2 rounded-lg bg-[#1a1a1a] border border-[#333] text-sm">
+            <span className="text-[#3ea6ff] font-bold">我的球队</span>
+            <div className="text-center">
+              <span className="text-white font-bold text-lg">{displayScore.player} - {displayScore.cpu}</span>
+              <div className="text-[10px] text-[#aaa]">
+                {displayHalf === "first" ? "上半场" : "下半场"} {Math.ceil(displayTime)}s
+              </div>
+            </div>
+            <span className="text-[#ff4757] font-bold">{LEAGUE_TEAMS[matchIndex % LEAGUE_TEAMS.length]}</span>
+          </div>
+        )}
+
+        {/* 联赛进度 */}
+        {leagueMode && phase !== "title" && phase !== "leagueresult" && (
+          <div className="flex items-center gap-2 mb-3 text-xs text-[#aaa]">
+            <Trophy size={14} className="text-[#f0b90b]" />
+            <span>联赛 第{matchIndex + 1}/3场</span>
+            {leagueResults.map((r, i) => {
+              const won = r.playerGoals > r.cpuGoals;
+              const draw = r.playerGoals === r.cpuGoals;
+              return (
+                <span key={i} className={`px-1.5 py-0.5 rounded text-[10px] ${won ? "bg-green-900/50 text-green-400" : draw ? "bg-yellow-900/50 text-yellow-400" : "bg-red-900/50 text-red-400"}`}>
+                  {r.playerGoals}-{r.cpuGoals}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Canvas */}
+        <canvas
+          ref={canvasRef}
+          onClick={handleCanvasClick}
+          className="w-full max-w-[480px] mx-auto rounded-lg border border-white/10 cursor-pointer"
+          style={{ aspectRatio: `${W}/${H}` }}
+        />
+
+        {/* 移动端虚拟按钮 */}
+        {phase === "playing" && (
+          <div className="md:hidden mt-4 flex items-center justify-between px-2">
+            {/* 方向键 */}
+            <div className="relative w-32 h-32">
+              <button
+                onTouchStart={() => keysRef.current.add("w")}
+                onTouchEnd={() => keysRef.current.delete("w")}
+                className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-10 rounded-lg bg-[#1a1a1a] border border-[#333] flex items-center justify-center active:bg-[#3ea6ff]/30"
+              >
+                <ArrowUp size={18} />
+              </button>
+              <button
+                onTouchStart={() => keysRef.current.add("s")}
+                onTouchEnd={() => keysRef.current.delete("s")}
+                className="absolute bottom-0 left-1/2 -translate-x-1/2 w-10 h-10 rounded-lg bg-[#1a1a1a] border border-[#333] flex items-center justify-center active:bg-[#3ea6ff]/30"
+              >
+                <ArrowDown size={18} />
+              </button>
+              <button
+                onTouchStart={() => keysRef.current.add("a")}
+                onTouchEnd={() => keysRef.current.delete("a")}
+                className="absolute left-0 top-1/2 -translate-y-1/2 w-10 h-10 rounded-lg bg-[#1a1a1a] border border-[#333] flex items-center justify-center active:bg-[#3ea6ff]/30"
+              >
+                <ArrowLeft size={18} />
+              </button>
+              <button
+                onTouchStart={() => keysRef.current.add("d")}
+                onTouchEnd={() => keysRef.current.delete("d")}
+                className="absolute right-0 top-1/2 -translate-y-1/2 w-10 h-10 rounded-lg bg-[#1a1a1a] border border-[#333] flex items-center justify-center active:bg-[#3ea6ff]/30"
+              >
+                <ArrowRight size={18} />
+              </button>
+            </div>
+
+            {/* 动作按钮 */}
+            <div className="flex flex-col gap-3">
+              <button
+                onTouchStart={handleShoot}
+                className="w-16 h-16 rounded-full bg-[#3ea6ff]/20 border-2 border-[#3ea6ff] text-[#3ea6ff] font-bold text-xs flex items-center justify-center active:bg-[#3ea6ff]/40"
+              >
+                射门
+              </button>
+              <button
+                onTouchStart={handleSwitchPlayer}
+                className="w-16 h-10 rounded-lg bg-[#f0b90b]/20 border border-[#f0b90b] text-[#f0b90b] font-bold text-xs flex items-center justify-center active:bg-[#f0b90b]/40"
+              >
+                切换
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 操作说明 */}
+        {phase === "title" && (
+          <div className="mt-4 p-3 rounded-lg bg-[#1a1a1a] border border-[#333] text-xs text-[#aaa] space-y-1">
+            <p className="text-[#3ea6ff] font-bold text-sm mb-2">操作说明</p>
+            <p>WASD / 方向键 - 移动球员</p>
+            <p>空格 - 射门（靠近球时）</p>
+            <p>Q / E - 切换控制球员</p>
+            <p>移动端 - 滑动移动 / 虚拟按钮</p>
+          </div>
+        )}
+
+        {/* 重新开始按钮 */}
+        {(phase === "playing" || phase === "goal") && (
+          <button
+            onClick={() => setPhase("title")}
+            className="mt-4 flex items-center gap-2 px-4 py-2 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-[#aaa] hover:text-white hover:bg-[#252525] transition"
+          >
+            <RotateCcw size={14} /> 返回主菜单
+          </button>
+        )}
+
+        {/* 存档 & 排行榜 */}
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <GameSaveLoad gameId={GAME_ID} onSave={handleSave} onLoad={handleLoad} />
+          <GameLeaderboard gameId={GAME_ID} />
+        </div>
+      </main>
     </div>
   );
 }
