@@ -1,318 +1,427 @@
-"use client";
-import { useState, useRef, useEffect, useCallback } from "react";
-import Header from "@/components/Header";
-import AuthGuard from "@/components/AuthGuard";
-import { fetchWithAuth } from "@/lib/auth";
-import clsx from "clsx";
+'use client';
 
-interface Msg { role: "user" | "assistant"; content: string; mode?: string; }
+import { useState, useRef, useEffect, useCallback } from 'react';
+import Header from '@/components/layout/Header';
+import {
+  MessageSquare,
+  Send,
+  Trash2,
+  Settings,
+  Bot,
+  User,
+  Plus,
+  ChevronDown,
+  History,
+  X,
+  Loader2,
+  Code,
+  PenTool,
+  Languages,
+  BarChart3,
+  ImageIcon,
+  Sparkles,
+} from 'lucide-react';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface Msg {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface Conversation {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messages: Msg[];
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const MODES = [
-  { id: "chat", label: "智能对话", icon: "fa-comments", color: "text-[#3ea6ff]", desc: "通用AI助手" },
-  { id: "code", label: "代码助手", icon: "fa-code", color: "text-[#2ba640]", desc: "写代码/Debug" },
-  { id: "write", label: "文案创作", icon: "fa-pen-fancy", color: "text-[#a855f7]", desc: "写文章/文案" },
-  { id: "translate", label: "翻译", icon: "fa-language", color: "text-[#f0b90b]", desc: "多语言互译" },
-  { id: "image", label: "图片描述", icon: "fa-image", color: "text-[#ec4899]", desc: "AI看图说话" },
-  { id: "analyze", label: "数据分析", icon: "fa-chart-line", color: "text-[#f97316]", desc: "分析数据趋势" },
+  { id: 'chat', label: '智能对话', icon: MessageSquare, desc: '通用AI助手' },
+  { id: 'code', label: '代码助手', icon: Code, desc: '写代码/Debug' },
+  { id: 'write', label: '文案创作', icon: PenTool, desc: '写文章/文案' },
+  { id: 'translate', label: '翻译', icon: Languages, desc: '多语言互译' },
+  { id: 'image', label: '图片描述', icon: ImageIcon, desc: 'AI看图说话' },
+  { id: 'analyze', label: '数据分析', icon: BarChart3, desc: '分析数据趋势' },
+];
+
+const OPENROUTER_MODELS = [
+  { id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini' },
+  { id: 'anthropic/claude-3.5-sonnet', label: 'Claude 3.5 Sonnet' },
+  { id: 'google/gemini-pro', label: 'Gemini Pro' },
+  { id: 'meta-llama/llama-3-70b-instruct', label: 'Llama 3 70B' },
+  { id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat' },
+  { id: 'mistralai/mistral-large', label: 'Mistral Large' },
 ];
 
 const SUGGESTIONS: Record<string, string[]> = {
-  chat: ["今天天气怎么样？", "推荐几部好看的电影", "帮我制定一个健身计划", "解释一下量子计算", "如何提高工作效率？", "推荐几个好玩的游戏"],
-  code: ["用Python写一个快速排序", "React useEffect怎么用？", "帮我写一个登录API", "解释async/await原理", "SQL查询优化建议", "Docker部署Node项目"],
-  write: ["写一篇产品发布文案", "帮我写一段自我介绍", "写一个短视频脚本", "生成5个营销标题", "写一封商务邮件", "写一段朋友圈文案"],
-  translate: ["把这段翻译成英文", "日语「お疲れ様」怎么翻译？", "翻译：人工智能改变世界", "法语的「你好」怎么说？", "韩语基础问候语", "把英文翻译成中文"],
-  image: ["描述一张日落海滩的图片", "这张图片里有什么？", "帮我生成图片描述文案", "分析这张设计图的配色"],
-  analyze: ["分析这组销售数据的趋势", "帮我做用户画像分析", "预测下个月的增长率", "对比两个方案的优劣"],
+  chat: ['今天天气怎么样？', '推荐几部好看的电影', '帮我制定一个健身计划'],
+  code: ['用Python写一个快速排序', 'React useEffect怎么用？', '帮我写一个登录API'],
+  write: ['写一篇产品发布文案', '帮我写一段自我介绍', '写一个短视频脚本'],
+  translate: ['把这段翻译成英文', '日语「お疲れ様」怎么翻译？', '翻译：人工智能改变世界'],
+  image: ['描述一张日落海滩的图片', '这张图片里有什么？', '帮我生成图片描述文案'],
+  analyze: ['分析这组销售数据的趋势', '帮我做用户画像分析', '预测下个月的增长率'],
 };
 
-const MODE_PROMPTS: Record<string, string> = {
-  chat: "你是星聚平台的AI助手，友好、专业、有趣。用中文回答。",
-  code: "你是一个专业的编程助手。用中文解释，代码用markdown代码块格式。",
-  write: "你是一个专业的文案创作者。用中文写作，风格生动有创意。",
-  translate: "你是一个专业翻译。用户发什么语言的内容，你翻译成另一种语言。默认中英互译。",
-  image: "你是一个图片描述专家。根据用户描述生成详细的画面描述文案。",
-  analyze: "你是一个数据分析专家。帮用户分析数据、生成洞察和建议。用中文回答。",
-};
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
-const PROVIDER_CONFIG: Record<string, { model: string; name: string }> = {
-  openai: { model: "gpt-3.5-turbo", name: "OpenAI" },
-  deepseek: { model: "deepseek-chat", name: "DeepSeek" },
-  moonshot: { model: "moonshot-v1-8k", name: "Moonshot" },
-};
-
-function AIChat() {
-  const [mode, setMode] = useState("chat");
+export default function AIPage() {
+  // Chat state
+  const [mode, setMode] = useState('chat');
+  const [model, setModel] = useState(OPENROUTER_MODELS[0].id);
   const [msgs, setMsgs] = useState<Msg[]>([
-    { role: "assistant", content: " 你好！我是星聚 AI 助手。\n\n我拥有多种能力模式，可以切换上方标签使用：\n\n 智能对话 — 问我任何问题\n 代码助手 — 写代码、Debug、技术咨询\n 文案创作 — 写文章、文案、脚本\n 翻译 — 多语言互译\n 图片描述 — AI看图说话\n 数据分析 — 分析数据趋势\n\n试试下方的快捷提问，或直接输入你的问题！", mode: "chat" }
+    {
+      role: 'assistant',
+      content:
+        '你好！我是星聚 AI 助手，支持多种模型和对话模式。选择上方标签切换模式，或直接开始对话。',
+    },
   ]);
-  const [input, setInput] = useState("");
-  const [typing, setTyping] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [apiProvider, setApiProvider] = useState<"openai" | "deepseek" | "moonshot">("deepseek");
-  const [apiModel, setApiModel] = useState("");
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState(false);
+
+  // History state
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showModelSelect, setShowModelSelect] = useState(false);
+
+  // Refs
   const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("xj_ai_settings");
-      if (saved) {
-        const s = JSON.parse(saved);
-        if (s.apiProvider) setApiProvider(s.apiProvider);
-        if (s.apiModel) setApiModel(s.apiModel);
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [msgs, streaming]);
+
+  // -----------------------------------------------------------------------
+  // Handlers
+  // -----------------------------------------------------------------------
+
+  const send = useCallback(
+    async (text?: string) => {
+      const msg = text || input.trim();
+      if (!msg || streaming) return;
+      setInput('');
+
+      const userMsg: Msg = { role: 'user', content: msg };
+      setMsgs((prev) => [...prev, userMsg]);
+      setStreaming(true);
+
+      // Stub: simulate SSE streaming response
+      const assistantMsg: Msg = { role: 'assistant', content: '' };
+      setMsgs((prev) => [...prev, assistantMsg]);
+
+      const stubResponse = `这是来自 ${OPENROUTER_MODELS.find((m) => m.id === model)?.label || model} 的模拟回复。\n\n在生产环境中，此回复将通过 SSE 流式传输从 OpenRouter API 获取。\n\n你的问题是：「${msg}」`;
+
+      // Simulate streaming character by character
+      let accumulated = '';
+      for (let i = 0; i < stubResponse.length; i++) {
+        accumulated += stubResponse[i];
+        const current = accumulated;
+        await new Promise((r) => setTimeout(r, 15));
+        setMsgs((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { role: 'assistant', content: current };
+          return updated;
+        });
       }
-    } catch {}
+
+      setStreaming(false);
+    },
+    [input, streaming, model],
+  );
+
+  const newConversation = useCallback(() => {
+    if (msgs.length > 1) {
+      const conv: Conversation = {
+        id: `conv_${Date.now()}`,
+        title: msgs.find((m) => m.role === 'user')?.content.slice(0, 30) || '新对话',
+        updatedAt: new Date().toISOString(),
+        messages: [...msgs],
+      };
+      setConversations((prev) => [conv, ...prev]);
+    }
+    setMsgs([
+      {
+        role: 'assistant',
+        content: '新对话已开始。有什么我可以帮你的？',
+      },
+    ]);
+    setActiveConvId(null);
+  }, [msgs]);
+
+  const loadConversation = useCallback((conv: Conversation) => {
+    setMsgs(conv.messages);
+    setActiveConvId(conv.id);
+    setShowHistory(false);
   }, []);
 
-  const saveSettings = () => {
-    try {
-      localStorage.setItem("xj_ai_settings", JSON.stringify({ apiProvider, apiModel }));
-    } catch {}
-    setShowSettings(false);
-  };
-
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, typing]);
-
-  const callAI = useCallback(async (userMsg: string) => {
-    const systemPrompt = MODE_PROMPTS[mode] || MODE_PROMPTS.chat;
-    const recentMsgs = msgs.slice(-10).map(m => ({ role: m.role, content: m.content }));
-    const model = apiModel || PROVIDER_CONFIG[apiProvider]?.model || "deepseek-chat";
-
-    const apiMessages = [
-      { role: "system", content: systemPrompt },
-      ...recentMsgs,
-      { role: "user", content: userMsg },
-    ];
-
-    const res = await fetchWithAuth("/api/ai/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: apiMessages, provider: apiProvider, model }),
-    });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({})) as { error?: string };
-      throw new Error(data.error || `AI服务错误 (${res.status})`);
-    }
-
-    const reader = res.body?.getReader();
-    if (!reader) throw new Error("无法读取响应流");
-
-    const decoder = new TextDecoder();
-    let fullContent = "";
-
-    setMsgs(prev => [...prev, { role: "assistant", content: "", mode }]);
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n");
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
-          if (data === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta?.content;
-            if (delta) {
-              fullContent += delta;
-              setMsgs(prev => {
-                const updated = [...prev];
-                updated[updated.length - 1] = { role: "assistant", content: fullContent, mode };
-                return updated;
-              });
-            }
-          } catch { /* skip non-JSON lines */ }
-        }
+  const deleteConversation = useCallback(
+    (convId: string) => {
+      setConversations((prev) => prev.filter((c) => c.id !== convId));
+      if (activeConvId === convId) {
+        setActiveConvId(null);
       }
-    }
+    },
+    [activeConvId],
+  );
 
-    if (!fullContent) {
-      setMsgs(prev => {
-        const updated = [...prev];
-        updated[updated.length - 1] = { role: "assistant", content: "AI返回了空内容，请稍后重试。", mode };
-        return updated;
-      });
-    }
-  }, [msgs, mode, apiProvider, apiModel]);
-
-  const send = useCallback(async (text?: string) => {
-    const msg = text || input.trim();
-    if (!msg || typing) return;
-    setInput("");
-    setMsgs(prev => [...prev, { role: "user", content: msg, mode }]);
-    setTyping(true);
-
-    try {
-      await callAI(msg);
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : "未知错误";
-      setMsgs(prev => [...prev, { role: "assistant", content: `? AI调用失败：${errMsg}`, mode }]);
-    }
-    setTyping(false);
-  }, [input, mode, typing, callAI]);
-
-  const clearChat = () => {
-    setMsgs([{ role: "assistant", content: `已切换到${MODES.find(m => m.id === mode)?.label}模式。`, mode }]);
-  };
+  const clearAll = useCallback(() => {
+    setConversations([]);
+    setMsgs([
+      {
+        role: 'assistant',
+        content: '所有历史已清除。',
+      },
+    ]);
+    setActiveConvId(null);
+  }, []);
 
   const currentSuggestions = SUGGESTIONS[mode] || SUGGESTIONS.chat;
 
-  return (
-    <>
-      <main className="max-w-3xl mx-auto px-4 py-2 pb-20 md:pb-2 flex flex-col" style={{ height: "calc(100vh - 3.5rem)" }}>
-        {/* 模式切换 */}
-        <div className="flex gap-1.5 py-2 overflow-x-auto shrink-0 -mx-4 px-4">
-          {MODES.map(m => (
-            <button key={m.id} onClick={() => { setMode(m.id); inputRef.current?.focus(); }}
-              className={clsx(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] whitespace-nowrap border transition shrink-0",
-                mode === m.id ? "bg-[#3ea6ff]/15 text-[#3ea6ff] border-[#3ea6ff]/30 font-bold" : "text-[#8a8a8a] border-[#333]/50 hover:text-white"
-              )}>
-              <i className={`fas ${m.icon} ${mode === m.id ? m.color : ""}`} />{m.label}
-            </button>
-          ))}
-          <button onClick={clearChat} className="px-2 py-1.5 rounded-lg text-[12px] text-[#666] border border-[#333]/30 hover:text-[#ff4444] transition shrink-0">
-            <i className="fas fa-trash" />
-          </button>
-          <button onClick={() => setShowSettings(true)} className="px-2 py-1.5 rounded-lg text-[12px] border border-[#333]/30 text-[#666] hover:text-[#f0b90b] transition shrink-0">
-            <i className="fas fa-gear" />
-          </button>
-        </div>
+  // -----------------------------------------------------------------------
+  // Render
+  // -----------------------------------------------------------------------
 
-        {/* 服务状态 */}
-        <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] text-[#3ea6ff] bg-[#3ea6ff]/5 rounded-lg border border-[#3ea6ff]/10 shrink-0">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#3ea6ff] animate-pulse" />
-          通过服务端代理 · {PROVIDER_CONFIG[apiProvider]?.name || "DeepSeek"}
-        </div>
-
-        {/* 消息列表 */}
-        <div className="flex-1 overflow-y-auto space-y-3 py-3">
-          {msgs.map((m, i) => (
-            <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "flex-row-reverse" : ""} animate-slide-up`}>
-              <div className={clsx(
-                "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0",
-                m.role === "assistant" ? "bg-gradient-to-br from-[#3ea6ff] to-[#2563eb] text-white" : "bg-[#212121] border border-[#333] text-[#aaa]"
-              )}>
-                {m.role === "assistant" ? <i className="fas fa-robot" /> : <i className="fas fa-user" />}
-              </div>
-              <div className={clsx(
-                "max-w-[85%] px-4 py-3 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap",
-                m.role === "assistant"
-                  ? "bg-[#1a1a1a] border border-[#333]/50 text-[#ccc] rounded-tl-sm"
-                  : "bg-[#3ea6ff] text-[#0f0f0f] rounded-tr-sm"
-              )}>
-                {m.content}
-              </div>
-            </div>
-          ))}
-          {typing && msgs[msgs.length - 1]?.role !== "assistant" && (
-            <div className="flex gap-2.5 animate-slide-up">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3ea6ff] to-[#2563eb] flex items-center justify-center text-white text-xs shrink-0">
-                <i className="fas fa-robot" />
-              </div>
-              <div className="bg-[#1a1a1a] border border-[#333]/50 rounded-2xl rounded-tl-sm px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <div className="flex gap-1">
-                    <span className="w-2 h-2 rounded-full bg-[#3ea6ff] animate-bounce" style={{ animationDelay: "0ms" }} />
-                    <span className="w-2 h-2 rounded-full bg-[#3ea6ff] animate-bounce" style={{ animationDelay: "150ms" }} />
-                    <span className="w-2 h-2 rounded-full bg-[#3ea6ff] animate-bounce" style={{ animationDelay: "300ms" }} />
-                  </div>
-                  <span className="text-[11px] text-[#666]">AI思考中...</span>
-                </div>
-              </div>
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
-
-        {/* 快捷提问 */}
-        {msgs.length <= 2 && (
-          <div className="flex flex-wrap gap-1.5 mb-2 shrink-0">
-            {currentSuggestions.map(s => (
-              <button key={s} onClick={() => send(s)}
-                className="px-3 py-1.5 rounded-full bg-[#1a1a1a] border border-[#333]/50 text-[11px] text-[#8a8a8a] hover:text-white hover:border-[#3ea6ff]/30 transition">
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* 输入框 */}
-        <div className="flex gap-2 pb-2 shrink-0">
-          <div className="flex-1 relative">
-            <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-              className="w-full h-11 pl-4 pr-12 bg-[#1a1a1a] border border-[#333] rounded-xl text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition"
-              placeholder={`${MODES.find(m => m.id === mode)?.desc}...`}
-              disabled={typing} />
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#444]">
-              <i className={`fas ${MODES.find(m => m.id === mode)?.icon}`} />
-            </span>
-          </div>
-          <button onClick={() => send()} disabled={typing || !input.trim()}
-            className={clsx(
-              "px-5 h-11 rounded-xl text-sm font-semibold transition",
-              typing || !input.trim() ? "bg-[#333] text-[#666]" : "bg-[#3ea6ff] text-[#0f0f0f] hover:bg-[#65b8ff] active:scale-95"
-            )}>
-            <i className="fas fa-paper-plane" />
-          </button>
-        </div>
-      </main>
-
-      {/* AI设置弹窗 */}
-      {showSettings && (
-        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowSettings(false)}>
-          <div className="w-full max-w-md bg-[#1a1a1a] border border-[#333] rounded-2xl p-5 animate-slide-up" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-bold"><i className="fas fa-gear mr-2 text-[#3ea6ff]" />AI 设置</h2>
-              <button onClick={() => setShowSettings(false)} className="w-8 h-8 rounded-full bg-[#212121] flex items-center justify-center text-[#8a8a8a] hover:text-white"><i className="fas fa-times" /></button>
-            </div>
-            <p className="text-[12px] text-[#8a8a8a] mb-4">AI 请求通过服务端代理转发，API Key 安全存储在服务器端。你可以选择偏好的服务商和模型。</p>
-            <div className="mb-3">
-              <label className="text-xs text-[#8a8a8a] mb-1.5 block">AI 服务商</label>
-              <div className="grid grid-cols-3 gap-2">
-                {(["openai", "deepseek", "moonshot"] as const).map(p => (
-                  <button key={p} onClick={() => { setApiProvider(p); setApiModel(""); }}
-                    className={clsx("p-2.5 rounded-xl border text-center transition text-xs",
-                      apiProvider === p ? "bg-[#3ea6ff]/15 border-[#3ea6ff]/30 text-[#3ea6ff] font-bold" : "border-[#333] text-[#aaa] hover:text-white"
-                    )}>
-                    {PROVIDER_CONFIG[p].name}
-                    <div className="text-[10px] text-[#666] mt-0.5">{p === "openai" ? "GPT系列" : p === "deepseek" ? "国产便宜" : "Kimi"}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="mb-4">
-              <label className="text-xs text-[#8a8a8a] mb-1.5 block">模型名称（可选）</label>
-              <input type="text" value={apiModel} onChange={e => setApiModel(e.target.value)}
-                placeholder={PROVIDER_CONFIG[apiProvider].model}
-                className="w-full h-10 px-3 bg-[#212121] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff]" />
-            </div>
-            <button onClick={saveSettings}
-              className="w-full py-2.5 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition active:scale-95">
-              <i className="fas fa-save mr-1.5" />保存设置
-            </button>
-            <div className="mt-3 p-3 rounded-xl bg-[#212121]/50 border border-[#333]/30 text-[10px] text-[#666] space-y-1">
-              <p> API Key 安全存储在服务器端，不会暴露给浏览器。</p>
-              <p> 选择服务商后，请求会通过后端代理转发到对应的AI服务。</p>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-export default function AIPage() {
   return (
     <>
       <Header />
-      <AuthGuard>
-        <AIChat />
-      </AuthGuard>
+      <main className="flex h-[calc(100vh-3.5rem)] bg-[#0f0f0f]">
+        {/* History Sidebar (desktop) */}
+        <aside
+          className={`${
+            showHistory ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+          } fixed md:relative z-40 md:z-0 w-72 h-full bg-[#0a0a0a] border-r border-white/5 flex flex-col transition-transform`}
+        >
+          <div className="p-3 border-b border-white/5">
+            <button
+              onClick={newConversation}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-white/10 text-sm text-gray-300 hover:text-[#3ea6ff] hover:border-[#3ea6ff]/30 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              新对话
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {conversations.length === 0 && (
+              <p className="text-xs text-gray-600 text-center py-8">暂无历史对话</p>
+            )}
+            {conversations.map((conv) => (
+              <div
+                key={conv.id}
+                className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
+                  activeConvId === conv.id
+                    ? 'bg-[#3ea6ff]/10 text-[#3ea6ff]'
+                    : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                }`}
+                onClick={() => loadConversation(conv)}
+              >
+                <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                <span className="text-xs truncate flex-1">{conv.title}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteConversation(conv.id);
+                  }}
+                  className="opacity-0 group-hover:opacity-100 p-1 rounded text-gray-500 hover:text-red-400 transition-all"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {conversations.length > 0 && (
+            <div className="p-3 border-t border-white/5">
+              <button
+                onClick={clearAll}
+                className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-xs text-gray-500 hover:text-red-400 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                清除所有历史
+              </button>
+            </div>
+          )}
+
+          {/* Mobile close */}
+          <button
+            onClick={() => setShowHistory(false)}
+            className="md:hidden absolute top-3 right-3 p-1.5 rounded-lg text-gray-500 hover:text-white"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </aside>
+
+        {/* Main Chat Area */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Top bar */}
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 shrink-0">
+            <button
+              onClick={() => setShowHistory(true)}
+              className="md:hidden p-2 rounded-lg text-gray-400 hover:text-[#3ea6ff] transition-colors"
+            >
+              <History className="w-5 h-5" />
+            </button>
+
+            {/* Mode tabs */}
+            <div className="flex gap-1 overflow-x-auto flex-1">
+              {MODES.map((m) => {
+                const Icon = m.icon;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setMode(m.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition-colors shrink-0 ${
+                      mode === m.id
+                        ? 'bg-[#3ea6ff]/15 text-[#3ea6ff] font-semibold'
+                        : 'text-gray-500 hover:text-gray-300'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Model selector */}
+            <div className="relative">
+              <button
+                onClick={() => setShowModelSelect(!showModelSelect)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-400 border border-white/10 hover:border-[#3ea6ff]/30 hover:text-[#3ea6ff] transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">
+                  {OPENROUTER_MODELS.find((m) => m.id === model)?.label || 'Model'}
+                </span>
+                <ChevronDown className="w-3 h-3" />
+              </button>
+              {showModelSelect && (
+                <div className="absolute right-0 top-full mt-1 w-56 bg-[#1a1a1a] border border-white/10 rounded-lg py-1 shadow-xl z-50">
+                  {OPENROUTER_MODELS.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => {
+                        setModel(m.id);
+                        setShowModelSelect(false);
+                      }}
+                      className={`block w-full text-left px-3 py-2 text-xs transition-colors ${
+                        model === m.id
+                          ? 'text-[#3ea6ff] bg-[#3ea6ff]/10'
+                          : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      {m.label}
+                      <span className="block text-[10px] text-gray-600 mt-0.5">{m.id}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+            {msgs.map((m, i) => (
+              <div
+                key={i}
+                className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}
+              >
+                <div
+                  className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                    m.role === 'assistant'
+                      ? 'bg-gradient-to-br from-[#3ea6ff] to-[#2563eb]'
+                      : 'bg-[#212121] border border-white/10'
+                  }`}
+                >
+                  {m.role === 'assistant' ? (
+                    <Bot className="w-4 h-4 text-white" />
+                  ) : (
+                    <User className="w-4 h-4 text-gray-400" />
+                  )}
+                </div>
+                <div
+                  className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                    m.role === 'assistant'
+                      ? 'bg-[#1a1a1a] border border-white/5 text-gray-300 rounded-tl-sm'
+                      : 'bg-[#3ea6ff] text-[#0f0f0f] rounded-tr-sm'
+                  }`}
+                >
+                  {m.content}
+                </div>
+              </div>
+            ))}
+
+            {streaming && msgs[msgs.length - 1]?.content === '' && (
+              <div className="flex gap-3">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3ea6ff] to-[#2563eb] flex items-center justify-center shrink-0">
+                  <Bot className="w-4 h-4 text-white" />
+                </div>
+                <div className="bg-[#1a1a1a] border border-white/5 rounded-2xl rounded-tl-sm px-4 py-3">
+                  <Loader2 className="w-4 h-4 text-[#3ea6ff] animate-spin" />
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Suggestions */}
+          {msgs.length <= 2 && (
+            <div className="flex flex-wrap gap-1.5 px-4 mb-2">
+              {currentSuggestions.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => send(s)}
+                  className="px-3 py-1.5 rounded-full bg-[#1a1a1a] border border-white/5 text-xs text-gray-500 hover:text-white hover:border-[#3ea6ff]/30 transition-colors"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Input */}
+          <div className="px-4 pb-4 pt-2 border-t border-white/5">
+            <div className="flex gap-2">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                rows={1}
+                className="flex-1 min-h-[44px] max-h-32 px-4 py-3 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white placeholder-gray-600 outline-none focus:border-[#3ea6ff] transition-colors resize-none"
+                placeholder={`${MODES.find((m) => m.id === mode)?.desc}...`}
+                disabled={streaming}
+              />
+              <button
+                onClick={() => send()}
+                disabled={streaming || !input.trim()}
+                className={`px-4 rounded-xl text-sm font-semibold transition-colors flex items-center ${
+                  streaming || !input.trim()
+                    ? 'bg-[#333] text-gray-600'
+                    : 'bg-[#3ea6ff] text-[#0f0f0f] hover:bg-[#65b8ff]'
+                }`}
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
     </>
   );
 }

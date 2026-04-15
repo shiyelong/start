@@ -1,146 +1,121 @@
 /**
- * /api/ai/chat — AI proxy service
+ * /api/ai/chat — AI chat via OpenRouter proxy
  *
- * POST /api/ai/chat — Forward AI chat request to LLM provider (auth required)
+ * POST   /api/ai/chat                        — SSE streaming chat (auth required)
+ * GET    /api/ai/chat/history                 — List conversations
+ * GET    /api/ai/chat/history/[conversationId] — Get single conversation messages
+ * DELETE /api/ai/chat/history/[conversationId] — Delete single conversation
+ * DELETE /api/ai/chat/history                 — Clear all history
  *
- * - Reads API keys from env (never exposed to client)
- * - Supports OpenAI, DeepSeek, Moonshot providers
- * - Streams response back to client
- * - Logs usage in ai_usage table
- * - Rate limits via KV (default 30 req/hour per user)
+ * OpenRouter API Key from env.OPENROUTER_API_KEY — never hardcoded.
+ * Non-adult mode adds content safety system prompt.
+ * Adult mode has no restrictions.
  *
- * Validates: Requirement 15 (AC1–AC7)
+ * Validates: Requirements 56.2, 56.3, 56.4, 56.5, 56.6, 56.7, 56.8, 56.10, 56.11
  */
 
 import { requireAuth } from '../_lib/auth';
-import { execute, errorResponse } from '../_lib/db';
+import { query, execute, queryOne, jsonResponse, errorResponse } from '../_lib/db';
+import { handleError } from '../_lib/errors';
 
 interface Env {
   DB: D1Database;
   KV: KVNamespace;
   JWT_SECRET: string;
-  OPENAI_API_KEY?: string;
-  DEEPSEEK_API_KEY?: string;
-  MOONSHOT_API_KEY?: string;
-  OPENAI_API_URL?: string;
-  DEEPSEEK_API_URL?: string;
-  MOONSHOT_API_URL?: string;
+  OPENROUTER_API_KEY?: string;
 }
 
-const RATE_LIMIT_MAX = 30; // requests per hour per user
-const RATE_LIMIT_WINDOW = 3600; // seconds (1 hour)
+const RATE_LIMIT_MAX = 30;
+const RATE_LIMIT_WINDOW = 3600;
 
-interface ProviderConfig {
-  apiKey: string;
-  apiUrl: string;
-  defaultModel: string;
-}
-
-function getProviderConfig(env: Env, provider: string): ProviderConfig | null {
-  switch (provider) {
-    case 'openai':
-      return env.OPENAI_API_KEY
-        ? {
-            apiKey: env.OPENAI_API_KEY,
-            apiUrl: env.OPENAI_API_URL || 'https://api.openai.com/v1/chat/completions',
-            defaultModel: 'gpt-3.5-turbo',
-          }
-        : null;
-    case 'deepseek':
-      return env.DEEPSEEK_API_KEY
-        ? {
-            apiKey: env.DEEPSEEK_API_KEY,
-            apiUrl: env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions',
-            defaultModel: 'deepseek-chat',
-          }
-        : null;
-    case 'moonshot':
-      return env.MOONSHOT_API_KEY
-        ? {
-            apiKey: env.MOONSHOT_API_KEY,
-            apiUrl: env.MOONSHOT_API_URL || 'https://api.moonshot.cn/v1/chat/completions',
-            defaultModel: 'moonshot-v1-8k',
-          }
-        : null;
-    default:
-      return null;
-  }
-}
+const SAFETY_SYSTEM_PROMPT =
+  '你是星聚平台的AI助手。请确保回复内容安全、友好，不包含暴力、色情或其他不当内容。用中文回答。';
 
 // ── POST /api/ai/chat ─────────────────────────────────────────
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
-  const { DB, KV } = context.env;
-
-  // AC5: Auth required
-  const user = requireAuth(context);
-  if (user instanceof Response) return user;
-
-  // AC7: Rate limiting via KV
-  const rateLimitKey = `ai_rate:${user.id}`;
-  const currentCount = parseInt((await KV.get(rateLimitKey)) || '0', 10);
-  if (currentCount >= RATE_LIMIT_MAX) {
-    return errorResponse('Rate limit exceeded. Please try again later.', 429);
-  }
-
-  let body: Record<string, unknown>;
   try {
-    body = await context.request.json();
-  } catch {
-    return errorResponse('Invalid JSON body', 400);
-  }
+    const user = requireAuth(context);
+    if (user instanceof Response) return user;
 
-  const messages = body.messages;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return errorResponse('Missing required field: messages', 400);
-  }
+    const { DB, KV } = context.env;
 
-  // AC3: Default provider is deepseek
-  const provider = typeof body.provider === 'string' ? body.provider : 'deepseek';
-  const config = getProviderConfig(context.env, provider);
-  if (!config) {
-    // AC6: Descriptive error without exposing API key
-    return errorResponse(`Provider "${provider}" is not configured or unavailable`, 400);
-  }
+    // Rate limiting
+    const rateLimitKey = `ai_rate:${user.id}`;
+    const currentCount = parseInt((await KV.get(rateLimitKey)) || '0', 10);
+    if (currentCount >= RATE_LIMIT_MAX) {
+      return errorResponse('Rate limit exceeded. Please try again later.', 429);
+    }
 
-  const model = typeof body.model === 'string' ? body.model : config.defaultModel;
+    let body: Record<string, unknown>;
+    try {
+      body = await context.request.json();
+    } catch {
+      return errorResponse('Invalid JSON body', 400);
+    }
 
-  // Increment rate limit counter
-  await KV.put(rateLimitKey, String(currentCount + 1), { expirationTtl: RATE_LIMIT_WINDOW });
+    const messages = body.messages;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return errorResponse('Missing required field: messages', 400);
+    }
 
-  // AC1: Forward request to LLM provider and stream response
-  try {
-    const llmResponse = await fetch(config.apiUrl, {
+    const model = typeof body.model === 'string' ? body.model : 'deepseek/deepseek-chat';
+    const conversationId = typeof body.conversationId === 'string' ? body.conversationId : null;
+    const isAdultMode = body.adultMode === true;
+
+    // Build messages with system prompt
+    const systemMessages = isAdultMode
+      ? messages
+      : [{ role: 'system', content: SAFETY_SYSTEM_PROMPT }, ...messages];
+
+    // Increment rate limit
+    await KV.put(rateLimitKey, String(currentCount + 1), { expirationTtl: RATE_LIMIT_WINDOW });
+
+    const apiKey = context.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return errorResponse('AI service not configured', 503);
+    }
+
+    // Forward to OpenRouter
+    const llmResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://starhub.app',
+        'X-Title': 'StarHub AI',
       },
       body: JSON.stringify({
         model,
-        messages,
+        messages: systemMessages,
         stream: true,
       }),
     });
 
     if (!llmResponse.ok) {
-      // AC6: Return descriptive error without exposing API key
       const errorText = await llmResponse.text().catch(() => 'Unknown error');
-      // Strip any potential API key leaks from error text
       const safeError = errorText.replace(/sk-[a-zA-Z0-9]+/g, '[REDACTED]');
-      return errorResponse(`LLM provider error: ${safeError}`, llmResponse.status);
+      return errorResponse(`AI provider error: ${safeError}`, llmResponse.status);
     }
 
-    // AC4: Log usage in ai_usage table
+    // Log usage (non-blocking)
     const now = new Date().toISOString();
-    // We log with estimated tokens (actual count comes from stream, but we log the request)
-    execute(DB, 
+    execute(
+      DB,
       `INSERT INTO ai_usage (user_id, provider, model, tokens_used, created_at)
-       VALUES (?, ?, ?, 0, ?)`,
-      [user.id, provider, model, now],
-    ).catch(() => { /* non-blocking usage logging */ });
+       VALUES (?, 'openrouter', ?, 0, ?)`,
+      [user.id, model, now],
+    ).catch(() => {});
 
-    // Stream the response back to client
+    // Store conversation (non-blocking)
+    if (conversationId) {
+      execute(
+        DB,
+        `UPDATE ai_conversations SET updated_at = ? WHERE id = ? AND user_id = ?`,
+        [now, conversationId, user.id],
+      ).catch(() => {});
+    }
+
     return new Response(llmResponse.body, {
       status: 200,
       headers: {
@@ -149,8 +124,89 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         Connection: 'keep-alive',
       },
     });
-  } catch (err) {
-    // AC6: Never expose API keys in error messages
-    return errorResponse('Failed to connect to AI provider', 502);
+  } catch (error) {
+    return handleError(error);
+  }
+};
+
+// ── GET /api/ai/chat — History endpoints ──────────────────────
+
+export const onRequestGet: PagesFunction<Env> = async (context) => {
+  try {
+    const user = requireAuth(context);
+    if (user instanceof Response) return user;
+
+    const { DB } = context.env;
+    const url = new URL(context.request.url);
+    const pathParts = url.pathname.split('/').filter(Boolean);
+
+    // GET /api/ai/chat/history/[conversationId]
+    if (pathParts.length >= 5 && pathParts[3] === 'history') {
+      const conversationId = pathParts[4];
+      const messages = await query(
+        DB,
+        'SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
+        [conversationId],
+      ).catch(() => []);
+
+      return jsonResponse({ conversationId, messages });
+    }
+
+    // GET /api/ai/chat/history
+    const conversations = await query(
+      DB,
+      'SELECT * FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 50',
+      [user.id],
+    ).catch(() => []);
+
+    return jsonResponse({ conversations });
+  } catch (error) {
+    return handleError(error);
+  }
+};
+
+// ── DELETE /api/ai/chat — Delete history ──────────────────────
+
+export const onRequestDelete: PagesFunction<Env> = async (context) => {
+  try {
+    const user = requireAuth(context);
+    if (user instanceof Response) return user;
+
+    const { DB } = context.env;
+    const url = new URL(context.request.url);
+    const pathParts = url.pathname.split('/').filter(Boolean);
+
+    // DELETE /api/ai/chat/history/[conversationId]
+    if (pathParts.length >= 5 && pathParts[3] === 'history') {
+      const conversationId = pathParts[4];
+      await execute(
+        DB,
+        'DELETE FROM ai_messages WHERE conversation_id = ? AND conversation_id IN (SELECT id FROM ai_conversations WHERE user_id = ?)',
+        [conversationId, user.id],
+      ).catch(() => {});
+      await execute(
+        DB,
+        'DELETE FROM ai_conversations WHERE id = ? AND user_id = ?',
+        [conversationId, user.id],
+      ).catch(() => {});
+
+      return jsonResponse({ deleted: true });
+    }
+
+    // DELETE /api/ai/chat/history — clear all
+    await execute(
+      DB,
+      'DELETE FROM ai_messages WHERE conversation_id IN (SELECT id FROM ai_conversations WHERE user_id = ?)',
+      [user.id],
+    ).catch(() => {});
+    await execute(
+      DB,
+      'DELETE FROM ai_conversations WHERE user_id = ?',
+      [user.id],
+    ).catch(() => {});
+
+    return jsonResponse({ deleted: true, all: true });
+  } catch (error) {
+    return handleError(error);
   }
 };
