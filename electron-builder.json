@@ -1,0 +1,29 @@
+{
+  "appId": "cc.wu.fansxingju",
+  "productName": "星聚",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "out/**/*",
+    "electron/**/*"
+  ],
+  "win": {
+    "target": ["nsis"],
+    "icon": "public/icon-512.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  },
+  "mac": {
+    "target": ["dmg"],
+    "icon": "public/icon-512.png",
+    "category": "public.app-category.entertainment"
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "icon": "public/icon-512.png",
+    "category": "AudioVideo"
+  }
+}

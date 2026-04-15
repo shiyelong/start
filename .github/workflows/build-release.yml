@@ -1,0 +1,147 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Web Static Export ────────────────────────────────────────
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx next build
+      - name: Package web build
+        run: |
+          tar -czf starhub-web.tar.gz -C out .
+          cd out && zip -r ../starhub-web.zip . && cd ..
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: |
+            starhub-web.tar.gz
+            starhub-web.zip
+
+  # ── Android APK ──────────────────────────────────────────────
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: npm ci
+      - run: npx next build
+      - run: npx cap sync android
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+      - name: Copy APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk dist/starhub-android-v1.0.0.apk || true
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/starhub-android-v1.0.0.apk || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/starhub-android-v1.0.0.apk
+          if-no-files-found: warn
+
+  # ── Electron Windows ─────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx next build
+      - run: npm install electron electron-builder --save-dev
+      - name: Build Windows installer
+        run: npx electron-builder --win --x64 --config electron-builder.json
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release/*.exe
+          if-no-files-found: warn
+
+  # ── Electron macOS ───────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx next build
+      - run: npm install electron electron-builder --save-dev
+      - name: Build macOS DMG
+        run: npx electron-builder --mac --x64 --arm64 --config electron-builder.json
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: release/*.dmg
+          if-no-files-found: warn
+
+  # ── Create GitHub Release ────────────────────────────────────
+  release:
+    needs: [build-web, build-android, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: artifacts
+      - name: List artifacts
+        run: find artifacts -type f | head -20
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: "星聚 StarHub ${{ github.ref_name }}"
+          body: |
+            ## 星聚娱乐平台 ${{ github.ref_name }}
+
+            ### 下载安装包
+
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | Web | starhub-web.tar.gz / .zip | 静态网站，部署到 Cloudflare Pages |
+            | Android | starhub-android-v1.0.0.apk | 手机/平板安装包 |
+            | Windows | starhub-setup.exe | Windows 桌面安装包 |
+            | macOS | starhub.dmg | macOS 桌面安装包 |
+
+            ### 功能概览
+            - 7大聚合引擎 (视频/音乐/漫画/小说/动漫/直播/播客)
+            - 151+ 源适配器
+            - 25款自研游戏
+            - MPAA五级分级系统
+            - AI字幕配音 + 无限制AI聊天
+            - NAS安全缓存 (AES-256加密)
+            - 多平台支持 (Web/Android/iOS/TV/Windows/macOS)
+          files: |
+            artifacts/**/*
+          draft: false
+          prerelease: false

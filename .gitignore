@@ -41,3 +41,4 @@ cloudflared*.yml
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+dist/
