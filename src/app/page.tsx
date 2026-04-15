@@ -61,7 +61,7 @@ export default function HomePage() {
           <div className={`relative bg-gradient-to-br ${banners[bannerIdx].bg} transition-all duration-1000`}>
             <div className="max-w-[1400px] mx-auto px-4 lg:px-6 py-20 md:py-28 text-center">
               <div className="inline-block px-4 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-[#aaa] mb-6">
-                <i className="fas fa-sparkles mr-1 text-[#3ea6ff]" /> 全新体验 · 持续更新中
+                 全新体验 · 持续更新中
               </div>
               <h1 className="text-3xl md:text-5xl lg:text-6xl font-black mb-4 leading-tight transition-all duration-500">
                 {banners[bannerIdx].title.includes("星聚") ? (
@@ -76,7 +76,7 @@ export default function HomePage() {
                   {banners[bannerIdx].ctaText}
                 </Link>
                 <Link href="/ai" className="px-8 py-3 rounded-full border border-white/10 text-white text-sm hover:bg-white/5 transition">
-                  <i className="fas fa-robot mr-1" /> AI 助手
+                   AI 助手
                 </Link>
               </div>
               {/* 轮播指示器 */}
@@ -134,8 +134,8 @@ export default function HomePage() {
           {/* ===== 热门游戏 ===== */}
           <section className="pb-10">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-xl font-bold"><i className="fas fa-gamepad mr-2 text-[#3ea6ff]" />热门游戏</h2>
-              <Link href="/games" className="text-sm text-[#3ea6ff] hover:text-[#65b8ff]">全部 <i className="fas fa-arrow-right ml-1 text-xs" /></Link>
+              <h2 className="text-xl font-bold">热门游戏</h2>
+              <Link href="/games" className="text-sm text-[#3ea6ff] hover:text-[#65b8ff]">全部 </Link>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {games.filter(g => g.hot).slice(0, 5).map(g => (
@@ -154,9 +154,9 @@ export default function HomePage() {
           {/* ===== 站长视频 ===== */}
           <section className="pb-10">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-xl font-bold"><i className="fas fa-star mr-2 text-[#3ea6ff]" />站长视频</h2>
+              <h2 className="text-xl font-bold">站长视频</h2>
               <div className="flex items-center gap-3">
-                <Link href="/videos" className="text-sm text-[#3ea6ff] hover:text-[#65b8ff]">全部 <i className="fas fa-arrow-right ml-1 text-xs" /></Link>
+                <Link href="/videos" className="text-sm text-[#3ea6ff] hover:text-[#65b8ff]">全部 </Link>
                 <a href="https://space.bilibili.com/385144618" target="_blank" rel="noopener noreferrer" className="text-sm text-[#fb7299] hover:text-[#fc8bab]"><i className="fab fa-bilibili" /></a>
               </div>
             </div>
@@ -166,11 +166,11 @@ export default function HomePage() {
                   <div className="relative aspect-video bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-2xl overflow-hidden">
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center group-hover:bg-white/20 group-hover:scale-110 transition-all">
-                        <i className="fas fa-play text-white text-sm ml-0.5" />
+                        
                       </div>
                     </div>
                     <span className="absolute bottom-1.5 right-1.5 bg-black/80 text-white text-[9px] px-1.5 py-0.5 rounded">{v.duration}</span>
-                    <span className="absolute top-1.5 left-1.5 bg-[#3ea6ff] text-[#0f0f0f] text-[8px] px-1.5 py-0.5 rounded font-bold"><i className="fas fa-star mr-0.5" />站长</span>
+                    <span className="absolute top-1.5 left-1.5 bg-[#3ea6ff] text-[#0f0f0f] text-[8px] px-1.5 py-0.5 rounded font-bold">站长</span>
                   </div>
                   <div className="pt-2 pb-1">
                     <h3 className="text-xs font-medium text-white line-clamp-1 group-hover:text-[#3ea6ff] transition">{v.title}</h3>
@@ -184,8 +184,8 @@ export default function HomePage() {
           {/* ===== 热门推荐 ===== */}
           <section className="pb-10">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-xl font-bold"><i className="fas fa-fire mr-2 text-orange-400" />热门推荐</h2>
-              <Link href="/videos" className="text-sm text-[#3ea6ff] hover:text-[#65b8ff]">全部 <i className="fas fa-arrow-right ml-1 text-xs" /></Link>
+              <h2 className="text-xl font-bold">热门推荐</h2>
+              <Link href="/videos" className="text-sm text-[#3ea6ff] hover:text-[#65b8ff]">全部 </Link>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
               {hotVideos.slice(0, 4).map(v => (
@@ -209,8 +209,8 @@ export default function HomePage() {
           {/* ===== 社区动态 ===== */}
           <section className="py-8">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-xl font-bold"><i className="fas fa-newspaper mr-2 text-blue-400" />社区动态</h2>
-              <Link href="/community" className="text-sm text-[#3ea6ff] hover:text-[#65b8ff]">全部 <i className="fas fa-arrow-right ml-1 text-xs" /></Link>
+              <h2 className="text-xl font-bold">社区动态</h2>
+              <Link href="/community" className="text-sm text-[#3ea6ff] hover:text-[#65b8ff]">全部 </Link>
             </div>
             <div className="space-y-3">
               {posts.slice(0, 3).map(p => (
@@ -222,7 +222,7 @@ export default function HomePage() {
                   <p className="text-xs text-[#8a8a8a] line-clamp-1 mb-2">{p.content}</p>
                   <div className="flex items-center justify-between text-[11px] text-[#666]">
                     <span>{p.author} · {p.date}</span>
-                    <span><i className="fas fa-heart mr-1" />{p.likes} · <i className="fas fa-comment mr-1" />{p.comments.length}</span>
+                    <span>{p.likes} · {p.comments.length}</span>
                   </div>
                 </Link>
               ))}

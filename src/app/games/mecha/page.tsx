@@ -1511,7 +1511,7 @@ export default function MechaCastlePage() {
     const labels: Record<string, { icon: string; name: string; desc: string }> = {
       hp: { icon: "?", name: "Max HP +25", desc: "Increase energy capacity" },
       atk: { icon: "?", name: "ATK +5", desc: "Increase weapon power" },
-      jump: { icon: "<i class="fas fa-rocket" />", name: "Jump +1", desc: "Boost thrusters" },
+      jump: { icon: "JMP", name: "Jump +1", desc: "Boost thrusters" },
     };
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-slate-900/90 to-blue-900/90 text-white z-10">

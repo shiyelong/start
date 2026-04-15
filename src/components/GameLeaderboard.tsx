@@ -80,7 +80,7 @@ export default function GameLeaderboard({ gameId }: { gameId: string }) {
   return (
     <div className="rounded-xl bg-[#1a1a1a] border border-[#333] p-4">
       <h3 className="text-sm font-bold mb-3 text-[#3ea6ff]">
-        <i className="fas fa-trophy mr-1.5" />
+        
         排行榜
       </h3>
 

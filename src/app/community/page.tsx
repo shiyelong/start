@@ -202,7 +202,7 @@ export default function CommunityPage() {
             }}
             className="px-4 py-2 rounded-lg bg-accent text-bg text-sm font-semibold hover:bg-accent-hover transition"
           >
-            <i className="fas fa-pen mr-1" /> 发帖
+             发帖
           </button>
         </div>
         <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
@@ -217,7 +217,7 @@ export default function CommunityPage() {
         {/* Loading state */}
         {loading && (
           <div className="text-center text-muted py-20">
-            <i className="fas fa-spinner fa-spin text-4xl mb-4 text-accent opacity-40" />
+            
             <p className="text-sm">加载中...</p>
           </div>
         )}
@@ -225,7 +225,7 @@ export default function CommunityPage() {
         {/* Error state */}
         {error && !loading && (
           <div className="text-center text-red-400 py-20">
-            <i className="fas fa-circle-exclamation text-4xl mb-4 opacity-40" />
+            
             <p className="text-sm mb-3">{error}</p>
             <button onClick={fetchPosts} className="px-4 py-1.5 rounded-lg bg-accent/15 text-accent text-xs border border-accent/30 hover:bg-accent/25 transition">
               重试
@@ -253,8 +253,8 @@ export default function CommunityPage() {
                     <span>{formatDate(p.created_at)}</span>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span><i className="fas fa-heart mr-1" />{p.likes}</span>
-                    <span><i className="fas fa-eye mr-1" />{p.views}</span>
+                    <span>{p.likes}</span>
+                    <span>{p.views}</span>
                   </div>
                 </div>
               </div>
@@ -265,7 +265,7 @@ export default function CommunityPage() {
         {/* Empty state */}
         {!loading && !error && posts.length === 0 && (
           <div className="text-center text-muted py-20">
-            <i className="fas fa-comments text-4xl mb-4 opacity-20" />
+            
             <p className="text-sm">暂无帖子</p>
           </div>
         )}
@@ -277,14 +277,14 @@ export default function CommunityPage() {
           <div className="bg-bg-secondary border border-border rounded-2xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto animate-slide-up" onClick={e => e.stopPropagation()}>
             {detailLoading ? (
               <div className="text-center py-12">
-                <i className="fas fa-spinner fa-spin text-2xl text-accent opacity-40" />
+                
                 <p className="text-sm text-muted mt-3">加载中...</p>
               </div>
             ) : detailPost ? (
               <>
                 <div className="flex items-center justify-between mb-4">
                   <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${catColors[detailPost.category] || ""}`}>{catNames[detailPost.category] || detailPost.category}</span>
-                  <button onClick={() => setSelected(null)} className="w-8 h-8 rounded-full bg-bg-card flex items-center justify-center text-muted hover:text-white transition"><i className="fas fa-times" /></button>
+                  <button onClick={() => setSelected(null)} className="w-8 h-8 rounded-full bg-bg-card flex items-center justify-center text-muted hover:text-white transition"></button>
                 </div>
                 <h2 className="text-lg font-bold mb-3">{detailPost.title}</h2>
                 <div className="flex items-center gap-3 text-sm text-muted mb-4">
@@ -294,7 +294,7 @@ export default function CommunityPage() {
                   </span>
                   <span>{formatDate(detailPost.created_at)}</span>
                   <span className="ml-auto flex items-center gap-1 cursor-pointer hover:text-accent transition" onClick={handleLike}>
-                    <i className={`fas fa-heart mr-1 ${liking ? "animate-pulse" : ""}`} />{detailPost.likes}
+                    {detailPost.likes}
                   </span>
                 </div>
                 <div className="text-sm text-subtle leading-relaxed whitespace-pre-wrap mb-6">{detailPost.content}</div>
@@ -356,7 +356,7 @@ export default function CommunityPage() {
           <div className="bg-bg-secondary border border-border rounded-2xl p-6 w-full max-w-lg animate-slide-up" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold">发布新帖</h2>
-              <button onClick={() => setShowNewPost(false)} className="w-8 h-8 rounded-full bg-bg-card flex items-center justify-center text-muted hover:text-white transition"><i className="fas fa-times" /></button>
+              <button onClick={() => setShowNewPost(false)} className="w-8 h-8 rounded-full bg-bg-card flex items-center justify-center text-muted hover:text-white transition"></button>
             </div>
             <div className="space-y-4">
               <div>

@@ -1122,7 +1122,7 @@ export default function SnakeGame() {
             className="mt-4 px-8 py-2.5 rounded-xl text-white font-bold text-sm transition active:scale-95"
             style={{ backgroundColor: ACCENT }}
           >
-            <i className="fas fa-play mr-1.5" />
+            
             开始游戏
           </button>
         )}
@@ -1145,7 +1145,7 @@ export default function SnakeGame() {
               className="px-6 py-2 rounded-xl text-white font-bold text-sm transition active:scale-95"
               style={{ backgroundColor: ACCENT }}
             >
-              <i className="fas fa-redo mr-1" />
+              
               再来一局
             </button>
           </div>

@@ -13,13 +13,13 @@ const TECHS: Tech[] = [
   { id: "writing", name: "文字", cost: 30, unlocks: "图书馆（+3科研）", icon: "S" },
   { id: "currency", name: "货币", cost: 40, unlocks: "市场（+5金币）", icon: "G" },
   { id: "construction", name: "建筑学", cost: 50, unlocks: "城墙（+10防御）", icon: "B" },
-  { id: "military", name: "军事学", cost: 60, unlocks: "兵营（可训练精锐）", icon: "<i class="fas fa-swords" />" },
+  { id: "military", name: "军事学", cost: 60, unlocks: "兵营（可训练精锐）", icon: "" },
   { id: "navigation", name: "航海术", cost: 70, unlocks: "港口（+5金币+3食物）", icon: "N" },
   { id: "engineering", name: "工程学", cost: 80, unlocks: "工厂（+8产能）", icon: "F" },
   { id: "philosophy", name: "哲学", cost: 90, unlocks: "大学（+8科研）", icon: "U" },
-  { id: "gunpowder", name: "火药", cost: 120, unlocks: "火枪兵（攻击力x2）", icon: "<i class="fas fa-burst" />" },
+  { id: "gunpowder", name: "火药", cost: 120, unlocks: "火枪兵（攻击力x2）", icon: "" },
   { id: "industrialization", name: "工业化", cost: 150, unlocks: "铁路（全城+50%产能）", icon: "T" },
-  { id: "spaceflight", name: "航天", cost: 300, unlocks: "<i class="fas fa-rocket" /> 科技胜利！", icon: "<i class="fas fa-rocket" />" },
+  { id: "spaceflight", name: "航天", cost: 300, unlocks: " 科技胜利！", icon: "" },
 ];
 
 const MAP_SIZE = 12;
@@ -117,7 +117,7 @@ export default function CivilizationPage() {
         setResearchProgress(0);
         setCurrentResearch(null);
         addLog(`? 研究完成：${tech.name}！解锁 ${tech.unlocks}`);
-        if (tech.id === "spaceflight") { setWon(true); addLog("<i class="fas fa-rocket" /> 科技胜利！你的文明率先进入太空时代！"); }
+        if (tech.id === "spaceflight") { setWon(true); addLog(" 科技胜利！你的文明率先进入太空时代！"); }
       } else {
         setResearchProgress(newProgress);
       }
@@ -133,7 +133,7 @@ export default function CivilizationPage() {
         { msg: "W 丰收之年！所有城市+10食物", effect: () => newCities.forEach(c => { c.food += 10; }) },
         { msg: "G 发现金矿！+30金币", effect: () => setGold(g => g + 30) },
         { msg: "? 瘟疫爆发！首都人口-1", effect: () => { if (newCities[0].pop > 1) newCities[0].pop--; } },
-        { msg: "<i class="fas fa-swords" /> 蛮族入侵！消耗10金币防御", effect: () => setGold(g => Math.max(0, g - 10)) },
+        { msg: " 蛮族入侵！消耗10金币防御", effect: () => setGold(g => Math.max(0, g - 10)) },
       ];
       const event = events[Math.floor(Math.random() * events.length)];
       event.effect();
@@ -158,7 +158,7 @@ export default function CivilizationPage() {
     setGold(g => g - cost);
     const nc = cities.map((c, i) => i === cityIdx ? { ...c, units: [...c.units, unit] } : c);
     setCities(nc);
-    addLog(`<i class="fas fa-swords" /> ${cities[cityIdx].name} 训练了 ${unit}`);
+    addLog(` ${cities[cityIdx].name} 训练了 ${unit}`);
   };
 
   const city = cities[selectedCity];
@@ -180,14 +180,14 @@ export default function CivilizationPage() {
     <>
       <Header />
       <main className="max-w-2xl mx-auto px-4 py-4 pb-20 md:pb-8">
-        <h1 className="text-xl font-bold mb-1 text-center"><i className="fas fa-landmark mr-2 text-[#f0b90b]" />文明崛起</h1>
+        <h1 className="text-xl font-bold mb-1 text-center">文明崛起</h1>
 
         {/* 顶部资源栏 */}
         <div className="flex justify-center gap-3 text-[12px] mb-3 flex-wrap">
           <span className="px-2 py-1 rounded bg-[#212121] border border-[#333]">? 第{turn}回合</span>
           <span className="px-2 py-1 rounded bg-[#212121] border border-[#333] text-[#f0b90b]">G {gold}</span>
           <span className="px-2 py-1 rounded bg-[#212121] border border-[#333] text-[#3ea6ff]">? {science}</span>
-          <span className="px-2 py-1 rounded bg-[#212121] border border-[#333] text-[#ff4444]"><i class="fas fa-swords" /> {militaryPower}</span>
+          <span className="px-2 py-1 rounded bg-[#212121] border border-[#333] text-[#ff4444]"> {militaryPower}</span>
           <span className="px-2 py-1 rounded bg-[#212121] border border-[#333] text-[#2ba640]">? {cities.reduce((s, c) => s + c.pop, 0)}</span>
           <span className="px-2 py-1 rounded bg-[#212121] border border-[#333] text-[#a855f7]">C {cities.length}城</span>
         </div>
@@ -199,7 +199,7 @@ export default function CivilizationPage() {
               "px-3 py-1.5 rounded-lg text-xs border transition",
               tab === t ? "bg-[#f0b90b]/15 text-[#f0b90b] border-[#f0b90b]/30 font-bold" : "text-[#aaa] border-[#333]"
             )}>
-              {t === "map" ? "? 地图" : t === "city" ? "C 城市" : t === "tech" ? "? 科技" : "<i class="fas fa-swords" /> 军事"}
+              {t === "map" ? "? 地图" : t === "city" ? "C 城市" : t === "tech" ? "? 科技" : " 军事"}
             </button>
           ))}
         </div>
@@ -288,7 +288,7 @@ export default function CivilizationPage() {
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-lg">{tech.icon}</span>
                       <span className={clsx("text-xs font-bold", done ? "text-[#2ba640]" : "text-[#ccc]")}>{tech.name}</span>
-                      {done && <i className="fas fa-check text-[#2ba640] text-[10px]" />}
+                      {done && <span className="text-[#2ba640] text-[10px]">OK</span>}
                     </div>
                     <p className="text-[10px] text-[#8a8a8a]">{tech.unlocks}</p>
                     {!done && <p className="text-[10px] text-[#f0b90b] mt-1">需要 {tech.cost} 科研点</p>}
@@ -303,7 +303,7 @@ export default function CivilizationPage() {
         {tab === "military" && (
           <div className="space-y-3">
             <div className="p-4 rounded-xl bg-[#1a1a1a] border border-[#333]">
-              <h3 className="font-bold text-sm mb-2"><i class="fas fa-swords" /> 军事力量：{militaryPower}</h3>
+              <h3 className="font-bold text-sm mb-2"> 军事力量：{militaryPower}</h3>
               <div className="flex flex-wrap gap-1 mb-3">
                 {cities.flatMap(c => c.units).map((u, i) => (
                   <span key={i} className="text-[11px] px-2 py-0.5 rounded bg-[#ff4444]/10 text-[#ff4444] border border-[#ff4444]/20">{u}</span>
@@ -317,7 +317,7 @@ export default function CivilizationPage() {
                 {researchedTechs.includes("military") && (
                   <button onClick={() => trainUnit(selectedCity, "精锐战士", 40)} disabled={gold < 40}
                     className={clsx("w-full p-2 rounded-lg border text-[12px] flex justify-between", gold >= 40 ? "border-[#333] text-[#ccc]" : "border-[#222] text-[#666] opacity-50")}>
-                    <span><i class="fas fa-swords" /> 训练精锐（攻击20）</span><span className="text-[#f0b90b]">G40</span>
+                    <span> 训练精锐（攻击20）</span><span className="text-[#f0b90b]">G40</span>
                   </button>
                 )}
                 {researchedTechs.includes("gunpowder") && (
@@ -334,13 +334,13 @@ export default function CivilizationPage() {
         {/* 回合按钮 */}
         {!won && (
           <button onClick={nextTurn} className="w-full mt-4 py-3 rounded-xl bg-[#f0b90b] text-[#0f0f0f] font-bold text-sm hover:bg-[#f0b90b]/80 transition active:scale-95">
-            <i className="fas fa-forward mr-1.5" />下一回合
+            下一回合
           </button>
         )}
 
         {won && (
           <div className="text-center py-6">
-            <p className="text-4xl mb-2"><i class="fas fa-rocket" /></p>
+            <p className="text-4xl mb-2"></p>
             <p className="text-xl font-bold text-[#f0b90b]">科技胜利！</p>
             <p className="text-[#8a8a8a] text-sm">用了 {turn} 回合征服星辰大海</p>
           </div>

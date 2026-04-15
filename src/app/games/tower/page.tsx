@@ -149,11 +149,11 @@ export default function TowerPage() {
     <>
       <Header />
       <main className="max-w-xl mx-auto px-4 py-4 pb-20 md:pb-8 text-center">
-        <h1 className="text-xl font-bold mb-2"><i className="fas fa-chess-rook mr-2 text-[#ff4444]" />塔防守卫</h1>
+        <h1 className="text-xl font-bold mb-2">塔防守卫</h1>
         <div className="flex justify-center gap-4 text-sm mb-2">
-          <span className="text-[#f0b90b]"><i className="fas fa-coins mr-1" />{gold}</span>
-          <span className="text-[#ff4444]"><i className="fas fa-heart mr-1" />{lives}</span>
-          <span className="text-[#3ea6ff]"><i className="fas fa-flag mr-1" />第{wave}波</span>
+          <span className="text-[#f0b90b]">{gold}</span>
+          <span className="text-[#ff4444]">{lives}</span>
+          <span className="text-[#3ea6ff]">第{wave}波</span>
         </div>
         {/* 塔选择 */}
         <div className="flex justify-center gap-2 mb-3">
@@ -171,7 +171,7 @@ export default function TowerPage() {
           {!started && !gameOver && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-xl">
               <button onClick={() => { setStarted(true); startWave(); }} className="px-8 py-3 rounded-xl bg-[#ff4444] text-white font-bold text-lg hover:bg-[#ff6666] transition active:scale-95">
-                <i className="fas fa-play mr-2" />开始防御
+                开始防御
               </button>
             </div>
           )}
@@ -185,7 +185,7 @@ export default function TowerPage() {
         </div>
         {started && !gameOver && !sRef.current.waveActive && sRef.current.enemies.length === 0 && (
           <button onClick={startWave} className="mt-3 px-6 py-2 rounded-xl bg-[#f0b90b] text-[#0f0f0f] font-bold text-sm hover:bg-[#f0b90b]/80 transition active:scale-95">
-            <i className="fas fa-flag mr-1" />下一波
+            下一波
           </button>
         )}
         <p className="text-[11px] text-[#666] mt-3">点击空地放置防御塔 · 选择塔类型后点击地图</p>

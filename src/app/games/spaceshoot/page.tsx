@@ -577,7 +577,7 @@ export default function SpaceShootPage() {
       <main className="max-w-[500px] mx-auto px-4 py-4 pb-20 md:pb-8">
         <div className="flex items-center gap-2 mb-3">
           <Link href="/games" className="text-sm text-[#8a8a8a] hover:text-[#3ea6ff] transition"><ChevronLeft size={16} /></Link>
-          <h1 className="text-lg font-bold"><i className="fas fa-rocket mr-2 text-[#3ea6ff]" />太空射击</h1>
+          <h1 className="text-lg font-bold">太空射击</h1>
         </div>
 
         <div className="relative bg-black rounded-2xl overflow-hidden border border-[#333]/50 shadow-2xl">
@@ -586,7 +586,7 @@ export default function SpaceShootPage() {
           {/* 开始界面 */}
           {!started && !gameOver && (
             <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center">
-              <div className="w-16 h-16 rounded-full bg-[#3ea6ff]/15 flex items-center justify-center mb-4"><i className="fas fa-rocket text-[#3ea6ff] text-3xl" /></div>
+              <div className="w-16 h-16 rounded-full bg-[#3ea6ff]/15 flex items-center justify-center mb-4"></div>
               <h2 className="text-2xl font-black mb-2 text-[#3ea6ff]">太空射击</h2>
               <p className="text-[#8a8a8a] text-sm mb-6 text-center px-8">
                 方向键/WASD移动 · 自动射击<br/>
@@ -601,7 +601,7 @@ export default function SpaceShootPage() {
           {/* 游戏结束 */}
           {gameOver && (
             <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center">
-              <div className="w-14 h-14 rounded-full bg-[#ff4444]/15 flex items-center justify-center mb-3"><i className="fas fa-explosion text-[#ff4444] text-2xl" /></div>
+              <div className="w-14 h-14 rounded-full bg-[#ff4444]/15 flex items-center justify-center mb-3"></div>
               <h2 className="text-xl font-black mb-4 text-[#ff4444]">游戏结束</h2>
               <div className="grid grid-cols-2 gap-3 mb-6 text-center">
                 <div className="p-3 rounded-xl bg-[#1a1a1a] border border-[#333]/50">

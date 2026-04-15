@@ -143,7 +143,7 @@ export default function QRVerify({ contentId, contentType, contentTitle, onMobil
         <div className="w-full max-w-md bg-[#141414] border border-[#333] rounded-t-2xl md:rounded-2xl p-6 animate-slide-up" onClick={e => e.stopPropagation()}>
           <div className="text-center mb-6">
             <div className="w-16 h-16 rounded-2xl bg-[#3ea6ff]/15 flex items-center justify-center mx-auto mb-3">
-              <i className="fas fa-mobile-alt text-[#3ea6ff] text-2xl" />
+              
             </div>
             <h3 className="font-bold text-lg mb-1">移动端验证</h3>
             <p className="text-sm text-[#8a8a8a]">验证「{contentTitle}」</p>
@@ -152,7 +152,7 @@ export default function QRVerify({ contentId, contentType, contentTitle, onMobil
           <div className="space-y-3 mb-6">
             <div className="flex items-center gap-3 p-3 rounded-xl bg-[#1a1a1a] border border-[#333]/50">
               <div className="w-8 h-8 rounded-full bg-[#3ea6ff]/15 flex items-center justify-center shrink-0">
-                <i className="fas fa-map-marker-alt text-[#3ea6ff] text-sm" />
+                
               </div>
               <div>
                 <p className="text-sm font-medium">定位验证</p>
@@ -161,7 +161,7 @@ export default function QRVerify({ contentId, contentType, contentTitle, onMobil
             </div>
             <div className="flex items-center gap-3 p-3 rounded-xl bg-[#1a1a1a] border border-[#333]/50">
               <div className="w-8 h-8 rounded-full bg-[#f0b90b]/15 flex items-center justify-center shrink-0">
-                <i className="fas fa-camera text-[#f0b90b] text-sm" />
+                
               </div>
               <div>
                 <p className="text-sm font-medium">实地拍照</p>
@@ -170,7 +170,7 @@ export default function QRVerify({ contentId, contentType, contentTitle, onMobil
             </div>
             <div className="flex items-center gap-3 p-3 rounded-xl bg-[#1a1a1a] border border-[#333]/50">
               <div className="w-8 h-8 rounded-full bg-[#2ba640]/15 flex items-center justify-center shrink-0">
-                <i className="fas fa-comment text-[#2ba640] text-sm" />
+                
               </div>
               <div>
                 <p className="text-sm font-medium">评价留言</p>
@@ -184,7 +184,7 @@ export default function QRVerify({ contentId, contentType, contentTitle, onMobil
               onClick={() => onMobileVerify?.()}
               className="flex-1 py-3 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition active:scale-95"
             >
-              <i className="fas fa-shield-check mr-1.5" />开始验证
+              开始验证
             </button>
             <button onClick={onClose} className="px-5 py-3 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa] hover:bg-[#2a2a2a] transition">
               取消
@@ -202,7 +202,7 @@ export default function QRVerify({ contentId, contentType, contentTitle, onMobil
         {scanned ? (
           <div className="text-center py-8">
             <div className="w-20 h-20 rounded-full bg-[#2ba640]/15 flex items-center justify-center mx-auto mb-4 animate-pulse">
-              <i className="fas fa-check-circle text-[#2ba640] text-4xl" />
+              
             </div>
             <h3 className="font-bold text-lg mb-2">已扫描</h3>
             <p className="text-sm text-[#8a8a8a]">请在手机上完成验证操作</p>
@@ -215,7 +215,7 @@ export default function QRVerify({ contentId, contentType, contentTitle, onMobil
           <>
             <div className="text-center mb-5">
               <h3 className="font-bold text-lg mb-1">
-                <i className="fas fa-qrcode mr-2 text-[#3ea6ff]" />扫码验证
+                扫码验证
               </h3>
               <p className="text-sm text-[#8a8a8a]">使用手机扫描二维码，前往实地验证</p>
             </div>
@@ -226,7 +226,7 @@ export default function QRVerify({ contentId, contentType, contentTitle, onMobil
                 <canvas ref={canvasRef} className="block" />
                 {countdown <= 0 && (
                   <div className="absolute inset-0 bg-white/90 rounded-2xl flex flex-col items-center justify-center">
-                    <i className="fas fa-redo text-[#8a8a8a] text-2xl mb-2" />
+                    
                     <p className="text-sm text-[#666]">二维码已过期</p>
                     <button
                       onClick={() => setCountdown(300)}

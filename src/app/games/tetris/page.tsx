@@ -963,7 +963,7 @@ export default function TetrisPage() {
         {/* Title + Score */}
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-2xl font-bold text-white">
-            <i className="fas fa-cubes mr-2 text-purple-400" />
+            
             <span className="text-purple-400">俄罗斯方块</span>
           </h1>
           <div className="flex gap-2">

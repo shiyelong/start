@@ -113,7 +113,7 @@ export class AudioManager {
   /** Load all registered sounds */
   async loadAll(): Promise<void> {
     const promises: Promise<void>[] = [];
-    for (const [id] of this.sounds) {
+    for (const [id] of Array.from(this.sounds)) {
       promises.push(this.load(id));
     }
     await Promise.allSettled(promises);
@@ -178,7 +178,7 @@ export class AudioManager {
 
   /** Stop all currently playing sounds */
   stopAll(): void {
-    for (const [, entry] of this.sounds) {
+    for (const [, entry] of Array.from(this.sounds)) {
       for (const node of entry.activeNodes) {
         try { node.stop(); } catch { /* already stopped */ }
       }

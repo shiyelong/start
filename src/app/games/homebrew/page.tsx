@@ -112,14 +112,14 @@ export default function HomebrewPage() {
 
         {/* 标题区 */}
         <div className="flex items-center justify-between mb-2">
-          <h1 className="text-2xl font-bold"><i className="fas fa-gamepad mr-2 text-[#3ea6ff]" />Homebrew NES 游戏</h1>
+          <h1 className="text-2xl font-bold">Homebrew NES 游戏</h1>
           <div className="flex gap-2">
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={loadingRom}
               className="px-4 py-2 rounded-lg bg-[#3ea6ff] text-[#0f0f0f] text-sm font-semibold hover:bg-[#65b8ff] transition flex items-center gap-2 disabled:opacity-50"
             >
-              {loadingRom ? <i className="fas fa-spinner fa-spin" /> : <i className="fas fa-play" />}
+              {loadingRom ? <span className="animate-spin">...</span> : <span>▶</span>}
               {loadingRom ? "加载中..." : "加载ROM开玩"}
             </button>
             <input ref={fileInputRef} type="file" accept=".nes" className="hidden" onChange={handleRomFile} />
@@ -131,33 +131,33 @@ export default function HomebrewPage() {
 
         {/* ROM下载源 */}
         <div className="p-4 rounded-xl bg-[#1a1a1a]/50 border border-[#333]/50 mb-6">
-          <h3 className="text-sm font-bold mb-3"><i className="fas fa-download mr-2 text-[#3ea6ff]" />ROM下载源</h3>
+          <h3 className="text-sm font-bold mb-3">ROM下载源</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <a href="https://neshomebrew.net/" target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-3 p-3 rounded-lg bg-[#212121] border border-[#333]/50 hover:border-[#3ea6ff]/30 transition group">
               <div className="w-10 h-10 rounded-lg bg-[#3ea6ff]/15 flex items-center justify-center shrink-0">
-                <i className="fas fa-globe text-[#3ea6ff]" />
+                
               </div>
               <div>
                 <p className="text-sm font-medium group-hover:text-[#3ea6ff] transition">NES Homebrew</p>
                 <p className="text-[11px] text-[#666]">neshomebrew.net — 精选自制游戏合集</p>
               </div>
-              <i className="fas fa-external-link-alt text-[#666] text-xs ml-auto" />
+              
             </a>
             <a href="https://www.nesdev.org/wiki/Homebrew_games" target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-3 p-3 rounded-lg bg-[#212121] border border-[#333]/50 hover:border-[#3ea6ff]/30 transition group">
               <div className="w-10 h-10 rounded-lg bg-[#f0b90b]/15 flex items-center justify-center shrink-0">
-                <i className="fas fa-code text-[#f0b90b]" />
+                
               </div>
               <div>
                 <p className="text-sm font-medium group-hover:text-[#f0b90b] transition">NESDev Wiki</p>
                 <p className="text-[11px] text-[#666]">nesdev.org — 开发者社区 Homebrew 列表</p>
               </div>
-              <i className="fas fa-external-link-alt text-[#666] text-xs ml-auto" />
+              
             </a>
           </div>
           <p className="text-[10px] text-[#666] mt-3">
-            <i className="fas fa-info-circle mr-1" />
+            
             这些都是开发者自制的免费游戏，下载 .nes 文件后点击上方"加载ROM开玩"即可游玩。
           </p>
         </div>
@@ -165,13 +165,13 @@ export default function HomebrewPage() {
         {/* 精选推荐 */}
         {genre === "all" && !search && (
           <section className="mb-8">
-            <h2 className="text-lg font-bold mb-4"><i className="fas fa-star mr-2 text-[#f0b90b]" />精选推荐</h2>
+            <h2 className="text-lg font-bold mb-4">精选推荐</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {featured.map(g => (
                 <div key={g.id} onClick={() => setSelected(g)}
                   className="group p-4 rounded-xl bg-gradient-to-br from-[#1a1a2e] to-[#16213e] border border-[#333]/50 hover:border-[#3ea6ff]/30 cursor-pointer transition hover:-translate-y-0.5">
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="w-12 h-12 rounded-xl bg-[#3ea6ff]/15 flex items-center justify-center"><i className="fas fa-gamepad text-[#3ea6ff] text-xl" /></div>
+                    <div className="w-12 h-12 rounded-xl bg-[#3ea6ff]/15 flex items-center justify-center"></div>
                     <div className="min-w-0">
                       <h3 className="font-bold text-sm group-hover:text-[#3ea6ff] transition truncate">{g.title}</h3>
                       <p className="text-[11px] text-[#8a8a8a]">{g.author} · {g.year}</p>
@@ -188,7 +188,7 @@ export default function HomebrewPage() {
         {/* 搜索 + 分类 */}
         <div className="flex flex-col sm:flex-row gap-3 mb-4">
           <div className="relative flex-1">
-            <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-[#666] text-xs" />
+            
             <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索游戏名或作者..."
               className="w-full h-9 pl-9 pr-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition" />
           </div>
@@ -208,7 +208,7 @@ export default function HomebrewPage() {
             <div key={g.id} onClick={() => setSelected(g)}
               className="group p-4 rounded-xl bg-[#1a1a1a]/50 border border-[#333]/50 hover:border-[#3ea6ff]/30 cursor-pointer transition hover:-translate-y-0.5">
               <div className="flex items-center gap-3 mb-2">
-                <div className="w-10 h-10 rounded-lg bg-[#212121] flex items-center justify-center"><i className="fas fa-gamepad text-[#3ea6ff]" /></div>
+                <div className="w-10 h-10 rounded-lg bg-[#212121] flex items-center justify-center"></div>
                 <div className="min-w-0 flex-1">
                   <h3 className="font-semibold text-sm group-hover:text-[#3ea6ff] transition truncate">{g.title}</h3>
                   <p className="text-[11px] text-[#8a8a8a]">{g.author} · {g.year}</p>
@@ -225,7 +225,7 @@ export default function HomebrewPage() {
 
         {filtered.length === 0 && (
           <div className="text-center text-[#8a8a8a] py-20">
-            <i className="fas fa-gamepad text-4xl mb-4 opacity-20" />
+            
             <p className="text-sm">没有找到匹配的游戏</p>
           </div>
         )}
@@ -236,7 +236,7 @@ export default function HomebrewPage() {
         <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center" onClick={() => setSelected(null)}>
           <div className="w-full max-w-md bg-[#141414] border border-[#333] rounded-t-2xl md:rounded-2xl p-6 animate-slide-up" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-4 mb-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#1a1a2e] to-[#16213e] flex items-center justify-center"><i className="fas fa-gamepad text-[#3ea6ff] text-2xl" /></div>
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#1a1a2e] to-[#16213e] flex items-center justify-center"></div>
               <div className="flex-1 min-w-0">
                 <h2 className="text-lg font-bold">{selected.title}</h2>
                 <p className="text-sm text-[#aaa]">{selected.author} · {selected.year}</p>
@@ -249,7 +249,7 @@ export default function HomebrewPage() {
             <p className="text-sm text-[#aaa] mb-4 leading-relaxed">{selected.description}</p>
 
             <div className="p-3 rounded-xl bg-[#1a1a1a] border border-[#333]/50 mb-4">
-              <p className="text-xs text-[#8a8a8a] mb-2"><i className="fas fa-info-circle mr-1 text-[#3ea6ff]" />如何游玩</p>
+              <p className="text-xs text-[#8a8a8a] mb-2">如何游玩</p>
               <ol className="text-[12px] text-[#aaa] space-y-1.5 list-decimal list-inside">
                 <li>点击下方链接前往游戏官网下载 .nes ROM文件</li>
                 <li>回到本页面点击"加载ROM开玩"选择下载的文件</li>
@@ -260,12 +260,12 @@ export default function HomebrewPage() {
             <div className="flex gap-2">
               <a href={selected.sourceUrl} target="_blank" rel="noopener noreferrer"
                 className="flex-1 py-3 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition text-center">
-                <i className="fas fa-external-link-alt mr-1.5" />前往下载
+                前往下载
               </a>
               <button
                 onClick={() => { setSelected(null); fileInputRef.current?.click(); }}
                 className="flex-1 py-3 rounded-xl bg-[#2ba640] text-white font-bold text-sm hover:bg-[#2ba640]/80 transition">
-                <i className="fas fa-play mr-1.5" />加载ROM
+                加载ROM
               </button>
             </div>
             <button onClick={() => setSelected(null)} className="w-full mt-2 py-2 text-sm text-[#666] hover:text-white transition">关闭</button>

@@ -9,14 +9,14 @@ import RomUploadDialog from './RomUploadDialog';
 
 // Platform display config
 const PLATFORM_INFO: Record<ConsolePlatform, { label: string; emoji: string }> = {
-  NES: { label: 'NES', emoji: '<i class="fas fa-gamepad" />' },
-  SNES: { label: 'SNES', emoji: '<i class="fas fa-gamepad" />' },
+  NES: { label: 'NES', emoji: '' },
+  SNES: { label: 'SNES', emoji: '' },
   Game_Boy: { label: 'Game Boy', emoji: '.' },
   Game_Boy_Color: { label: 'GBC', emoji: '.' },
   Game_Boy_Advance: { label: 'GBA', emoji: '.' },
   Genesis: { label: 'Genesis', emoji: '.' },
   Master_System: { label: 'SMS', emoji: '⬜' },
-  Arcade: { label: 'Arcade', emoji: '<i class="fas fa-gamepad" />' },
+  Arcade: { label: 'Arcade', emoji: '' },
   Neo_Geo: { label: 'Neo Geo', emoji: '.' },
   PC_Engine: { label: 'PC Engine', emoji: '.' },
   Atari_2600: { label: 'Atari', emoji: '.' },
@@ -208,7 +208,7 @@ export default function GameBrowser() {
             >
               {/* Thumbnail placeholder */}
               <div className="w-full aspect-[4/3] rounded-lg bg-bg-hover mb-3 flex items-center justify-center overflow-hidden">
-                <span className="text-4xl">{PLATFORM_INFO[rom.platform]?.emoji ?? '<i class="fas fa-gamepad" />'}</span>
+                <span className="text-4xl">{PLATFORM_INFO[rom.platform]?.emoji ?? ''}</span>
               </div>
               {/* Title */}
               <h3 className="font-semibold text-sm truncate group-hover:text-accent transition">

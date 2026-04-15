@@ -128,12 +128,12 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
         <div className="sticky top-0 z-10 bg-[#141414]/95 backdrop-blur-xl border-b border-[#333]/50 px-5 py-3 flex items-center justify-between">
           <div>
             <h3 className="font-bold text-base">
-              <i className="fas fa-shield-check mr-2 text-[#3ea6ff]" />实地验证
+              实地验证
             </h3>
             <p className="text-[11px] text-[#8a8a8a]">{contentTitle}</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-full bg-[#212121] flex items-center justify-center text-[#8a8a8a] hover:text-white transition">
-            <i className="fas fa-times" />
+            
           </button>
         </div>
 
@@ -173,7 +173,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
             <div className="space-y-4">
               <div className="p-4 rounded-xl bg-[#1a1a1a] border border-[#333]/50">
                 <div className="flex items-center gap-2 mb-3">
-                  <i className="fas fa-map-pin text-[#ff4444]" />
+                  
                   <span className="text-sm font-medium">目标地址</span>
                 </div>
                 <p className="text-sm text-[#aaa]">{targetLocation.address}</p>
@@ -210,7 +210,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
 
               {locError && (
                 <div className="p-3 rounded-xl bg-[#ff4444]/10 border border-[#ff4444]/30 text-sm text-[#ff4444]">
-                  <i className="fas fa-exclamation-triangle mr-1.5" />{locError}
+                  {locError}
                 </div>
               )}
 
@@ -221,11 +221,11 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
                   className="flex-1 py-3 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition active:scale-95 disabled:opacity-50"
                 >
                   {locating ? (
-                    <><i className="fas fa-spinner fa-spin mr-1.5" />定位中...</>
+                    <>定位中...</>
                   ) : userLocation ? (
-                    <><i className="fas fa-redo mr-1.5" />重新定位</>
+                    <>重新定位</>
                   ) : (
-                    <><i className="fas fa-crosshairs mr-1.5" />获取定位</>
+                    <>获取定位</>
                   )}
                 </button>
                 {withinRange && (
@@ -233,7 +233,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
                     onClick={() => setStep("photo")}
                     className="flex-1 py-3 rounded-xl bg-[#2ba640] text-white font-bold text-sm hover:bg-[#2ba640]/80 transition active:scale-95"
                   >
-                    下一步 <i className="fas fa-arrow-right ml-1" />
+                    下一步 
                   </button>
                 )}
               </div>
@@ -256,7 +256,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
                       onClick={() => removePhoto(i)}
                       className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/60 flex items-center justify-center text-white text-xs"
                     >
-                      <i className="fas fa-times" />
+                      
                     </button>
                   </div>
                 ))}
@@ -266,7 +266,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
                   onClick={() => cameraInputRef.current?.click()}
                   className="aspect-square rounded-xl border-2 border-dashed border-[#333] flex flex-col items-center justify-center gap-1 text-[#666] hover:border-[#3ea6ff] hover:text-[#3ea6ff] transition"
                 >
-                  <i className="fas fa-camera text-lg" />
+                  
                   <span className="text-[10px]">拍照</span>
                 </button>
 
@@ -275,7 +275,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
                   onClick={() => fileInputRef.current?.click()}
                   className="aspect-square rounded-xl border-2 border-dashed border-[#333] flex flex-col items-center justify-center gap-1 text-[#666] hover:border-[#f0b90b] hover:text-[#f0b90b] transition"
                 >
-                  <i className="fas fa-images text-lg" />
+                  
                   <span className="text-[10px]">相册</span>
                 </button>
               </div>
@@ -286,7 +286,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
               {/* 平台摄像头拍摄提示 */}
               <div className="p-3 rounded-xl bg-[#f0b90b]/10 border border-[#f0b90b]/30">
                 <div className="flex items-center gap-2 text-sm text-[#f0b90b] mb-1">
-                  <i className="fas fa-video" />
+                  
                   <span className="font-medium">平台摄像头验证</span>
                 </div>
                 <p className="text-[11px] text-[#8a8a8a]">
@@ -296,14 +296,14 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
 
               <div className="flex gap-2">
                 <button onClick={() => setStep("locate")} className="px-5 py-3 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa] hover:bg-[#2a2a2a] transition">
-                  <i className="fas fa-arrow-left mr-1" />返回
+                  返回
                 </button>
                 <button
                   onClick={() => setStep("comment")}
                   disabled={photos.length === 0}
                   className="flex-1 py-3 rounded-xl bg-[#2ba640] text-white font-bold text-sm hover:bg-[#2ba640]/80 transition active:scale-95 disabled:opacity-50"
                 >
-                  下一步 <i className="fas fa-arrow-right ml-1" />
+                  下一步 
                 </button>
               </div>
             </div>
@@ -324,7 +324,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
                         : "bg-[#212121] border border-[#333] text-[#aaa]"
                     }`}
                   >
-                    <i className="fas fa-check-circle mr-1.5" />信息属实
+                    信息属实
                   </button>
                   <button
                     onClick={() => setVerifyResult("rejected")}
@@ -334,7 +334,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
                         : "bg-[#212121] border border-[#333] text-[#aaa]"
                     }`}
                   >
-                    <i className="fas fa-times-circle mr-1.5" />信息不实
+                    信息不实
                   </button>
                 </div>
               </div>
@@ -349,7 +349,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
                       onClick={() => setRating(star)}
                       className={`text-xl transition ${star <= rating ? "text-[#f0b90b]" : "text-[#333]"}`}
                     >
-                      <i className="fas fa-star" />
+                      
                     </button>
                   ))}
                   <span className="text-sm text-[#8a8a8a] ml-2 self-center">{rating}分</span>
@@ -373,14 +373,14 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
 
               <div className="flex gap-2">
                 <button onClick={() => setStep("photo")} className="px-5 py-3 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa] hover:bg-[#2a2a2a] transition">
-                  <i className="fas fa-arrow-left mr-1" />返回
+                  返回
                 </button>
                 <button
                   onClick={handleSubmit}
                   disabled={!comment.trim()}
                   className="flex-1 py-3 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition active:scale-95 disabled:opacity-50"
                 >
-                  <i className="fas fa-paper-plane mr-1.5" />提交验证
+                  提交验证
                 </button>
               </div>
             </div>
@@ -390,7 +390,7 @@ export default function GeoVerify({ targetLocation, contentTitle, onSubmit, onCl
           {step === "done" && (
             <div className="text-center py-8">
               <div className="w-20 h-20 rounded-full bg-[#2ba640]/15 flex items-center justify-center mx-auto mb-4">
-                <i className="fas fa-check-circle text-[#2ba640] text-4xl animate-bounce" />
+                
               </div>
               <h3 className="font-bold text-lg mb-2">验证提交成功</h3>
               <p className="text-sm text-[#8a8a8a] mb-6">感谢您的验证，您的评价将帮助其他用户</p>

@@ -6,7 +6,7 @@ import {
   Play, Music, BookOpen, FileText, Tv, Gamepad2, Radio, Podcast,
   Shield, Download, Settings
 } from 'lucide-react';
-import { getMode } from '@/lib/age-gate';
+import { ageGate } from '@/lib/age-gate';
 import type { UserMode } from '@/lib/types';
 
 interface SidebarItem {
@@ -32,7 +32,7 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const mode = getMode();
+  const mode = ageGate.getMode();
   const items = SIDEBAR_ITEMS.filter(item => item.modes.includes(mode));
 
   return (

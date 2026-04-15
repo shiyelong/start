@@ -328,7 +328,7 @@ function renderGame(
     ctx.save();
     ctx.translate(w * 0.8, hudY + 10);
     ctx.scale(comboPulse, comboPulse);
-    drawText(ctx, `<i class="fas fa-fire" /> x${game.combo}`, 0, 0, w * 0.25, "#ff6b6b", 16);
+    drawText(ctx, ` x${game.combo}`, 0, 0, w * 0.25, "#ff6b6b", 16);
     ctx.restore();
   }
 
@@ -948,7 +948,7 @@ export default function Match3Page() {
         {/* Title + Stats */}
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-2xl font-bold text-white">
-            <i className="fas fa-gem mr-2 text-[#ec4899]" />
+            
             <span className="text-[#ec4899]">宝石消消乐</span>
           </h1>
           <div className="flex gap-2">

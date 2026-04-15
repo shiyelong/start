@@ -1480,7 +1480,7 @@ export default function ShadowDungeonPage() {
   const renderUpgrade = () => {
     const labels: Record<string, { icon: string; name: string; desc: string }> = {
       hp: { icon: "?", name: "Max HP +25", desc: "Increase maximum health" },
-      atk: { icon: "<i class="fas fa-swords" />", name: "ATK +5", desc: "Increase attack power" },
+      atk: { icon: "ATK", name: "ATK +5", desc: "Increase attack power" },
       jump: { icon: "?", name: "Jump +1", desc: "Jump higher" },
     };
     return (

@@ -276,7 +276,7 @@ export default function VerifyPage() {
         {/* 标题 */}
         <div className="flex items-center justify-between mb-1">
           <h1 className="text-xl font-bold">
-            <i className="fas fa-shield-halved mr-2 text-[#3ea6ff]" />信息验证
+            信息验证
           </h1>
           <div className="flex items-center gap-2 text-[11px]">
             <span className="px-2 py-0.5 rounded-full bg-[#f0b90b]/10 border border-[#f0b90b]/20 text-[#f0b90b] font-semibold">
@@ -322,7 +322,7 @@ export default function VerifyPage() {
           <div className="flex gap-4 mb-4 overflow-x-auto pb-1 -mx-4 px-4 text-[12px]">
             {/* 性别 */}
             <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-[#666]"><i className="fas fa-venus-mars mr-1" />性别</span>
+              <span className="text-[#666]">性别</span>
               {["all", "男", "女"].map(g => (
                 <button key={g} onClick={() => setGenderFilter(g)} className={clsx(
                   "px-2.5 py-0.5 rounded-md border transition",
@@ -334,7 +334,7 @@ export default function VerifyPage() {
             </div>
             {/* 年龄 */}
             <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-[#666]"><i className="fas fa-cake-candles mr-1" />年龄</span>
+              <span className="text-[#666]">年龄</span>
               {["all", "18-25", "26-35", "36-45", "45+"].map(a => (
                 <button key={a} onClick={() => setAgeFilter(a)} className={clsx(
                   "px-2.5 py-0.5 rounded-md border transition",
@@ -347,7 +347,7 @@ export default function VerifyPage() {
             {/* 地区 */}
             {personLocations.length > 0 && (
               <div className="flex items-center gap-1.5 shrink-0">
-                <span className="text-[#666]"><i className="fas fa-location-dot mr-1" />地区</span>
+                <span className="text-[#666]">地区</span>
                 <button onClick={() => setLocationFilter("all")} className={clsx(
                   "px-2.5 py-0.5 rounded-md border transition",
                   locationFilter === "all"
@@ -369,7 +369,7 @@ export default function VerifyPage() {
 
         <div className="flex flex-col sm:flex-row gap-2 mb-4">
           <div className="flex-1 relative">
-            <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-[#666] text-xs" />
+            
             <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)}
               placeholder={`搜索${currentCat.label}名称、标签、地区...`}
               className="w-full h-9 pl-9 pr-3 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition" />
@@ -389,13 +389,13 @@ export default function VerifyPage() {
         {/* 卡片列表 */}
         {loading && (
           <div className="text-center text-[#8a8a8a] py-20">
-            <i className="fas fa-spinner fa-spin text-4xl mb-4 text-[#3ea6ff] opacity-40" />
+            
             <p className="text-sm">加载中...</p>
           </div>
         )}
         {error && !loading && (
           <div className="text-center text-[#ff4444] py-20">
-            <i className="fas fa-circle-exclamation text-4xl mb-4 opacity-40" />
+            
             <p className="text-sm mb-3">{error}</p>
             <button onClick={fetchItems} className="px-4 py-1.5 rounded-lg bg-[#3ea6ff]/15 text-[#3ea6ff] text-xs border border-[#3ea6ff]/30 hover:bg-[#3ea6ff]/25 transition">
               重试
@@ -552,10 +552,10 @@ function ItemCard({ item, onClick }: { item: VerifyItem; onClick: () => void }) 
       {desc && <p className="text-[12px] text-[#8a8a8a] line-clamp-2 mb-2">{desc}</p>}
       <div className="flex items-center justify-between text-[11px] text-[#666] pt-2 border-t border-[#333]/30">
         <div className="flex items-center gap-3">
-          <span><i className="fas fa-clock mr-1" />{item.publishTime.split(" ")[0]}</span>
-          {rating && <span className="text-[#f0b90b]"><i className="fas fa-star mr-0.5 text-[9px]" />{rating.toFixed(1)}</span>}
+          <span>{item.publishTime.split(" ")[0]}</span>
+          {rating && <span className="text-[#f0b90b]">{rating.toFixed(1)}</span>}
         </div>
-        <span className="text-[#3ea6ff]">详情 <i className="fas fa-chevron-right text-[9px]" /></span>
+        <span className="text-[#3ea6ff]">详情 </span>
       </div>
     </div>
   );
@@ -610,7 +610,7 @@ function DetailModal({ item, onClose }: { item: VerifyItem; onClose: () => void 
             </div>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-full bg-[#212121] flex items-center justify-center text-[#8a8a8a] hover:text-white transition shrink-0">
-            <i className="fas fa-times" />
+            
           </button>
         </div>
 
@@ -635,19 +635,19 @@ function DetailModal({ item, onClose }: { item: VerifyItem; onClose: () => void 
 
         <div className="mb-4 p-3 rounded-xl bg-[#212121]/50 border border-[#333]/30 text-xs text-[#8a8a8a]">
           <div className="flex items-center justify-between flex-wrap gap-1">
-            <span><i className="fas fa-calendar mr-1" />发布：{item.publishTime}</span>
-            {item.verifiedBy && <span><i className="fas fa-user-check mr-1 text-[#2ba640]" />{item.verifiedBy}</span>}
+            <span>发布：{item.publishTime}</span>
+            {item.verifiedBy && <span>{item.verifiedBy}</span>}
           </div>
-          {item.verifiedTime && <div className="mt-1"><i className="fas fa-check-double mr-1 text-[#2ba640]" />验证于：{item.verifiedTime}</div>}
+          {item.verifiedTime && <div className="mt-1">验证于：{item.verifiedTime}</div>}
           {item.type === "person" && (item as PersonItem).verifyRecords && (item as PersonItem).verifyRecords!.length > 0 && (
-            <div className="mt-1"><i className="fas fa-clipboard-check mr-1 text-[#3ea6ff]" />共 {records.length || (item as PersonItem).verifyRecords!.length} 条验证记录</div>
+            <div className="mt-1">共 {records.length || (item as PersonItem).verifyRecords!.length} 条验证记录</div>
           )}
         </div>
 
         {/* 已验证也可以再次验证 */}
         <button onClick={() => { alert("提交验证修改（需要填写修改字段、新值和原因）。实际功能需要后端支持。"); }}
           className="w-full py-3 rounded-xl bg-[#3ea6ff] text-[#0f0f0f] font-bold text-sm hover:bg-[#65b8ff] transition active:scale-95 mb-2">
-          <i className="fas fa-pen-to-square mr-1.5" /> {item.status === "verified" ? "再次验证/修正信息" : "提交验证"}
+           {item.status === "verified" ? "再次验证/修正信息" : "提交验证"}
         </button>
         {item.status === "verified" && (
           <p className="text-[10px] text-[#666] text-center">已验证的信息也可以再次验证修正，多人验证结果以多数为准</p>
@@ -685,7 +685,7 @@ function InfoGrid({ items }: { items: { label: string; value: string }[] }) {
 function VerifiedNoteBanner({ note }: { note: string }) {
   return (
     <div className="mb-4 p-3 rounded-xl bg-[#2ba640]/10 border border-[#2ba640]/20 text-sm text-[#2ba640]">
-      <i className="fas fa-shield-check mr-1.5 text-xs" />验证说明：{note}
+      验证说明：{note}
     </div>
   );
 }
@@ -693,7 +693,7 @@ function VerifiedNoteBanner({ note }: { note: string }) {
 function DiffWarning() {
   return (
     <div className="mb-4 p-3 rounded-xl bg-[#ff4444]/10 border border-[#ff4444]/20 text-sm text-[#ff4444]">
-      <i className="fas fa-triangle-exclamation mr-1.5 text-xs" />部分自报信息与实际不符，已标注差异
+      部分自报信息与实际不符，已标注差异
     </div>
   );
 }
@@ -705,7 +705,7 @@ function WarnGrid({ items }: { items: { label: string; value: string; warn?: boo
         <div key={i} className={clsx("p-2 rounded-lg border", it.warn ? "bg-[#ff4444]/5 border-[#ff4444]/20" : "bg-[#212121]/80 border-[#333]/30")}>
           <div className="text-[10px] text-[#666] mb-0.5 flex items-center gap-1">
             {it.label}
-            {it.warn && <i className="fas fa-triangle-exclamation text-[#ff4444] text-[8px]" />}
+            {it.warn && <span className="text-[#ff4444]">!</span>}
           </div>
           <div className={clsx("text-xs", it.warn ? "text-[#ff4444]" : "text-[#ccc]")}>{it.value}</div>
         </div>
@@ -756,14 +756,14 @@ function PersonDetail({ data }: { data: PersonItem }) {
       {/* 验证备注 */}
       {isV && data.verifiedNote && (
         <div className="mb-4 p-3 rounded-xl bg-[#2ba640]/10 border border-[#2ba640]/20 text-sm text-[#2ba640]">
-          <i className="fas fa-shield-check mr-1.5 text-xs" />验证说明：{data.verifiedNote}
+          验证说明：{data.verifiedNote}
         </div>
       )}
 
       {/* 谎报提醒 */}
       {isV && (ageDiff || heightDiff || weightDiff || genderDiff) && (
         <div className="mb-4 p-3 rounded-xl bg-[#ff4444]/10 border border-[#ff4444]/20 text-sm text-[#ff4444]">
-          <i className="fas fa-triangle-exclamation mr-1.5 text-xs" />部分自报信息与实际不符，已标注差异
+          部分自报信息与实际不符，已标注差异
         </div>
       )}
 
@@ -772,7 +772,7 @@ function PersonDetail({ data }: { data: PersonItem }) {
           {data.bio && <p className="text-sm text-[#ccc] mb-1">{data.bio}</p>}
           {data.advantages && (
             <div className="p-3 rounded-xl bg-[#212121] border border-[#333] text-sm text-[#aaa]">
-              <i className="fas fa-star text-[#f0b90b] mr-1.5 text-xs" />{data.advantages}
+              {data.advantages}
             </div>
           )}
         </div>
@@ -785,7 +785,7 @@ function PersonDetail({ data }: { data: PersonItem }) {
               <div key={i} className={clsx("p-2 rounded-lg border", it.warn ? "bg-[#ff4444]/5 border-[#ff4444]/20" : "bg-[#212121]/80 border-[#333]/30")}>
                 <div className="text-[10px] text-[#666] mb-0.5 flex items-center gap-1">
                   {it.label}
-                  {it.warn && <i className="fas fa-triangle-exclamation text-[#ff4444] text-[8px]" />}
+                  {it.warn && <span className="text-[#ff4444]">!</span>}
                 </div>
                 <div className={clsx("text-xs", it.warn ? "text-[#ff4444]" : "text-[#ccc]")}>{it.value}</div>
               </div>
@@ -815,7 +815,7 @@ function PersonDetail({ data }: { data: PersonItem }) {
                     {s.level}
                     <span className="ml-1.5 inline-flex gap-0.5">
                       {Array.from({ length: ["入门", "熟练", "精通", "专家"].indexOf(s.level) + 1 }).map((_, j) => (
-                        <i key={j} className="fas fa-circle text-[4px]" />
+                        <span key={j} className="w-1 h-1 rounded-full bg-[#3ea6ff] inline-block" />
                       ))}
                     </span>
                   </span>
@@ -1039,16 +1039,16 @@ function VerifyRecordsPanel({ records }: { records: VerifyRecord[] }) {
   return (
     <div className="mb-4">
       <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1.5 text-sm font-semibold mb-2 w-full text-left">
-        <i className={`fas fa-clipboard-list text-xs text-[#3ea6ff]`} />
+        
         验证记录（{records.length}条）
-        <i className={`fas fa-chevron-${expanded ? "up" : "down"} text-[10px] text-[#666] ml-auto`} />
+        
       </button>
 
       {expanded && (
         <div className="space-y-3">
           {/* 字段共识摘要 */}
           <div className="p-3 rounded-xl bg-[#212121]/50 border border-[#3ea6ff]/10">
-            <p className="text-[10px] text-[#3ea6ff] font-bold mb-2"><i className="fas fa-scale-balanced mr-1" />共识结果（多数/点赞决定）</p>
+            <p className="text-[10px] text-[#3ea6ff] font-bold mb-2">共识结果（多数/点赞决定）</p>
             <div className="grid grid-cols-2 gap-1.5">
               {Object.entries(fieldGroups).map(([field, group]) => {
                 const entries = Object.entries(group.values).sort((a, b) => {
@@ -1082,17 +1082,17 @@ function VerifyRecordsPanel({ records }: { records: VerifyRecord[] }) {
                     <span className="text-[10px] text-[#666]">{r.time}</span>
                   </div>
                   <div className="flex items-center gap-2 text-[11px]">
-                    <span className="text-[#2ba640]"><i className="fas fa-thumbs-up text-[9px] mr-0.5" />{r.likes}</span>
-                    <span className="text-[#ff4444]"><i className="fas fa-thumbs-down text-[9px] mr-0.5" />{r.dislikes}</span>
+                    <span className="text-[#2ba640]">{r.likes}</span>
+                    <span className="text-[#ff4444]">{r.dislikes}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 text-[12px] mb-1">
                   <span className="px-1.5 py-0.5 rounded bg-[#3ea6ff]/10 text-[#3ea6ff] text-[10px] font-bold">{r.field}</span>
                   <span className="text-[#ff4444] line-through">{r.oldValue}</span>
-                  <i className="fas fa-arrow-right text-[8px] text-[#666]" />
+                  
                   <span className="text-[#2ba640] font-bold">{r.newValue}</span>
                 </div>
-                <p className="text-[11px] text-[#8a8a8a]"><i className="fas fa-comment-dots mr-1 text-[9px]" />{r.reason}</p>
+                <p className="text-[11px] text-[#8a8a8a]">{r.reason}</p>
               </div>
             ))}
           </div>

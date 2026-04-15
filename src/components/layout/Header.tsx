@@ -6,7 +6,7 @@ import {
   Play, Music, BookOpen, FileText, Tv, Gamepad2, Radio, Podcast,
   Search, User, Menu, X, Shield
 } from 'lucide-react';
-import { getMode } from '@/lib/age-gate';
+import { ageGate } from '@/lib/age-gate';
 import type { UserMode } from '@/lib/types';
 
 interface NavItem {
@@ -35,7 +35,7 @@ const ELDER_NAV: NavItem[] = [
 
 export default function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const mode = getMode();
+  const mode = ageGate.getMode();
   const navItems = mode === 'elder' ? ELDER_NAV : NAV_ITEMS.filter(item => item.modes.includes(mode));
 
   return (

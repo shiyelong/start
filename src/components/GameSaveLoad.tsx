@@ -130,7 +130,7 @@ export default function GameSaveLoad({ gameId, onLoad, onSave }: GameSaveLoadPro
     return (
       <div className="rounded-xl bg-[#1a1a1a] border border-[#333] p-4 text-center">
         <p className="text-[#666] text-xs">
-          <i className="fas fa-lock mr-1" />
+          
           登录后可存档
         </p>
       </div>
@@ -140,7 +140,7 @@ export default function GameSaveLoad({ gameId, onLoad, onSave }: GameSaveLoadPro
   return (
     <div className="rounded-xl bg-[#1a1a1a] border border-[#333] p-4">
       <h3 className="text-sm font-bold mb-3 text-[#3ea6ff]">
-        <i className="fas fa-save mr-1.5" />
+        
         存档管理
       </h3>
 

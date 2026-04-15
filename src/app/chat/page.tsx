@@ -117,7 +117,7 @@ export default function ChatPage() {
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3" style={{ height: "calc(100vh - 7rem)" }}>
           {/* Sidebar */}
           <div className="md:col-span-3 bg-bg-card/50 border border-border rounded-xl p-4 flex flex-col overflow-hidden">
-            <h3 className="font-bold text-sm mb-3"><i className="fas fa-hashtag text-accent mr-2" />频道</h3>
+            <h3 className="font-bold text-sm mb-3">频道</h3>
             <div className="space-y-0.5 mb-4">
               {chatChannels.map(c => (
                 <button key={c.id} onClick={() => setChannel(c.id)} className={clsx(
@@ -150,7 +150,7 @@ export default function ChatPage() {
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {loading && (
                 <div className="text-center py-10 text-[#8a8a8a]">
-                  <i className="fas fa-spinner fa-spin text-lg mb-2" />
+                  
                   <p className="text-xs">加载消息中...</p>
                 </div>
               )}
@@ -187,13 +187,13 @@ export default function ChatPage() {
                     "px-4 h-10 rounded-lg text-sm font-semibold transition",
                     sending || !input.trim() ? "bg-[#333] text-[#666]" : "bg-accent text-bg hover:bg-accent-hover"
                   )}>
-                    <i className="fas fa-paper-plane" />
+                    
                   </button>
                 </div>
               ) : (
                 <div className="text-center py-2">
                   <a href={`/login?redirect=${encodeURIComponent("/chat")}`} className="text-sm text-accent hover:underline">
-                    <i className="fas fa-sign-in-alt mr-1" />登录后发送消息
+                    登录后发送消息
                   </a>
                 </div>
               )}
