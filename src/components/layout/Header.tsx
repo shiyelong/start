@@ -5,9 +5,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import {
   Play, Music, BookOpen, FileText, Tv, Gamepad2, Radio, Podcast,
-  Search, MessageCircle, Menu, X, Shield, Settings, Download,
+  Search, MessageCircle, X, Shield, Settings, Download,
   Video, Heart, Briefcase, ShieldAlert, MessagesSquare, MessageSquare,
-  Users, ChevronDown, ChevronUp, User, MoreHorizontal,
+  Users, ChevronDown, ChevronUp, User, MoreHorizontal, Gift,
 } from 'lucide-react';
 import { ageGate } from '@/lib/age-gate';
 import type { UserMode } from '@/lib/types';
@@ -54,8 +54,8 @@ const ELDER_NAV: NavItem[] = [
   { href: '/music',  label: '听音乐', icon: <Music size={18} /> },
 ];
 
-/** Adult zone sub-sections */
-const ZONE_SUBNAV: NavItem[] = [
+/** Adult zone — content channels */
+const ZONE_CONTENT: NavItem[] = [
   { href: '/zone/videos',   label: '成人视频', icon: <Video size={18} /> },
   { href: '/zone/anime',    label: '成人动漫', icon: <Tv size={18} /> },
   { href: '/zone/comics',   label: '成人漫画', icon: <BookOpen size={18} /> },
@@ -64,12 +64,17 @@ const ZONE_SUBNAV: NavItem[] = [
   { href: '/zone/music',    label: '成人音乐', icon: <Music size={18} /> },
   { href: '/zone/podcasts', label: '成人播客', icon: <Podcast size={18} /> },
   { href: '/zone/games',    label: '成人游戏', icon: <Gamepad2 size={18} /> },
-  { href: '/zone/services', label: '服务点评', icon: <ShieldAlert size={18} /> },
-  { href: '/zone/jobs',     label: '行业招聘', icon: <Briefcase size={18} /> },
-  { href: '/zone/safety',   label: '安全中心', icon: <Shield size={18} /> },
-  { href: '/zone/forum',    label: '论坛',     icon: <MessagesSquare size={18} /> },
-  { href: '/zone/chat',     label: '私聊',     icon: <MessageSquare size={18} /> },
-  { href: '/zone/dating',   label: '自由约会', icon: <Heart size={18} /> },
+];
+
+/** Adult zone — community services */
+const ZONE_COMMUNITY: NavItem[] = [
+  { href: '/zone/services',      label: '服务验证', icon: <ShieldAlert size={18} /> },
+  { href: '/zone/services/free', label: '免费交友', icon: <Gift size={18} /> },
+  { href: '/zone/jobs',          label: '行业招聘', icon: <Briefcase size={18} /> },
+  { href: '/zone/safety',        label: '安全中心', icon: <Shield size={18} /> },
+  { href: '/zone/forum',         label: '论坛',     icon: <MessagesSquare size={18} /> },
+  { href: '/zone/chat',          label: '私聊',     icon: <MessageSquare size={18} /> },
+  { href: '/zone/dating',        label: '自由约会', icon: <Heart size={18} /> },
 ];
 
 /** Mobile bottom tab items (5 most important) */
@@ -168,14 +173,16 @@ export default function Header() {
             <span className="text-white font-bold text-lg hidden sm:block">星聚</span>
           </Link>
 
-          {/* Desktop Nav — scrollable with gradient fades */}
-          <div className="hidden lg:block relative flex-1 min-w-0 mx-4">
-            {showLeftFade && (
-              <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-[#0f0f0f] to-transparent z-10 pointer-events-none" />
-            )}
-            {showRightFade && (
-              <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[#0f0f0f] to-transparent z-10 pointer-events-none" />
-            )}
+          {/* Desktop Nav — scrollable with gradient fades + adult zone */}
+          <div className="hidden lg:flex relative flex-1 min-w-0 mx-4 items-center gap-1">
+            {/* Scrollable nav links */}
+            <div className="relative flex-1 min-w-0">
+              {showLeftFade && (
+                <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-[#0f0f0f] to-transparent z-10 pointer-events-none" />
+              )}
+              {showRightFade && (
+                <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[#0f0f0f] to-transparent z-10 pointer-events-none" />
+              )}
             <nav
               ref={navScrollRef}
               className="flex items-center gap-0.5 overflow-x-auto scrollbar-hide scroll-smooth"
@@ -200,54 +207,77 @@ export default function Header() {
                   </Link>
                 );
               })}
-
-              {/* Adult zone dropdown */}
-              {isAdult && (
-                <div className="relative">
-                  <button
-                    onClick={() => setZoneOpen(!zoneOpen)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors ${
-                      pathname.startsWith('/zone')
-                        ? 'text-[#ff6b6b] bg-[#ff6b6b]/10'
-                        : 'text-[#ff6b6b] hover:text-[#ff8a8a] hover:bg-white/5'
-                    }`}
-                  >
-                    <Shield size={18} />
-                    成人专区
-                    {zoneOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                  </button>
-
-                  {zoneOpen && (
-                    <div className="absolute top-full right-0 mt-1 w-56 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 max-h-[70vh] overflow-y-auto z-50">
-                      <Link
-                        href="/zone"
-                        onClick={() => setZoneOpen(false)}
-                        className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-[#3ea6ff] hover:bg-white/5 transition-colors font-medium"
-                      >
-                        <Users size={16} />
-                        专区首页
-                      </Link>
-                      <div className="border-t border-white/5 my-1" />
-                      {ZONE_SUBNAV.map((item) => (
-                        <Link
-                          key={item.href}
-                          href={item.href}
-                          onClick={() => setZoneOpen(false)}
-                          className={`flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors ${
-                            isActive(item.href)
-                              ? 'text-[#3ea6ff] bg-[#3ea6ff]/5'
-                              : 'text-gray-300 hover:text-[#3ea6ff] hover:bg-white/5'
-                          }`}
-                        >
-                          {item.icon}
-                          {item.label}
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
             </nav>
+            </div>
+
+            {/* Adult zone dropdown — OUTSIDE nav to avoid overflow clip */}
+            {isAdult && (
+              <div className="relative flex-shrink-0 ml-1">
+                <button
+                  onClick={() => setZoneOpen(!zoneOpen)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors ${
+                    pathname.startsWith('/zone')
+                      ? 'text-[#ff6b6b] bg-[#ff6b6b]/10'
+                      : 'text-[#ff6b6b] hover:text-[#ff8a8a] hover:bg-white/5'
+                  }`}
+                >
+                  <Shield size={18} />
+                  成人专区
+                  {zoneOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+
+                {zoneOpen && (
+                  <div className="absolute top-full right-0 mt-1 w-56 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 max-h-[70vh] overflow-y-auto z-[60]">
+                    <Link
+                      href="/zone"
+                      onClick={() => setZoneOpen(false)}
+                      className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-[#3ea6ff] hover:bg-white/5 transition-colors font-medium"
+                    >
+                      <Users size={16} />
+                      专区首页
+                    </Link>
+
+                    {/* Content channels group */}
+                    <div className="border-t border-white/5 my-1" />
+                    <div className="px-4 py-1.5 text-[10px] font-semibold text-gray-500 tracking-wider">内容频道</div>
+                    {ZONE_CONTENT.map((item) => (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={() => setZoneOpen(false)}
+                        className={`flex items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
+                          isActive(item.href)
+                            ? 'text-[#3ea6ff] bg-[#3ea6ff]/5'
+                            : 'text-gray-300 hover:text-[#3ea6ff] hover:bg-white/5'
+                        }`}
+                      >
+                        {item.icon}
+                        {item.label}
+                      </Link>
+                    ))}
+
+                    {/* Community services group */}
+                    <div className="border-t border-white/5 my-1" />
+                    <div className="px-4 py-1.5 text-[10px] font-semibold text-gray-500 tracking-wider">社区服务</div>
+                    {ZONE_COMMUNITY.map((item) => (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={() => setZoneOpen(false)}
+                        className={`flex items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
+                          isActive(item.href)
+                            ? 'text-[#3ea6ff] bg-[#3ea6ff]/5'
+                            : 'text-gray-300 hover:text-[#3ea6ff] hover:bg-white/5'
+                        }`}
+                      >
+                        {item.icon}
+                        {item.label}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Right side utilities */}
@@ -383,7 +413,29 @@ export default function Header() {
                       <Users size={16} />
                       专区首页
                     </Link>
-                    {ZONE_SUBNAV.map((item) => (
+
+                    {/* Content channels group */}
+                    <div className="px-3 pt-2 pb-1 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">内容频道</div>
+                    {ZONE_CONTENT.map((item) => (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={() => setMobileOverlayOpen(false)}
+                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                          isActive(item.href)
+                            ? 'text-[#3ea6ff] bg-[#3ea6ff]/5'
+                            : 'text-gray-400 hover:text-[#3ea6ff] hover:bg-white/5'
+                        }`}
+                      >
+                        {item.icon}
+                        {item.label}
+                      </Link>
+                    ))}
+
+                    {/* Community services group */}
+                    <div className="border-t border-white/5 my-2" />
+                    <div className="px-3 pt-1 pb-1 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">社区服务</div>
+                    {ZONE_COMMUNITY.map((item) => (
                       <Link
                         key={item.href}
                         href={item.href}
