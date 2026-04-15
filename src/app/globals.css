@@ -138,3 +138,65 @@ p, h1, h2, h3, span, div { user-select: text; }
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
+/* ===== Page content fade-in animation ===== */
+@keyframes pageContentFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+main {
+  animation: pageContentFadeIn 0.35s ease-out;
+}
+
+/* ===== Enhanced card hover effects ===== */
+.content-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.content-card:hover {
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(62, 166, 255, 0.1);
+  border-color: rgba(62, 166, 255, 0.15);
+}
+
+/* ===== Scrollbar hide utility ===== */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ===== Consistent page header style ===== */
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.page-header h1 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ===== Empty state styling ===== */
+.empty-state {
+  text-align: center;
+  padding: 4rem 1rem;
+  color: #8a8a8a;
+}
+.empty-state svg {
+  margin: 0 auto 1rem;
+  opacity: 0.2;
+}
+
+/* ===== Mobile bottom tab bar safe area ===== */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .pb-mobile-nav {
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  }
+}

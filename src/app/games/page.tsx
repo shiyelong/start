@@ -544,6 +544,57 @@ export default function GamesPage() {
             显示 {filteredGames.length} / {allowedGames.length} 款游戏
           </div>
         </section>
+
+        {/* ===== Adult Games Section (only in adult mode) ===== */}
+        {ageGate.canAccess('NC-17') && (
+          <section className="mt-10 mb-8 animate-in fade-in">
+            <div className="flex items-center gap-2 mb-4">
+              <Shield size={18} className="text-[#ff6b6b]" />
+              <h2 className="text-lg font-bold text-[#ff6b6b]">成人游戏</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-red-500/15 text-red-400 font-semibold">NC-17</span>
+            </div>
+
+            {/* Prominent link card to /zone/games */}
+            <Link
+              href="/zone/games"
+              className="group block p-5 rounded-xl bg-gradient-to-br from-red-900/20 to-pink-900/20 border border-red-500/20 hover:border-red-500/40 hover:-translate-y-0.5 transition-all mb-4"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-red-500 to-pink-600 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform shadow-lg">
+                  <Gamepad2 size={24} className="text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-sm text-white group-hover:text-[#ff6b6b] transition">进入成人游戏专区</h3>
+                  <p className="text-xs text-[#8a8a8a] mt-1">RPG、模拟、格斗等成人向游戏内容</p>
+                </div>
+                <Shield size={20} className="text-red-400/50 shrink-0" />
+              </div>
+            </Link>
+
+            {/* Adult game category cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {[
+                { id: 'adult-rpg', name: '成人RPG', genre: 'RPG', desc: '角色扮演冒险' },
+                { id: 'adult-fight', name: '成人格斗', genre: '格斗', desc: '格斗连招对战' },
+                { id: 'adult-sim', name: '成人模拟', genre: '模拟', desc: '生活模拟经营' },
+                { id: 'adult-puzzle', name: '成人解谜', genre: '解谜', desc: '益智解谜挑战' },
+              ].map((game) => (
+                <Link
+                  key={game.id}
+                  href="/zone/games"
+                  className="group p-4 rounded-xl bg-[#1a1a1a]/50 border border-red-500/10 hover:border-red-500/30 hover:-translate-y-0.5 transition-all"
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <Gamepad2 size={14} className="text-red-400" />
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 font-semibold">NC-17</span>
+                  </div>
+                  <h4 className="text-sm font-medium text-white group-hover:text-[#ff6b6b] transition">{game.name}</h4>
+                  <p className="text-[11px] text-[#666] mt-1">{game.desc}</p>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
       </main>
     </>
   );

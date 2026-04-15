@@ -559,7 +559,7 @@ function drawPetSprite(
   if (pet.rarity === "rare" || pet.rarity === "epic") {
     ctx.fillStyle = pet.rarity === "epic" ? "#f0b90b" : "#bdc3c7";
     ctx.font = `${u * 2}px sans-serif`;
-    ctx.fillText("?", x + s * 0.02, y + s * 0.15);
+    ctx.fillText("★", x + s * 0.02, y + s * 0.15);
   }
 }
 
@@ -626,7 +626,7 @@ function buildBattleButtons(battle: BattleState): BattleButton[] {
         y: skillStartY + row * (skillH + skillGapY),
         w: skillW,
         h: skillH,
-        label: `${skill.name} (${skill.mpCost}MP)`,
+        label: `${skill.name} (消耗${skill.mpCost})`,
         type: "skill",
         skillIndex: i,
         disabled,
@@ -709,7 +709,7 @@ function renderBattle(
   ctx.fillText(`${enemy.name}`, enemyInfoX, enemyInfoY);
   ctx.fillStyle = "#aaaaaa";
   ctx.font = "12px monospace";
-  ctx.fillText(`Lv.${enemy.level}`, enemyInfoX + ctx.measureText(enemy.name).width + 8, enemyInfoY);
+  ctx.fillText(`等级${enemy.level}`, enemyInfoX + ctx.measureText(enemy.name).width + 8, enemyInfoY);
   // HP bar
   ctx.fillStyle = "#aaaaaa";
   ctx.font = "10px monospace";
@@ -743,7 +743,7 @@ function renderBattle(
   ctx.fillText(`${player.name}`, playerInfoX, playerInfoY);
   ctx.fillStyle = "#aaaaaa";
   ctx.font = "12px monospace";
-  ctx.fillText(`Lv.${player.level}`, playerInfoX + ctx.measureText(player.name).width + 8, playerInfoY);
+  ctx.fillText(`等级${player.level}`, playerInfoX + ctx.measureText(player.name).width + 8, playerInfoY);
   // HP bar
   ctx.fillStyle = "#aaaaaa";
   ctx.font = "10px monospace";
@@ -1295,11 +1295,11 @@ function renderHUD(
 
   // Gold
   ctx.fillStyle = "#ffd700";
-  ctx.fillText(`G${state.gold}`, 70, 18);
+  ctx.fillText(`金${state.gold}`, 70, 18);
 
   // Area name
   ctx.fillStyle = "#aaaaaa";
-  ctx.fillText(`?${areaName}`, 140, 18);
+  ctx.fillText(`${areaName}`, 140, 18);
 
   // Quest hint (if any active quest)
   const activeQuest = state.quests.find((q) => !q.completed);
@@ -1308,7 +1308,7 @@ function renderHUD(
     if (questDef) {
       ctx.fillStyle = "#88ccff";
       ctx.font = "9px monospace";
-      ctx.fillText(`?${questDef.name}`, 240, 18);
+      ctx.fillText(`任务:${questDef.name}`, 240, 18);
     }
   }
 
@@ -1392,12 +1392,13 @@ function renderMenu(
       // Name, level, type
       ctx.fillStyle = "#ffffff";
       ctx.font = "11px monospace";
-      ctx.fillText(`${pet.name}  Lv.${pet.level}  [${pet.type}]`, 54, py + 10);
+      const typeNameMap: Record<string, string> = { fire: "火", water: "水", grass: "草", electric: "电", dark: "暗" };
+      ctx.fillText(`${pet.name}  等级${pet.level}  [${typeNameMap[pet.type] ?? pet.type}]`, 54, py + 10);
       // HP bar
       drawStatBar(ctx, 54, py + 16, 120, 6, pet.hp, pet.maxHp, "#2ecc71");
       ctx.fillStyle = "#aaaaaa";
       ctx.font = "9px monospace";
-      ctx.fillText(`HP ${pet.hp}/${pet.maxHp}`, 180, py + 22);
+      ctx.fillText(`生命 ${pet.hp}/${pet.maxHp}`, 180, py + 22);
     });
   } else if (selectedIndex === 1) {
     // Items
@@ -1420,7 +1421,7 @@ function renderMenu(
       ctx.fillStyle = completed ? "#2ecc71" : "#f39c12";
       ctx.font = "11px monospace";
       ctx.fillText(
-        `${completed ? "?" : "⬜"} ${quest.name}`,
+        `${completed ? "✓" : "○"} ${quest.name}`,
         42,
         panelY + 36 + i * 22,
       );
@@ -2005,7 +2006,7 @@ export default function PokemonPage() {
                       enemyPet: wildPet,
                       turn: determineTurnOrder(state.party[0].spd, wildPet.spd),
                       phase: "select",
-                      log: [`野生的 ${wildPet.name} (Lv.${wildLevel}) 出现了！`],
+                      log: [`野生的 ${wildPet.name} (等级${wildLevel}) 出现了！`],
                     };
 
                     // Switch to battle phase
@@ -2051,7 +2052,7 @@ export default function PokemonPage() {
       <Header />
       <main className="max-w-2xl mx-auto px-4 py-4 pb-24 md:pb-8">
         <h1 className="text-xl font-bold text-white mb-3">
-          <span className="text-[#f0b90b]">? 宠物大冒险</span>
+          <span className="text-[#f0b90b]">宠物大冒险</span>
         </h1>
 
         {/* Canvas */}

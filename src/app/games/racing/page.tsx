@@ -2,161 +2,283 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Header from "@/components/Header";
 import Link from "next/link";
-import { ChevronLeft, RotateCcw, Car } from "lucide-react";
+import GameLeaderboard from "@/components/GameLeaderboard";
+import GameSaveLoad from "@/components/GameSaveLoad";
+import { fetchWithAuth } from "@/lib/auth";
+import {
+  ChevronLeft, RotateCcw, Car, Play, Trophy, Clock,
+  Gauge, Flag, Volume2, VolumeX, ChevronUp, ChevronDown
+} from "lucide-react";
 
-const W = 400, H = 600;
-interface RoadObj { x: number; y: number; w: number; h: number; type: "car" | "coin"; color: string; }
+/* ========== 常量 ========== */
+const GAME_ID = "racing";
+const W = 600, H = 600;
+const TWO_PI = Math.PI * 2;
+const TOTAL_LAPS = 3;
 
-export default function RacingGame() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [phase, setPhase] = useState<"title" | "playing" | "gameover">("title");
-  const [score, setScore] = useState(0);
-  const stateRef = useRef({ px: W / 2, speed: 200, roadY: 0, objects: [] as RoadObj[], score: 0, spawnTimer: 0, speedBoost: 0 });
-  const keysRef = useRef(new Set<string>());
-  const rafRef = useRef(0);
-  const lastRef = useRef(0);
+/* ========== 赛车定义 ========== */
+type CarId = "speed" | "balanced" | "handling";
+interface CarDef {
+  id: CarId; name: string; desc: string; color: string;
+  topSpeed: number; accel: number; brake: number; turnRate: number; grip: number;
+}
+const CARS: CarDef[] = [
+  { id: "speed", name: "闪电号", desc: "极速型 - 最高速度快，操控一般", color: "#ff4444", topSpeed: 280, accel: 120, brake: 200, turnRate: 2.4, grip: 0.85 },
+  { id: "balanced", name: "风暴号", desc: "平衡型 - 各项属性均衡", color: "#3ea6ff", topSpeed: 250, accel: 140, brake: 220, turnRate: 2.8, grip: 0.90 },
+  { id: "handling", name: "幽灵号", desc: "操控型 - 转向灵活，抓地力强", color: "#2ba640", topSpeed: 230, accel: 130, brake: 240, turnRate: 3.4, grip: 0.96 },
+];
 
-  const startGame = useCallback(() => {
-    stateRef.current = { px: W / 2, speed: 200, roadY: 0, objects: [], score: 0, spawnTimer: 0, speedBoost: 0 };
-    setScore(0); setPhase("playing"); lastRef.current = 0;
-  }, []);
+/* ========== 赛道定义 ========== */
+type TrackId = "city" | "mountain" | "desert";
+interface TrackPoint { x: number; y: number; }
+interface TrackZone { start: number; end: number; type: "boost" | "slow"; }
+interface TrackDef {
+  id: TrackId; name: string; desc: string; difficulty: number;
+  bgColor: string; roadColor: string; edgeColor: string; grassColor: string;
+  points: TrackPoint[]; width: number; zones: TrackZone[];
+}
 
-  useEffect(() => {
-    const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext("2d"); if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr; canvas.height = H * dpr;
-    canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
+function makeOvalTrack(cx: number, cy: number, rx: number, ry: number, n: number): TrackPoint[] {
+  const pts: TrackPoint[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TWO_PI;
+    pts.push({ x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry });
+  }
+  return pts;
+}
 
-    const loop = (ts: number) => {
-      if (!lastRef.current) lastRef.current = ts;
-      const dt = Math.min((ts - lastRef.current) / 1000, 0.05);
-      lastRef.current = ts;
-      const s = stateRef.current;
+function makeMountainTrack(): TrackPoint[] {
+  const cx = W / 2, cy = H / 2;
+  const pts: TrackPoint[] = [];
+  const n = 60;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TWO_PI;
+    const r = 180 + Math.sin(a * 3) * 50 + Math.cos(a * 5) * 30;
+    pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r * 0.85 });
+  }
+  return pts;
+}
 
-      if (phase === "playing") {
-        // Input
-        const keys = keysRef.current;
-        if (keys.has("ArrowLeft") || keys.has("a")) s.px = Math.max(80, s.px - 300 * dt);
-        if (keys.has("ArrowRight") || keys.has("d")) s.px = Math.min(W - 80, s.px + 300 * dt);
-        s.speed = Math.min(600, 200 + s.score * 0.5);
-        s.roadY += s.speed * dt;
-        s.score += dt * 10; setScore(Math.floor(s.score));
-        // Spawn
-        s.spawnTimer -= dt;
-        if (s.spawnTimer <= 0) {
-          s.spawnTimer = 0.6 + Math.random() * 0.8;
-          if (Math.random() < 0.3) {
-            s.objects.push({ x: 100 + Math.random() * (W - 200), y: -40, w: 30, h: 50, type: "coin", color: "#ffd700" });
-          } else {
-            s.objects.push({ x: 100 + Math.random() * (W - 200), y: -60, w: 40, h: 60, type: "car", color: `hsl(${Math.random() * 360}, 70%, 50%)` });
-          }
-        }
-        // Update objects
-        for (const o of s.objects) o.y += s.speed * dt * 0.8;
-        // Collision
-        for (const o of s.objects) {
-          if (o.y > H + 60) continue;
-          const dx = Math.abs(o.x - s.px), dy = Math.abs(o.y - (H - 80));
-          if (dx < (o.w + 30) / 2 && dy < (o.h + 50) / 2) {
-            if (o.type === "coin") { s.score += 50; setScore(Math.floor(s.score)); o.y = H + 100; }
-            else { setPhase("gameover"); }
-          }
-        }
-        s.objects = s.objects.filter(o => o.y < H + 100);
-      }
+function makeDesertTrack(): TrackPoint[] {
+  const cx = W / 2, cy = H / 2;
+  const pts: TrackPoint[] = [];
+  const n = 60;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TWO_PI;
+    const r = 200 + Math.sin(a * 2) * 60 + Math.cos(a * 4) * 25 + Math.sin(a * 7) * 15;
+    pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r * 0.8 });
+  }
+  return pts;
+}
 
-      // Render
-      ctx.save(); ctx.scale(dpr, dpr);
-      // Road
-      const grad = ctx.createLinearGradient(0, 0, 0, H);
-      grad.addColorStop(0, "#1a1a2e"); grad.addColorStop(1, "#0f0f0f");
-      ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
-      // Road markings
-      ctx.strokeStyle = "#333"; ctx.lineWidth = 2; ctx.setLineDash([30, 20]);
-      for (let lx = 120; lx < W - 60; lx += 80) {
-        ctx.beginPath(); ctx.moveTo(lx, (s.roadY % 50) - 50); ctx.lineTo(lx, H); ctx.stroke();
-      }
-      ctx.setLineDash([]);
-      // Road edges
-      ctx.fillStyle = "#ff4757"; ctx.fillRect(60, 0, 4, H); ctx.fillRect(W - 64, 0, 4, H);
+const TRACKS: TrackDef[] = [
+  {
+    id: "city", name: "城市赛道", desc: "简单 - 宽阔的椭圆赛道", difficulty: 1,
+    bgColor: "#1a1a2e", roadColor: "#333", edgeColor: "#f0b90b", grassColor: "#0a1a0a",
+    points: makeOvalTrack(W / 2, H / 2, 220, 180, 48), width: 70,
+    zones: [{ start: 0, end: 4, type: "boost" }, { start: 24, end: 28, type: "slow" }],
+  },
+  {
+    id: "mountain", name: "山路赛道", desc: "普通 - 弯道多变的山路", difficulty: 2,
+    bgColor: "#0f1a0f", roadColor: "#3a3a2a", edgeColor: "#8B4513", grassColor: "#1a2a0a",
+    points: makeMountainTrack(), width: 58,
+    zones: [{ start: 10, end: 14, type: "boost" }, { start: 30, end: 35, type: "slow" }, { start: 45, end: 49, type: "slow" }],
+  },
+  {
+    id: "desert", name: "沙漠赛道", desc: "困难 - 狭窄弯曲的沙漠赛道", difficulty: 3,
+    bgColor: "#1a1508", roadColor: "#4a3a20", edgeColor: "#ff6600", grassColor: "#2a2008",
+    points: makeDesertTrack(), width: 50,
+    zones: [{ start: 5, end: 9, type: "boost" }, { start: 20, end: 24, type: "slow" }, { start: 40, end: 45, type: "slow" }],
+  },
+];
 
-      if (phase === "title") {
-        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = "#3ea6ff"; ctx.font = "bold 32px sans-serif"; ctx.textAlign = "center";
-        ctx.fillText("2D Racing", W / 2, H / 2 - 30);
-        ctx.fillStyle = "#aaa"; ctx.font = "16px sans-serif";
-        ctx.fillText("Click or Enter to Start", W / 2, H / 2 + 10);
-        ctx.fillText("Arrow keys / swipe to steer", W / 2, H / 2 + 40);
-      } else {
-        // Objects
-        for (const o of s.objects) {
-          if (o.type === "coin") {
-            ctx.fillStyle = o.color; ctx.beginPath(); ctx.arc(o.x, o.y, 12, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "#000"; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            ctx.fillText("$", o.x, o.y);
-          } else {
-            ctx.fillStyle = o.color;
-            ctx.fillRect(o.x - o.w / 2, o.y - o.h / 2, o.w, o.h);
-            ctx.fillStyle = "#222"; ctx.fillRect(o.x - o.w / 2 + 4, o.y - o.h / 2 + 4, o.w - 8, 12);
-            ctx.fillRect(o.x - o.w / 2 + 4, o.y + o.h / 2 - 16, o.w - 8, 12);
-          }
-        }
-        // Player car
-        ctx.fillStyle = "#3ea6ff";
-        ctx.fillRect(s.px - 20, H - 110, 40, 60);
-        ctx.fillStyle = "#1a6fb5";
-        ctx.fillRect(s.px - 16, H - 104, 32, 14);
-        ctx.fillRect(s.px - 16, H - 66, 32, 14);
-        // Wheels
-        ctx.fillStyle = "#333";
-        ctx.fillRect(s.px - 24, H - 100, 6, 16); ctx.fillRect(s.px + 18, H - 100, 6, 16);
-        ctx.fillRect(s.px - 24, H - 66, 6, 16); ctx.fillRect(s.px + 18, H - 66, 6, 16);
-        // HUD
-        ctx.fillStyle = "#fff"; ctx.font = "bold 18px sans-serif"; ctx.textAlign = "left";
-        ctx.fillText(`Score: ${Math.floor(s.score)}`, 10, 30);
-        ctx.fillText(`Speed: ${Math.floor(s.speed)}`, 10, 54);
+/* ========== 难度定义 ========== */
+type DiffId = "easy" | "normal" | "hard";
+interface DiffDef { id: DiffId; name: string; aiSpeedMul: number; aiSkill: number; }
+const DIFFS: DiffDef[] = [
+  { id: "easy", name: "简单", aiSpeedMul: 0.75, aiSkill: 0.5 },
+  { id: "normal", name: "普通", aiSpeedMul: 0.9, aiSkill: 0.75 },
+  { id: "hard", name: "困难", aiSpeedMul: 1.05, aiSkill: 0.95 },
+];
 
-        if (phase === "gameover") {
-          ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(0, 0, W, H);
-          ctx.fillStyle = "#ff4757"; ctx.font = "bold 28px sans-serif"; ctx.textAlign = "center";
-          ctx.fillText("Crash!", W / 2, H / 2 - 20);
-          ctx.fillStyle = "#fff"; ctx.font = "18px sans-serif";
-          ctx.fillText(`Score: ${Math.floor(s.score)}`, W / 2, H / 2 + 14);
-          ctx.fillStyle = "#aaa"; ctx.font = "14px sans-serif";
-          ctx.fillText("Click to Restart", W / 2, H / 2 + 44);
-        }
-      }
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
+/* ========== AI 对手 ========== */
+const AI_COLORS = ["#ff8800", "#aa44ff", "#ff44aa"];
+const AI_NAMES = ["橙风", "紫电", "粉雷"];
 
-    const onKey = (e: KeyboardEvent) => { keysRef.current.add(e.key); if ((e.key === "Enter" || e.key === " ") && phase !== "playing") startGame(); };
-    const onKeyUp = (e: KeyboardEvent) => keysRef.current.delete(e.key);
-    const onClick = () => { if (phase !== "playing") startGame(); };
-    let touchX = 0;
-    const onTouchStart = (e: TouchEvent) => { e.preventDefault(); touchX = e.touches[0].clientX; if (phase !== "playing") startGame(); };
-    const onTouchMove = (e: TouchEvent) => {
-      e.preventDefault(); const dx = e.touches[0].clientX - touchX; touchX = e.touches[0].clientX;
-      stateRef.current.px = Math.max(80, Math.min(W - 80, stateRef.current.px + dx));
-    };
-    window.addEventListener("keydown", onKey); window.addEventListener("keyup", onKeyUp);
-    canvas.addEventListener("click", onClick);
-    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
-    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
-    return () => { cancelAnimationFrame(rafRef.current); window.removeEventListener("keydown", onKey); window.removeEventListener("keyup", onKeyUp); canvas.removeEventListener("click", onClick); canvas.removeEventListener("touchstart", onTouchStart); canvas.removeEventListener("touchmove", onTouchMove); };
-  }, [phase, startGame]);
+/* ========== 游戏状态类型 ========== */
+interface RacerState {
+  x: number; y: number; angle: number; speed: number;
+  trackIdx: number; lap: number; lapProgress: number;
+  bestLap: number; lapTimes: number[]; totalTime: number;
+  drifting: boolean; driftAngle: number;
+  isAI: boolean; name: string; color: string;
+  carDef: CarDef; finished: boolean; finishTime: number;
+}
 
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; color: string; size: number; }
+
+interface GameState {
+  racers: RacerState[];
+  particles: Particle[];
+  countdown: number;
+  raceStarted: boolean;
+  raceTime: number;
+  allFinished: boolean;
+}
+
+/* ========== 音效系统 ========== */
+class SoundEngine {
+  private ctx: AudioContext | null = null;
+  private engineOsc: OscillatorNode | null = null;
+  private engineGain: GainNode | null = null;
+  muted = false;
+
+  init() {
+    if (this.ctx) return;
+    try {
+      this.ctx = new AudioContext();
+      this.engineOsc = this.ctx.createOscillator();
+      this.engineGain = this.ctx.createGain();
+      this.engineOsc.type = "sawtooth";
+      this.engineOsc.frequency.value = 80;
+      this.engineGain.gain.value = 0;
+      this.engineOsc.connect(this.engineGain);
+      this.engineGain.connect(this.ctx.destination);
+      this.engineOsc.start();
+    } catch { /* ignore */ }
+  }
+
+  updateEngine(speed: number, maxSpeed: number) {
+    if (!this.ctx || !this.engineOsc || !this.engineGain || this.muted) return;
+    const ratio = Math.abs(speed) / maxSpeed;
+    this.engineOsc.frequency.value = 60 + ratio * 200;
+    this.engineGain.gain.value = Math.min(0.06, ratio * 0.08);
+  }
+
+  playDrift() {
+    if (!this.ctx || this.muted) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = 100 + Math.random() * 50;
+      g.gain.value = 0.03;
+      g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.3);
+      osc.connect(g); g.connect(this.ctx.destination);
+      osc.start(); osc.stop(this.ctx.currentTime + 0.3);
+    } catch { /* ignore */ }
+  }
+
+  playCollision() {
+    if (!this.ctx || this.muted) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = 200;
+      osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.15);
+      g.gain.value = 0.1;
+      g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.15);
+      osc.connect(g); g.connect(this.ctx.destination);
+      osc.start(); osc.stop(this.ctx.currentTime + 0.15);
+    } catch { /* ignore */ }
+  }
+
+  playCountdown(final = false) {
+    if (!this.ctx || this.muted) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = final ? 880 : 440;
+      g.gain.value = 0.08;
+      g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.3);
+      osc.connect(g); g.connect(this.ctx.destination);
+      osc.start(); osc.stop(this.ctx.currentTime + 0.3);
+    } catch { /* ignore */ }
+  }
+
+  playFinish() {
+    if (!this.ctx || this.muted) return;
+    try {
+      [523, 659, 784].forEach((f, i) => {
+        const osc = this.ctx!.createOscillator();
+        const g = this.ctx!.createGain();
+        osc.type = "sine"; osc.frequency.value = f;
+        g.gain.value = 0.06;
+        g.gain.exponentialRampToValueAtTime(0.001, this.ctx!.currentTime + 0.15 * i + 0.4);
+        osc.connect(g); g.connect(this.ctx!.destination);
+        osc.start(this.ctx!.currentTime + 0.15 * i);
+        osc.stop(this.ctx!.currentTime + 0.15 * i + 0.4);
+      });
+    } catch { /* ignore */ }
+  }
+
+  silence() {
+    if (this.engineGain) this.engineGain.gain.value = 0;
+  }
+
+  destroy() {
+    this.silence();
+    try { this.engineOsc?.stop(); } catch { /* ignore */ }
+    try { this.ctx?.close(); } catch { /* ignore */ }
+    this.ctx = null; this.engineOsc = null; this.engineGain = null;
+  }
+}
+
+/* ========== 工具函数 ========== */
+function dist(a: TrackPoint, b: TrackPoint) { return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2); }
+function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
+function angleDiff(a: number, b: number) { let d = b - a; while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI; return d; }
+
+function getTrackSegment(track: TrackDef, idx: number): { p1: TrackPoint; p2: TrackPoint } {
+  const pts = track.points;
+  const p1 = pts[idx % pts.length];
+  const p2 = pts[(idx + 1) % pts.length];
+  return { p1, p2 };
+}
+
+function closestPointOnTrack(track: TrackDef, px: number, py: number): { idx: number; dist: number; onTrack: boolean } {
+  let bestDist = Infinity, bestIdx = 0;
+  const pts = track.points;
+  for (let i = 0; i < pts.length; i++) {
+    const d = Math.sqrt((pts[i].x - px) ** 2 + (pts[i].y - py) ** 2);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  return { idx: bestIdx, dist: bestDist, onTrack: bestDist < track.width / 2 + 10 };
+}
+
+function isInZone(track: TrackDef, idx: number, type: "boost" | "slow"): boolean {
+  const n = track.points.length;
+  const ni = ((idx % n) + n) % n;
+  return track.zones.some(z => z.type === type && ((z.start <= z.end) ? (ni >= z.start && ni <= z.end) : (ni >= z.start || ni <= z.end)));
+}
+
+function formatTime(ms: number): string {
+  if (ms <= 0 || ms >= 999999) return "--:--.---";
+  const totalSec = ms / 1000;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${sec.toFixed(3).padStart(6, "0")}`;
+}
+
+
+
+/* ========== 主组件（占位） ========== */
+export default function RacingPage() {
   return (
-    <div className="min-h-screen bg-[#0f0f0f] text-white">
+    <>
       <Header />
-      <div className="max-w-lg mx-auto px-4 py-6">
-        <Link href="/games" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-[#3ea6ff] mb-4"><ChevronLeft size={16} /> Back</Link>
-        <div className="flex items-center gap-2 mb-4"><Car size={24} className="text-[#3ea6ff]" /><h1 className="text-xl font-bold">2D Racing</h1></div>
-        <canvas ref={canvasRef} className="w-full rounded-lg border border-white/10" />
-        <button onClick={startGame} className="mt-4 flex items-center gap-2 px-4 py-2 bg-[#3ea6ff] rounded-lg text-sm font-medium hover:bg-[#3ea6ff]/80"><RotateCcw size={14} /> Restart</button>
-      </div>
-    </div>
+      <main className="max-w-lg mx-auto px-4 py-6 pb-20 text-center">
+        <Link href="/games" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-[#3ea6ff] mb-4">
+          <ChevronLeft size={16} /> 返回游戏中心
+        </Link>
+        <div className="py-20">
+          <Car size={48} className="mx-auto text-[#3ea6ff] mb-4" />
+          <h1 className="text-2xl font-bold mb-2">极速狂飙</h1>
+          <p className="text-gray-400 text-sm">2D 赛车游戏 — 开发中</p>
+        </div>
+      </main>
+    </>
   );
 }

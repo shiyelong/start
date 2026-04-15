@@ -32,6 +32,10 @@ import {
   SlidersHorizontal,
   ExternalLink,
   Shield,
+  Upload,
+  Tag,
+  Check,
+  Plus,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -58,7 +62,7 @@ const PLATFORM_TABS: PlatformTab[] = [
 ];
 
 // Adult mode: add adult video tab that links to /zone/videos
-const ADULT_TAB: PlatformTab = { id: "adult", label: "成人视频", icon: Shield, defaultRating: "NC-17" };
+// (used inline in the platform tabs rendering)
 
 // ---------------------------------------------------------------------------
 // Region filters
@@ -351,6 +355,21 @@ export default function VideosPage() {
   const [showAutoPlay, setShowAutoPlay] = useState(false);
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
 
+  // Upload modal state
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadType, setUploadType] = useState("all");
+  const [uploadTags, setUploadTags] = useState("");
+  const [uploadRegion, setUploadRegion] = useState("cn");
+  const [uploadRating, setUploadRating] = useState<ContentRating>("PG");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+
+  // Video tagging state (per-video tags stored in component state)
+  const [videoTags, setVideoTags] = useState<Record<string, string[]>>({});
+  const [newTagInput, setNewTagInput] = useState("");
+  const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
+
   // --- Filtered videos ---
   const filteredVideos = useMemo(() => {
     let list = ALL_VIDEOS;
@@ -383,8 +402,16 @@ export default function VideosPage() {
       );
     }
 
+    // Tag filter
+    if (activeTagFilter) {
+      list = list.filter((v) => {
+        const tags = videoTags[v.id] || [];
+        return tags.includes(activeTagFilter);
+      });
+    }
+
     return list;
-  }, [activePlatform, activeRegion, activeVideoType, searchQuery]);
+  }, [activePlatform, activeRegion, activeVideoType, searchQuery, activeTagFilter, videoTags]);
 
   // --- AutoPlay candidate ---
   const autoPlayCandidate = useMemo<AutoPlayCandidate | null>(() => {
@@ -460,6 +487,42 @@ export default function VideosPage() {
     setPlayingVideo(null);
     setPlayingBili(null);
     setShowAutoPlay(false);
+    setNewTagInput("");
+  }, []);
+
+  // Upload handler (mock)
+  const handleUploadSubmit = useCallback(() => {
+    if (!uploadTitle.trim()) return;
+    setUploadSuccess(true);
+    setTimeout(() => {
+      setUploadSuccess(false);
+      setShowUploadModal(false);
+      setUploadTitle("");
+      setUploadType("all");
+      setUploadTags("");
+      setUploadRegion("cn");
+      setUploadRating("PG");
+      setUploadFile(null);
+    }, 1500);
+  }, [uploadTitle]);
+
+  // Tag handlers
+  const addTagToVideo = useCallback((videoId: string, tag: string) => {
+    const trimmed = tag.trim();
+    if (!trimmed) return;
+    setVideoTags((prev) => {
+      const existing = prev[videoId] || [];
+      if (existing.includes(trimmed)) return prev;
+      return { ...prev, [videoId]: [...existing, trimmed] };
+    });
+    setNewTagInput("");
+  }, []);
+
+  const removeTagFromVideo = useCallback((videoId: string, tag: string) => {
+    setVideoTags((prev) => {
+      const existing = prev[videoId] || [];
+      return { ...prev, [videoId]: existing.filter((t) => t !== tag) };
+    });
   }, []);
 
   // Is bilibili owner tab?
@@ -475,17 +538,40 @@ export default function VideosPage() {
             <PlayCircle size={22} className="text-[#3ea6ff]" />
             视频中心
           </h1>
-          {isBiliOwner && (
-            <a
-              href="https://space.bilibili.com/385144618"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3 py-1.5 rounded-lg bg-[#fb7299] text-white text-xs font-semibold hover:bg-[#fc8bab] transition flex items-center gap-1.5"
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowUploadModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#3ea6ff] text-[#0f0f0f] text-xs font-semibold hover:bg-[#65b8ff] transition"
             >
-              <ExternalLink size={12} /> B站关注
-            </a>
-          )}
+              <Upload size={14} />
+              上传视频
+            </button>
+            {isBiliOwner && (
+              <a
+                href="https://space.bilibili.com/385144618"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-lg bg-[#fb7299] text-white text-xs font-semibold hover:bg-[#fc8bab] transition flex items-center gap-1.5"
+              >
+                <ExternalLink size={12} /> B站关注
+              </a>
+            )}
+          </div>
         </div>
+
+        {/* Active tag filter indicator */}
+        {activeTagFilter && (
+          <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-[#3ea6ff]/10 border border-[#3ea6ff]/20">
+            <Tag size={12} className="text-[#3ea6ff]" />
+            <span className="text-xs text-[#3ea6ff]">标签筛选: {activeTagFilter}</span>
+            <button
+              onClick={() => setActiveTagFilter(null)}
+              className="ml-auto text-[#3ea6ff] hover:text-white transition"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
 
         {/* ===== Platform Tabs ===== */}
         <div className="flex gap-2 mb-4 overflow-x-auto pb-2 scrollbar-hide">
@@ -857,6 +943,71 @@ export default function VideosPage() {
                 <RatingBadge rating={playingVideo.rating} size="md" />
               </div>
             </div>
+
+            {/* ===== Tagging Section ===== */}
+            <div className="mt-4 p-4 rounded-xl bg-[#1a1a1a] border border-[#333]/50">
+              <div className="flex items-center gap-2 mb-3">
+                <Tag size={14} className="text-[#3ea6ff]" />
+                <span className="text-sm font-medium text-white">打标签</span>
+              </div>
+
+              {/* Existing tags */}
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {(videoTags[playingVideo.id] || []).map((tag) => (
+                  <span
+                    key={tag}
+                    className="group flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#3ea6ff]/10 text-[#3ea6ff] text-xs border border-[#3ea6ff]/20 cursor-pointer hover:bg-[#3ea6ff]/20 transition"
+                  >
+                    <button
+                      onClick={() => setActiveTagFilter(tag)}
+                      className="hover:underline"
+                      title="通过标签找同类"
+                    >
+                      {tag}
+                    </button>
+                    <button
+                      onClick={() => removeTagFromVideo(playingVideo.id, tag)}
+                      className="opacity-50 hover:opacity-100 transition"
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+                {(videoTags[playingVideo.id] || []).length === 0 && (
+                  <span className="text-xs text-[#666]">暂无标签</span>
+                )}
+              </div>
+
+              {/* Add new tag */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newTagInput}
+                  onChange={(e) => setNewTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      addTagToVideo(playingVideo.id, newTagInput);
+                    }
+                  }}
+                  placeholder="输入标签，回车添加..."
+                  className="flex-1 h-8 px-3 bg-[#0f0f0f] border border-[#333] rounded-lg text-xs text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition"
+                />
+                <button
+                  onClick={() => addTagToVideo(playingVideo.id, newTagInput)}
+                  className="h-8 px-3 rounded-lg bg-[#3ea6ff]/15 text-[#3ea6ff] text-xs hover:bg-[#3ea6ff]/25 transition flex items-center gap-1"
+                >
+                  <Plus size={12} />
+                  添加
+                </button>
+              </div>
+
+              {(videoTags[playingVideo.id] || []).length > 0 && (
+                <p className="text-[10px] text-[#555] mt-2 flex items-center gap-1">
+                  <Search size={9} />
+                  点击标签可筛选同类视频
+                </p>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -904,6 +1055,141 @@ export default function VideosPage() {
               >
                 <ExternalLink size={12} /> 在B站观看
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Upload Modal ===== */}
+      {showUploadModal && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setShowUploadModal(false)}
+        >
+          <div
+            className="w-full max-w-lg bg-[#1a1a1a] border border-[#333] rounded-2xl shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#333]/50">
+              <h2 className="text-white font-bold flex items-center gap-2">
+                <Upload size={18} className="text-[#3ea6ff]" />
+                上传视频
+              </h2>
+              <button
+                onClick={() => setShowUploadModal(false)}
+                className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-gray-400 hover:text-white transition"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Modal body */}
+            <div className="px-5 py-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              {uploadSuccess ? (
+                <div className="py-12 text-center">
+                  <div className="w-16 h-16 rounded-full bg-green-500/15 flex items-center justify-center mx-auto mb-4">
+                    <Check size={32} className="text-green-400" />
+                  </div>
+                  <p className="text-white font-medium">上传成功</p>
+                  <p className="text-xs text-[#888] mt-1">视频正在处理中...</p>
+                </div>
+              ) : (
+                <>
+                  {/* File input */}
+                  <div>
+                    <label className="block text-xs text-[#888] mb-1.5">视频文件</label>
+                    <input
+                      type="file"
+                      accept="video/*"
+                      onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                      className="w-full text-xs text-[#888] file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#3ea6ff]/15 file:text-[#3ea6ff] hover:file:bg-[#3ea6ff]/25 file:cursor-pointer file:transition"
+                    />
+                    {uploadFile && (
+                      <p className="text-[10px] text-[#666] mt-1">{uploadFile.name} ({(uploadFile.size / 1024 / 1024).toFixed(1)} MB)</p>
+                    )}
+                  </div>
+
+                  {/* Title */}
+                  <div>
+                    <label className="block text-xs text-[#888] mb-1.5">标题</label>
+                    <input
+                      type="text"
+                      value={uploadTitle}
+                      onChange={(e) => setUploadTitle(e.target.value)}
+                      placeholder="输入视频标题..."
+                      className="w-full h-9 px-3 bg-[#0f0f0f] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition"
+                    />
+                  </div>
+
+                  {/* Category */}
+                  <div>
+                    <label className="block text-xs text-[#888] mb-1.5">类型</label>
+                    <select
+                      value={uploadType}
+                      onChange={(e) => setUploadType(e.target.value)}
+                      className="w-full h-9 px-3 bg-[#0f0f0f] border border-[#333] rounded-lg text-sm text-white outline-none focus:border-[#3ea6ff] transition appearance-none cursor-pointer"
+                    >
+                      {VIDEO_TYPES.map((t) => (
+                        <option key={t.id} value={t.id}>{t.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Tags */}
+                  <div>
+                    <label className="block text-xs text-[#888] mb-1.5">标签（逗号分隔）</label>
+                    <input
+                      type="text"
+                      value={uploadTags}
+                      onChange={(e) => setUploadTags(e.target.value)}
+                      placeholder="搞笑, 日常, Vlog..."
+                      className="w-full h-9 px-3 bg-[#0f0f0f] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Region */}
+                    <div>
+                      <label className="block text-xs text-[#888] mb-1.5">地区</label>
+                      <select
+                        value={uploadRegion}
+                        onChange={(e) => setUploadRegion(e.target.value)}
+                        className="w-full h-9 px-3 bg-[#0f0f0f] border border-[#333] rounded-lg text-sm text-white outline-none focus:border-[#3ea6ff] transition appearance-none cursor-pointer"
+                      >
+                        {REGIONS.filter((r) => r.id !== "all").map((r) => (
+                          <option key={r.id} value={r.id}>{r.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Rating */}
+                    <div>
+                      <label className="block text-xs text-[#888] mb-1.5">分级</label>
+                      <select
+                        value={uploadRating}
+                        onChange={(e) => setUploadRating(e.target.value as ContentRating)}
+                        className="w-full h-9 px-3 bg-[#0f0f0f] border border-[#333] rounded-lg text-sm text-white outline-none focus:border-[#3ea6ff] transition appearance-none cursor-pointer"
+                      >
+                        <option value="G">G — 全年龄</option>
+                        <option value="PG">PG — 家长指导</option>
+                        <option value="PG-13">PG-13 — 13+</option>
+                        <option value="R">R — 限制级</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Submit */}
+                  <button
+                    onClick={handleUploadSubmit}
+                    disabled={!uploadTitle.trim()}
+                    className="w-full h-10 rounded-lg bg-[#3ea6ff] text-[#0f0f0f] font-semibold text-sm hover:bg-[#65b8ff] transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    <Upload size={16} />
+                    提交上传
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

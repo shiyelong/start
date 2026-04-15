@@ -3,6 +3,7 @@ import "./globals.css";
 import MusicPlayerProvider from "@/components/player/MusicPlayerProvider";
 import MusicPlayer from "@/components/player/MusicPlayer";
 import AgeGateWrapper from "@/components/AgeGateWrapper";
+import AppDownloadBanner from "@/components/ui/AppDownloadBanner";
 
 export const metadata: Metadata = {
   title: "星聚 — 视频·游戏·漫画·社区·AI",
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             {children}
           </AgeGateWrapper>
           <MusicPlayer />
+          <AppDownloadBanner />
         </MusicPlayerProvider>
       </body>
     </html>

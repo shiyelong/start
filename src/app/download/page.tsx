@@ -22,10 +22,184 @@ import {
   RefreshCw,
   ChevronDown,
   Eye,
+  Smartphone,
+  Monitor,
+  Tv,
+  Apple,
+  Headphones,
+  WifiIcon,
+  Bell,
+  Zap,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
-// Types
+// App Download Section — Platform data
+// ---------------------------------------------------------------------------
+
+interface PlatformApp {
+  id: string;
+  name: string;
+  icon: typeof Smartphone;
+  version: string;
+  size: string;
+  description: string;
+  gradient: string;
+}
+
+const PLATFORM_APPS: PlatformApp[] = [
+  {
+    id: 'android',
+    name: 'Android',
+    icon: Smartphone,
+    version: 'v1.0.1',
+    size: '~25MB',
+    description: '支持 Android 8.0+',
+    gradient: 'from-green-500/20 to-green-600/5',
+  },
+  {
+    id: 'ios',
+    name: 'iOS',
+    icon: Smartphone,
+    version: 'v1.0.1',
+    size: '~45MB',
+    description: '支持 iOS 15.0+',
+    gradient: 'from-blue-500/20 to-blue-600/5',
+  },
+  {
+    id: 'windows',
+    name: 'Windows',
+    icon: Monitor,
+    version: 'v1.0.1',
+    size: '~70MB',
+    description: '支持 Windows 10+',
+    gradient: 'from-cyan-500/20 to-cyan-600/5',
+  },
+  {
+    id: 'macos',
+    name: 'macOS',
+    icon: Apple,
+    version: 'v1.0.1',
+    size: '~75MB',
+    description: '支持 macOS 12+',
+    gradient: 'from-purple-500/20 to-purple-600/5',
+  },
+  {
+    id: 'androidtv',
+    name: 'Android TV',
+    icon: Tv,
+    version: 'v1.0.1',
+    size: '~28MB',
+    description: '支持 Android TV 10+',
+    gradient: 'from-orange-500/20 to-orange-600/5',
+  },
+];
+
+const FEATURES = [
+  {
+    icon: Headphones,
+    title: '后台播放',
+    desc: '音乐/播客后台持续播放',
+  },
+  {
+    icon: Download,
+    title: '离线缓存',
+    desc: '下载内容离线使用',
+  },
+  {
+    icon: Bell,
+    title: '推送通知',
+    desc: '追番更新/直播开播提醒',
+  },
+  {
+    icon: Zap,
+    title: '原生体验',
+    desc: '流畅手势/快捷键/系统集成',
+  },
+];
+
+function AppDownloadSection() {
+  const handleDownload = (platform: PlatformApp) => {
+    if (platform.id === 'ios') {
+      alert('即将跳转到 App Store（暂未上架）');
+    } else {
+      alert(`${platform.name} 客户端下载即将开始（v${platform.version}）`);
+    }
+  };
+
+  return (
+    <section className="relative overflow-hidden">
+      {/* Hero gradient background */}
+      <div className="absolute inset-0 bg-gradient-to-b from-[#3ea6ff]/8 via-[#0f0f0f] to-[#0f0f0f] pointer-events-none" />
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-[#3ea6ff]/5 rounded-full blur-[120px] pointer-events-none" />
+
+      <div className="relative max-w-5xl mx-auto px-4 pt-8 pb-10">
+        {/* Title */}
+        <div className="text-center mb-8">
+          <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">
+            应用下载
+          </h1>
+          <p className="text-sm text-gray-400 max-w-md mx-auto">
+            下载星聚客户端，享受更流畅的原生体验
+          </p>
+        </div>
+
+        {/* Platform cards grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-10">
+          {PLATFORM_APPS.map((platform) => {
+            const Icon = platform.icon;
+            return (
+              <div
+                key={platform.id}
+                className="bg-[#1a1a1a] border border-white/5 rounded-xl p-4 flex flex-col items-center text-center hover:border-[#3ea6ff]/30 transition-all group"
+              >
+                {/* Icon area with gradient */}
+                <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${platform.gradient} border border-white/5 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform`}>
+                  <Icon className="w-7 h-7 text-white" />
+                </div>
+                <h3 className="text-sm font-semibold text-white mb-0.5">{platform.name}</h3>
+                <p className="text-[11px] text-gray-500 mb-1">{platform.version} · {platform.size}</p>
+                <p className="text-[10px] text-gray-600 mb-3">{platform.description}</p>
+                <button
+                  onClick={() => handleDownload(platform)}
+                  className="w-full py-2 rounded-lg bg-[#3ea6ff] hover:bg-[#5ab8ff] text-white text-xs font-medium transition-colors"
+                >
+                  {platform.id === 'ios' ? 'App Store' : '下载'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Why choose section */}
+        <div className="text-center mb-6">
+          <h2 className="text-lg font-bold text-white mb-1">为什么选择星聚客户端？</h2>
+          <p className="text-xs text-gray-500">相比网页版，客户端提供更多专属功能</p>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {FEATURES.map((f) => {
+            const Icon = f.icon;
+            return (
+              <div
+                key={f.title}
+                className="bg-[#1a1a1a] border border-white/5 rounded-xl p-4 text-center"
+              >
+                <div className="w-10 h-10 rounded-xl bg-[#3ea6ff]/10 flex items-center justify-center mx-auto mb-2">
+                  <Icon className="w-5 h-5 text-[#3ea6ff]" />
+                </div>
+                <h3 className="text-sm font-medium text-white mb-0.5">{f.title}</h3>
+                <p className="text-[11px] text-gray-500">{f.desc}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Download Manager Types & Data (existing functionality)
 // ---------------------------------------------------------------------------
 
 type DownloadStatus = 'downloading' | 'paused' | 'completed' | 'failed' | 'queued';
@@ -44,13 +218,8 @@ interface DownloadItem {
   speed: number;
   quality: string;
   createdAt: string;
-  /** Source platform name */
   source: string;
 }
-
-// ---------------------------------------------------------------------------
-// Quality options
-// ---------------------------------------------------------------------------
 
 const VIDEO_QUALITIES: { value: VideoQuality; label: string }[] = [
   { value: '360p', label: '360p - 流畅' },
@@ -63,10 +232,6 @@ const AUDIO_QUALITIES: { value: AudioQuality; label: string }[] = [
   { value: 'high', label: '高品质 320kbps' },
   { value: 'lossless', label: '无损 FLAC' },
 ];
-
-// ---------------------------------------------------------------------------
-// Mock data
-// ---------------------------------------------------------------------------
 
 const MOCK_DOWNLOADS: DownloadItem[] = [
   {
@@ -205,6 +370,7 @@ const STATUS_COLORS: Record<DownloadStatus, string> = {
   queued: 'text-gray-500',
 };
 
+
 // ---------------------------------------------------------------------------
 // Quality selector component
 // ---------------------------------------------------------------------------
@@ -298,6 +464,7 @@ function StorageBreakdown({ downloads }: { downloads: DownloadItem[] }) {
   );
 }
 
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
@@ -310,10 +477,9 @@ export default function DownloadPage() {
   const [videoQuality, setVideoQuality] = useState<VideoQuality>('1080p');
   const [audioQuality, setAudioQuality] = useState<AudioQuality>('high');
   const [showSettings, setShowSettings] = useState(false);
-  const [isOnline] = useState(true); // Stub: would use navigator.onLine
+  const [isOnline] = useState(true);
 
-  // Storage stats (stub)
-  const totalStorage = 128 * 1024 * 1024 * 1024; // 128GB
+  const totalStorage = 128 * 1024 * 1024 * 1024;
   const usedStorage = downloads
     .filter((d) => d.status === 'completed')
     .reduce((sum, d) => sum + d.totalSize, 0);
@@ -364,14 +530,22 @@ export default function DownloadPage() {
     <>
       <Header />
       <main className="min-h-screen bg-[#0f0f0f] pb-20">
+        {/* ===== App Download Section (NEW) ===== */}
+        <AppDownloadSection />
+
+        {/* ===== Divider ===== */}
+        <div className="max-w-4xl mx-auto px-4">
+          <div className="border-t border-white/5 my-2" />
+        </div>
+
+        {/* ===== Download Manager (existing) ===== */}
         <div className="max-w-4xl mx-auto px-4 py-6">
-          {/* Page header */}
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h1 className="text-xl font-bold text-white flex items-center gap-2">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
                 <Download className="w-5 h-5 text-[#3ea6ff]" />
                 下载管理
-              </h1>
+              </h2>
               <p className="text-xs text-gray-500 mt-1">
                 {activeCount} 个下载中 · {completedCount} 个已完成
                 {totalSpeed > 0 && (
@@ -382,7 +556,6 @@ export default function DownloadPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {/* Online status indicator */}
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1a1a1a] border border-white/5">
                 {isOnline ? (
                   <Wifi className="w-3.5 h-3.5 text-green-400" />
@@ -407,7 +580,6 @@ export default function DownloadPage() {
             </div>
           </div>
 
-          {/* Quality settings panel */}
           {showSettings && (
             <div className="bg-[#1a1a1a] border border-white/5 rounded-xl p-4 mb-4 space-y-4">
               <h3 className="text-sm font-medium text-white">默认下载质量</h3>
@@ -436,7 +608,6 @@ export default function DownloadPage() {
             </div>
           )}
 
-          {/* Storage bar */}
           <div className="bg-[#1a1a1a] border border-white/5 rounded-xl p-4 mb-6">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-gray-300 flex items-center gap-2">
@@ -459,7 +630,6 @@ export default function DownloadPage() {
             <StorageBreakdown downloads={downloads} />
           </div>
 
-          {/* Filters */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-4">
             <div className="flex-1 relative w-full sm:w-auto">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -488,7 +658,6 @@ export default function DownloadPage() {
             </div>
           </div>
 
-          {/* Status filter row */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex gap-1">
               {(['all', 'downloading', 'paused', 'completed', 'failed', 'queued'] as const).map((status) => (
@@ -515,7 +684,6 @@ export default function DownloadPage() {
             )}
           </div>
 
-          {/* Download list */}
           <div className="space-y-2">
             {filteredDownloads.length === 0 && (
               <div className="text-center py-16">
@@ -535,12 +703,9 @@ export default function DownloadPage() {
                   className="bg-[#1a1a1a] border border-white/5 rounded-xl p-4 hover:border-white/10 transition-colors"
                 >
                   <div className="flex items-start gap-3">
-                    {/* Type icon */}
                     <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
                       <TypeIcon className="w-5 h-5 text-[#3ea6ff]" />
                     </div>
-
-                    {/* Info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <h3 className="text-sm text-white font-medium truncate">{item.title}</h3>
@@ -551,8 +716,6 @@ export default function DownloadPage() {
                           {item.source}
                         </span>
                       </div>
-
-                      {/* Progress bar */}
                       {item.status !== 'completed' && (
                         <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden mb-1.5">
                           <div
@@ -567,8 +730,6 @@ export default function DownloadPage() {
                           />
                         </div>
                       )}
-
-                      {/* Stats */}
                       <div className="flex items-center gap-3 text-[11px] text-gray-500">
                         <span className={STATUS_COLORS[item.status]}>
                           {STATUS_LABELS[item.status]}
@@ -592,10 +753,7 @@ export default function DownloadPage() {
                         )}
                       </div>
                     </div>
-
-                    {/* Actions */}
                     <div className="flex items-center gap-1 shrink-0">
-                      {/* Offline playback button for completed items */}
                       {item.status === 'completed' && (
                         <button
                           className="p-2 rounded-lg text-gray-400 hover:text-[#3ea6ff] hover:bg-white/5 transition-colors"
@@ -605,7 +763,6 @@ export default function DownloadPage() {
                           <Eye className="w-4 h-4" />
                         </button>
                       )}
-                      {/* Retry button for failed items */}
                       {item.status === 'failed' && (
                         <button
                           onClick={() => retryDownload(item.id)}
@@ -615,7 +772,6 @@ export default function DownloadPage() {
                           <RefreshCw className="w-4 h-4" />
                         </button>
                       )}
-                      {/* Pause/resume for active items */}
                       {(item.status === 'downloading' || item.status === 'paused') && (
                         <button
                           onClick={() => togglePause(item.id)}

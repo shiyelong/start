@@ -21,7 +21,7 @@ const STORAGE_MODE_KEY = 'starhub_age_gate_mode';
 const STORAGE_PIN_KEY = 'starhub_age_gate_pin';
 const STORAGE_CONFIG_KEY = 'starhub_age_gate_config';
 
-const DEFAULT_MODE: UserMode = 'teen'; // 默认青少年模式，首次访问需选择
+const DEFAULT_MODE: UserMode = 'adult'; // 默认成人模式
 
 /** Default daily limits per mode (minutes). 0 = unlimited. */
 const DEFAULT_DAILY_LIMITS: Record<UserMode, number> = {

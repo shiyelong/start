@@ -85,6 +85,7 @@ const GENRES: FilterOption[] = [
   { id: "恐怖", label: "恐怖" },
   { id: "游戏", label: "游戏" },
   { id: "体育", label: "体育" },
+  { id: "视觉小说", label: "视觉小说" },
 ];
 
 const STATUS_OPTIONS: FilterOption[] = [

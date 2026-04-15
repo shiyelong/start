@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import Header from "@/components/Header";
+import Footer from "@/components/layout/Footer";
 import { ownerVideos, hotVideos, posts, games } from "@/lib/mock-data";
 import Link from "next/link";
 
@@ -230,6 +231,7 @@ export default function HomePage() {
           </section>
         </div>
       </main>
+      <Footer />
     </>
   );
 }

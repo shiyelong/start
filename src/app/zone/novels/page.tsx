@@ -58,6 +58,7 @@ const GENRE_OPTIONS: FilterOption[] = [
   { id: 'ancient', label: '古代/宫廷' },
   { id: 'scifi', label: '科幻' },
   { id: 'bdsm', label: '调教/SM' },
+  { id: 'visual-novel', label: '视觉小说' },
   { id: 'humiliation', label: '凌辱' },
   { id: 'milf', label: '人妻' },
   { id: 'hypnosis', label: '催眠' },
@@ -419,6 +420,20 @@ export default function ZoneNovelsPage() {
             <RatingBadge rating="NC-17" size="md" />
           </h1>
         </div>
+
+        {/* ===== Visual Novel Entry Card ===== */}
+        <a
+          href="/games/adult-vn"
+          className="group flex items-center gap-4 p-4 mb-4 rounded-xl bg-gradient-to-br from-purple-600/15 to-pink-600/15 border border-purple-500/20 hover:border-[#3ea6ff]/40 hover:-translate-y-0.5 transition overflow-hidden"
+        >
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform shadow-lg">
+            <BookOpen size={20} className="text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="font-semibold text-sm text-white group-hover:text-[#3ea6ff] transition">视觉小说</h3>
+            <p className="text-xs text-[#8a8a8a] mt-0.5">互动剧情叙事，分支选择体验</p>
+          </div>
+        </a>
 
         {/* ===== Search Bar ===== */}
         <div className="relative mb-4">
