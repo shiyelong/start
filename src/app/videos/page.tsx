@@ -9,6 +9,7 @@ import AutoPlayOverlay from "@/components/player/AutoPlayOverlay";
 import type { ContentRating, AggregatedItem } from "@/lib/types";
 import type { AutoPlayCandidate } from "@/lib/player/autoplay-engine";
 import { hotVideos } from "@/lib/mock-data";
+import { ageGate } from "@/lib/age-gate";
 import {
   PlayCircle,
   Search,
@@ -30,6 +31,7 @@ import {
   Filter,
   SlidersHorizontal,
   ExternalLink,
+  Shield,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -54,6 +56,9 @@ const PLATFORM_TABS: PlatformTab[] = [
   { id: "telegram", label: "Telegram", icon: Send, defaultRating: "PG-13" },
   { id: "free", label: "免费影视", icon: Film, defaultRating: "PG-13" },
 ];
+
+// Adult mode: add adult video tab that links to /zone/videos
+const ADULT_TAB: PlatformTab = { id: "adult", label: "成人视频", icon: Shield, defaultRating: "NC-17" };
 
 // ---------------------------------------------------------------------------
 // Region filters
@@ -507,6 +512,16 @@ export default function VideosPage() {
               </button>
             );
           })}
+          {/* Adult mode: show adult video tab linking to /zone/videos */}
+          {ageGate.canAccess('NC-17') && (
+            <a
+              href="/zone/videos"
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[13px] whitespace-nowrap border transition shrink-0 bg-transparent text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-300"
+            >
+              <Shield size={13} />
+              成人视频
+            </a>
+          )}
         </div>
 
         {/* ===== Search Bar ===== */}

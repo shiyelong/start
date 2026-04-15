@@ -5,6 +5,7 @@ import Header from "@/components/Header";
 import RatingBadge from "@/components/ui/RatingBadge";
 import ComicReader, { type ComicPage } from "@/components/reader/ComicReader";
 import type { ContentRating } from "@/lib/types";
+import { ageGate } from "@/lib/age-gate";
 import {
   BookOpen,
   Search,
@@ -21,6 +22,7 @@ import {
   Bookmark,
   Play,
   Globe,
+  Shield,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -440,6 +442,16 @@ export default function ComicsPage() {
               {g.label}
             </button>
           ))}
+          {/* Adult mode: show adult comics tab */}
+          {ageGate.canAccess('NC-17') && (
+            <a
+              href="/zone/comics"
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[13px] whitespace-nowrap border transition shrink-0 bg-transparent text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-300"
+            >
+              <Shield size={13} />
+              成人漫画
+            </a>
+          )}
         </div>
 
         {/* ===== Expanded Filters ===== */}

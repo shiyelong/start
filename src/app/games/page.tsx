@@ -8,7 +8,7 @@ import GameCard from '@/components/games/GameCard';
 import { ageGate } from '@/lib/age-gate';
 import {
   Gamepad2, Search, SlidersHorizontal,
-  Sparkles, Clock, ArrowUpDown, Globe,
+  Sparkles, Clock, ArrowUpDown, Globe, Shield,
 } from 'lucide-react';
 import type {
   GameCatalogItem,
@@ -454,6 +454,16 @@ export default function GamesPage() {
                 {tab.label}
               </button>
             ))}
+            {/* Adult mode: show adult games tab */}
+            {ageGate.canAccess('NC-17') && (
+              <a
+                href="/zone/games"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] whitespace-nowrap border transition shrink-0 bg-transparent text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-300"
+              >
+                <Shield size={12} />
+                成人游戏
+              </a>
+            )}
           </div>
 
           {/* Genre filter + Sort */}

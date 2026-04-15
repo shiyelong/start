@@ -5,6 +5,7 @@ import Header from '@/components/layout/Header';
 import RatingBadge from '@/components/ui/RatingBadge';
 import VideoPlayer from '@/components/player/VideoPlayer';
 import type { ContentRating } from '@/lib/types';
+import { ageGate } from '@/lib/age-gate';
 import {
   Radio,
   Search,
@@ -32,6 +33,7 @@ import {
   WifiOff,
   ExternalLink,
   CircleDot,
+  Shield,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -639,6 +641,16 @@ export default function LivePage() {
               )}
             </button>
           ))}
+          {/* Adult mode: show adult live tab */}
+          {ageGate.canAccess('NC-17') && (
+            <a
+              href="/zone/live"
+              className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-[1px] text-red-400 border-transparent hover:text-red-300 hover:border-red-500/30"
+            >
+              <Shield size={14} />
+              成人直播
+            </a>
+          )}
         </div>
 
         {/* ===== Live Tab ===== */}

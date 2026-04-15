@@ -5,6 +5,7 @@ import Header from '@/components/layout/Header';
 import RatingBadge from '@/components/ui/RatingBadge';
 import { useMusicPlayer, type MusicTrack } from '@/components/player/MusicPlayerProvider';
 import type { ContentRating } from '@/lib/types';
+import { ageGate } from '@/lib/age-gate';
 import {
   Podcast,
   Search,
@@ -33,6 +34,7 @@ import {
   Rss,
   Tag,
   CircleDot,
+  Shield,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -685,6 +687,16 @@ export default function PodcastsPage() {
               )}
             </button>
           ))}
+          {/* Adult mode: show adult podcasts tab */}
+          {ageGate.canAccess('NC-17') && (
+            <a
+              href="/zone/podcasts"
+              className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-[1px] text-red-400 border-transparent hover:text-red-300 hover:border-red-500/30"
+            >
+              <Shield size={14} />
+              成人播客
+            </a>
+          )}
         </div>
 
         {/* ===== All Podcasts Tab ===== */}

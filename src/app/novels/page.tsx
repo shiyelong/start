@@ -5,6 +5,7 @@ import Header from "@/components/Header";
 import RatingBadge from "@/components/ui/RatingBadge";
 import NovelReader from "@/components/reader/NovelReader";
 import type { ContentRating } from "@/lib/types";
+import { ageGate } from "@/lib/age-gate";
 import {
   BookText,
   Search,
@@ -24,6 +25,7 @@ import {
   Volume2,
   FileText,
   PenLine,
+  Shield,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -477,6 +479,16 @@ export default function NovelsPage() {
               {g.label}
             </button>
           ))}
+          {/* Adult mode: show adult novels tab */}
+          {ageGate.canAccess('NC-17') && (
+            <a
+              href="/zone/novels"
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[13px] whitespace-nowrap border transition shrink-0 bg-transparent text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-300"
+            >
+              <Shield size={13} />
+              成人小说
+            </a>
+          )}
         </div>
 
         {/* ===== Expanded Filters ===== */}

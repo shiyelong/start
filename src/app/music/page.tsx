@@ -6,6 +6,7 @@ import RatingBadge from '@/components/ui/RatingBadge';
 import PlaylistManager from '@/components/player/PlaylistManager';
 import { useMusicPlayer, type MusicTrack } from '@/components/player/MusicPlayerProvider';
 import type { ContentRating } from '@/lib/types';
+import { ageGate } from '@/lib/age-gate';
 import {
   Search,
   Music,
@@ -29,6 +30,7 @@ import {
   X,
   Filter,
   SlidersHorizontal,
+  Shield,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -758,6 +760,19 @@ export default function MusicPage() {
 
             {/* ===== Genre Browse ===== */}
             <GenreBrowse activeGenre={activeGenre} onGenreChange={setActiveGenre} />
+
+            {/* Adult mode: show adult music tab */}
+            {ageGate.canAccess('NC-17') && (
+              <div className="mb-4">
+                <a
+                  href="/zone/music"
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[13px] whitespace-nowrap border transition shrink-0 bg-transparent text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-300 w-fit"
+                >
+                  <Shield size={13} />
+                  成人音乐
+                </a>
+              </div>
+            )}
 
             {/* ===== Action Bar ===== */}
             <div className="flex items-center justify-between mb-4">
