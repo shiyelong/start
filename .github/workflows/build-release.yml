@@ -1,147 +1,221 @@
-name: Build & Release
+name: Build & Release All Platforms
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v1.0.2)'
+        required: true
+        default: 'v1.0.2'
 
-permissions:
-  contents: write
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
 
 jobs:
-  # ── Web Static Export ────────────────────────────────────────
+  # ─── Build Web (Next.js static export) ───────────────────────
   build-web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci
-      - run: npx next build
-      - name: Package web build
-        run: |
-          tar -czf starhub-web.tar.gz -C out .
-          cd out && zip -r ../starhub-web.zip . && cd ..
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - uses: actions/upload-artifact@v4
         with:
           name: web-build
-          path: |
-            starhub-web.tar.gz
-            starhub-web.zip
+          path: out/
 
-  # ── Android APK ──────────────────────────────────────────────
+  # ─── Build Android APK (Capacitor) ───────────────────────────
   build-android:
     runs-on: ubuntu-latest
+    needs: build-web
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: npm ci
-      - run: npx next build
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - run: npx cap sync android
       - name: Build APK
+        working-directory: android
         run: |
-          cd android
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
-      - name: Copy APK
+          ./gradlew assembleRelease
+      - name: Rename APK
         run: |
-          mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release-unsigned.apk dist/starhub-android-v1.0.0.apk || true
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/starhub-android-v1.0.0.apk || true
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk starhub-android.apk
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: dist/starhub-android-v1.0.0.apk
-          if-no-files-found: warn
+          path: starhub-android.apk
 
-  # ── Electron Windows ─────────────────────────────────────────
-  build-windows:
-    runs-on: windows-latest
+  # ─── Build Android TV APK ───────────────────────────────────
+  build-android-tv:
+    runs-on: ubuntu-latest
+    needs: build-web
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci
-      - run: npx next build
-      - run: npm install electron electron-builder --save-dev
-      - name: Build Windows installer
-        run: npx electron-builder --win --x64 --config electron-builder.json
-        continue-on-error: true
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: npx cap sync android
+      - name: Build TV APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease -Ptv=true
+      - name: Rename APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk starhub-androidtv.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: androidtv-apk
+          path: starhub-androidtv.apk
+
+  # ─── Build Windows (Electron) ────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    needs: build-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Build Electron (Windows)
+        run: npx electron-builder --win --config electron-builder.json
+      - name: Rename installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path dist -Filter "*.exe" | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName "starhub-windows-setup.exe" }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: release/*.exe
-          if-no-files-found: warn
+          path: starhub-windows-setup.exe
 
-  # ── Electron macOS ───────────────────────────────────────────
+  # ─── Build macOS (Electron) ──────────────────────────────────
   build-macos:
     runs-on: macos-latest
+    needs: build-web
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci
-      - run: npx next build
-      - run: npm install electron electron-builder --save-dev
-      - name: Build macOS DMG
-        run: npx electron-builder --mac --x64 --arm64 --config electron-builder.json
-        continue-on-error: true
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Build Electron (macOS)
+        run: npx electron-builder --mac --config electron-builder.json
+      - name: Rename DMG
+        run: |
+          DMG=$(find dist -name "*.dmg" | head -1)
+          if [ -n "$DMG" ]; then cp "$DMG" starhub-macos.dmg; fi
       - uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
-          path: release/*.dmg
-          if-no-files-found: warn
+          path: starhub-macos.dmg
 
-  # ── Create GitHub Release ────────────────────────────────────
+  # ─── Create GitHub Release ──────────────────────────────────
   release:
-    needs: [build-web, build-android, build-windows, build-macos]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-android, build-android-tv, build-windows, build-macos]
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
-          path: artifacts
-      - name: List artifacts
-        run: find artifacts -type f | head -20
-      - uses: softprops/action-gh-release@v2
+          name: android-apk
+          path: ./release-assets/
+
+      - uses: actions/download-artifact@v4
         with:
-          name: "星聚 StarHub ${{ github.ref_name }}"
+          name: androidtv-apk
+          path: ./release-assets/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: ./release-assets/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg
+          path: ./release-assets/
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "星聚 ${{ steps.version.outputs.tag }}"
           body: |
-            ## 星聚娱乐平台 ${{ github.ref_name }}
+            ## 星聚 ${{ steps.version.outputs.tag }} 发布
 
-            ### 下载安装包
+            ### 下载
+            - **Android**: starhub-android.apk (手机版)
+            - **Android TV**: starhub-androidtv.apk (电视版 - 视频/漫画专用)
+            - **Windows**: starhub-windows-setup.exe
+            - **macOS**: starhub-macos.dmg
+            - **Web**: https://starhub.cc (无需下载)
 
-            | 平台 | 文件 | 说明 |
-            |------|------|------|
-            | Web | starhub-web.tar.gz / .zip | 静态网站，部署到 Cloudflare Pages |
-            | Android | starhub-android-v1.0.0.apk | 手机/平板安装包 |
-            | Windows | starhub-setup.exe | Windows 桌面安装包 |
-            | macOS | starhub.dmg | macOS 桌面安装包 |
-
-            ### 功能概览
-            - 7大聚合引擎 (视频/音乐/漫画/小说/动漫/直播/播客)
-            - 151+ 源适配器
-            - 25款自研游戏
-            - MPAA五级分级系统
-            - AI字幕配音 + 无限制AI聊天
-            - NAS安全缓存 (AES-256加密)
-            - 多平台支持 (Web/Android/iOS/TV/Windows/macOS)
+            ### 更新内容
+            - 45+ 自研游戏 (棋牌/动作/益智/策略)
+            - 移动端全面优化
+            - 游戏全屏模式支持
+            - PixiJS 8 渲染引擎
           files: |
-            artifacts/**/*
+            release-assets/starhub-android.apk
+            release-assets/starhub-androidtv.apk
+            release-assets/starhub-windows-setup.exe
+            release-assets/starhub-macos.dmg
           draft: false
           prerelease: false

@@ -36,6 +36,9 @@ import {
 // App Download Section — Platform data
 // ---------------------------------------------------------------------------
 
+const GITHUB_REPO = 'shiyelong/start';
+const APP_VERSION = 'v1.0.2';
+
 interface PlatformApp {
   id: string;
   name: string;
@@ -44,6 +47,15 @@ interface PlatformApp {
   size: string;
   description: string;
   gradient: string;
+  /** GitHub Release asset filename */
+  assetName: string;
+  /** Fallback: direct URL if not on GitHub Releases */
+  directUrl?: string;
+}
+
+function getDownloadUrl(platform: PlatformApp): string {
+  if (platform.directUrl) return platform.directUrl;
+  return `https://github.com/${GITHUB_REPO}/releases/download/${APP_VERSION}/${platform.assetName}`;
 }
 
 const PLATFORM_APPS: PlatformApp[] = [
@@ -51,46 +63,52 @@ const PLATFORM_APPS: PlatformApp[] = [
     id: 'android',
     name: 'Android',
     icon: Smartphone,
-    version: 'v1.0.1',
+    version: APP_VERSION,
     size: '~25MB',
     description: '支持 Android 8.0+',
     gradient: 'from-green-500/20 to-green-600/5',
+    assetName: 'starhub-android.apk',
   },
   {
     id: 'ios',
     name: 'iOS',
     icon: Smartphone,
-    version: 'v1.0.1',
+    version: APP_VERSION,
     size: '~45MB',
     description: '支持 iOS 15.0+',
     gradient: 'from-blue-500/20 to-blue-600/5',
+    assetName: '',
+    directUrl: '#', // iOS 需要 App Store / TestFlight
   },
   {
     id: 'windows',
     name: 'Windows',
     icon: Monitor,
-    version: 'v1.0.1',
+    version: APP_VERSION,
     size: '~70MB',
     description: '支持 Windows 10+',
     gradient: 'from-cyan-500/20 to-cyan-600/5',
+    assetName: 'starhub-windows-setup.exe',
   },
   {
     id: 'macos',
     name: 'macOS',
     icon: Apple,
-    version: 'v1.0.1',
+    version: APP_VERSION,
     size: '~75MB',
     description: '支持 macOS 12+',
     gradient: 'from-purple-500/20 to-purple-600/5',
+    assetName: 'starhub-macos.dmg',
   },
   {
     id: 'androidtv',
     name: 'Android TV',
     icon: Tv,
-    version: 'v1.0.1',
+    version: APP_VERSION,
     size: '~28MB',
-    description: '支持 Android TV 10+',
+    description: '支持 Android TV 10+ (视频/漫画专用)',
     gradient: 'from-orange-500/20 to-orange-600/5',
+    assetName: 'starhub-androidtv.apk',
   },
 ];
 
@@ -120,10 +138,11 @@ const FEATURES = [
 function AppDownloadSection() {
   const handleDownload = (platform: PlatformApp) => {
     if (platform.id === 'ios') {
-      alert('即将跳转到 App Store（暂未上架）');
-    } else {
-      alert(`${platform.name} 客户端下载即将开始（v${platform.version}）`);
+      window.open('https://testflight.apple.com/', '_blank');
+      return;
     }
+    const url = getDownloadUrl(platform);
+    window.open(url, '_blank');
   };
 
   return (
