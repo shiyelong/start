@@ -8,9 +8,10 @@ import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
 import { ParticleSystem } from "@/lib/game-engine/particle-system";
 import { InputHandler } from "@/lib/game-engine/input-handler";
-import { lerp, updateShake, applyShake, updateScorePopups, renderScorePopups } from "@/lib/game-engine/animation-utils";
+import { lerp, updateShake, updateScorePopups } from "@/lib/game-engine/animation-utils";
 import type { ScorePopup, ShakeState } from "@/lib/game-engine/animation-utils";
-import { drawGradientBackground, drawText, drawRoundedRect, drawGlow } from "@/lib/game-engine/render-utils";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Types ───────────────────────────────────────────────
 interface Puzzle {
@@ -59,6 +60,8 @@ const GAME_ID = "logic";
 const TOTAL_QUESTIONS = 10;
 const TIME_PER_QUESTION = 15;
 const OPTION_LABELS = ["A", "B", "C", "D", "E"];
+const W = 480;
+const H = 800;
 
 // ─── Puzzle Data ─────────────────────────────────────────
 const puzzles: Puzzle[] = [
@@ -208,385 +211,9 @@ function getPoints(puzzle: Puzzle, streak: number): number {
   return base + bonus;
 }
 
-// ─── Text Wrapping Utility ──────────────────────────────
-function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const lines: string[] = [];
-  let current = "";
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const test = current + ch;
-    if (ctx.measureText(test).width > maxWidth && current.length > 0) {
-      lines.push(current);
-      current = ch;
-    } else {
-      current = test;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
-// ─── Renderer ────────────────────────────────────────────
-function renderGame(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  game: GameState,
-  anim: AnimState,
-  particles: ParticleSystem,
-  dpr: number,
-  puzzleOrder: number[],
-): void {
-  const w = canvas.width / dpr;
-  const h = canvas.height / dpr;
-
-  ctx.save();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  // Background
-  drawGradientBackground(ctx, w, h, anim.bgHue, 50);
-
-  // Apply shake
-  applyShake(ctx, anim.shake);
-
-  const puzzle = puzzles[puzzleOrder[game.puzzleIdx]];
-  if (!puzzle) { ctx.restore(); return; }
-
-  const pad = 16;
-  const contentW = Math.min(w - pad * 2, 440);
-  const cx = w / 2;
-  const startX = (w - contentW) / 2;
-  let y = 12;
-
-  // ─── Timer bar ─────────────────────────────────
-  if (!game.over && !game.revealed) {
-    const barW = contentW;
-    const barH = 6;
-    const barX = startX;
-    const ratio = Math.max(0, game.timer / TIME_PER_QUESTION);
-    const timerColor = ratio > 0.5 ? "#22c55e" : ratio > 0.2 ? "#f0b90b" : "#ff4444";
-
-    // Pulse when low
-    const pulse = ratio < 0.2 ? 0.7 + 0.3 * Math.sin(anim.timerPulse * 8) : 1;
-
-    drawRoundedRect(ctx, barX, y, barW, barH, 3);
-    ctx.fillStyle = "rgba(255,255,255,0.1)";
-    ctx.fill();
-
-    if (ratio > 0) {
-      drawRoundedRect(ctx, barX, y, barW * ratio, barH, 3);
-      ctx.fillStyle = timerColor;
-      ctx.globalAlpha = pulse;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-
-    // Timer text
-    ctx.fillStyle = timerColor;
-    ctx.font = "bold 11px sans-serif";
-    ctx.textAlign = "right";
-    ctx.textBaseline = "top";
-    ctx.fillText(`${Math.ceil(game.timer)}s`, startX + contentW, y + barH + 2);
-    y += barH + 16;
-  } else {
-    y += 8;
-  }
-
-  // ─── Question card ─────────────────────────────
-  if (!game.over) {
-    const fadeAlpha = Math.min(1, anim.questionFadeIn);
-
-    ctx.globalAlpha = fadeAlpha;
-
-    // Difficulty + category badge
-    const diffColor = DIFF_COLORS[puzzle.difficulty] || "#aaa";
-    ctx.fillStyle = diffColor;
-    ctx.font = "bold 11px sans-serif";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText(puzzle.difficulty, startX, y);
-
-    const diffW = ctx.measureText(puzzle.difficulty).width;
-    ctx.fillStyle = "#666";
-    ctx.font = "10px sans-serif";
-    ctx.fillText(` · ${puzzle.category}`, startX + diffW, y + 1);
-    y += 18;
-
-    // Title
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 16px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(puzzle.title, startX, y, contentW);
-    y += 24;
-
-    // Story (wrapped)
-    ctx.fillStyle = "#aaaaaa";
-    ctx.font = "13px sans-serif";
-    const storyLines = wrapText(ctx, puzzle.story, contentW);
-    for (const line of storyLines) {
-      ctx.fillText(line, startX, y, contentW);
-      y += 18;
-    }
-    y += 8;
-
-    // Clues
-    ctx.fillStyle = "#3ea6ff";
-    ctx.font = "bold 11px sans-serif";
-    ctx.fillText(`线索（${puzzle.clues.length}条）`, startX, y);
-    y += 16;
-
-    ctx.font = "12px sans-serif";
-    for (let i = 0; i < puzzle.clues.length; i++) {
-      ctx.fillStyle = "#555";
-      ctx.fillText(`${i + 1}.`, startX, y);
-      ctx.fillStyle = "#8a8a8a";
-      const clueLines = wrapText(ctx, puzzle.clues[i], contentW - 20);
-      for (const cl of clueLines) {
-        ctx.fillText(cl, startX + 20, y, contentW - 20);
-        y += 16;
-      }
-    }
-    y += 12;
-
-    // Question
-    ctx.fillStyle = "#f0b90b";
-    ctx.font = "bold 14px sans-serif";
-    ctx.textAlign = "left";
-    const qLines = wrapText(ctx, `? ${puzzle.question}`, contentW);
-    for (const ql of qLines) {
-      ctx.fillText(ql, startX, y, contentW);
-      y += 20;
-    }
-    y += 10;
-
-    // ─── Options ─────────────────────────────────
-    const optH = 44;
-    const optGap = 8;
-
-    for (let i = 0; i < puzzle.options.length; i++) {
-      const optY = y + i * (optH + optGap);
-      const isSelected = game.selected === i;
-      const isCorrect = i === puzzle.answer;
-      const isHovered = anim.hoverOption === i && !game.revealed;
-
-      let bgColor = "rgba(33, 33, 33, 0.8)";
-      let borderColor = "#333333";
-      let textColor = "#aaaaaa";
-
-      if (game.revealed) {
-        if (isCorrect) {
-          bgColor = "rgba(43, 166, 64, 0.15)";
-          borderColor = "rgba(43, 166, 64, 0.5)";
-          textColor = "#2ba640";
-        } else if (isSelected && !isCorrect) {
-          bgColor = "rgba(255, 68, 68, 0.15)";
-          borderColor = "rgba(255, 68, 68, 0.5)";
-          textColor = "#ff4444";
-        }
-      } else if (isSelected) {
-        bgColor = "rgba(62, 166, 255, 0.15)";
-        borderColor = "rgba(62, 166, 255, 0.5)";
-        textColor = "#3ea6ff";
-      } else if (isHovered) {
-        borderColor = "#555555";
-        textColor = "#ffffff";
-      }
-
-      // Option background
-      drawRoundedRect(ctx, startX, optY, contentW, optH, 10);
-      ctx.fillStyle = bgColor;
-      ctx.fill();
-      drawRoundedRect(ctx, startX, optY, contentW, optH, 10);
-      ctx.strokeStyle = borderColor;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Glow for correct answer when revealed
-      if (game.revealed && isCorrect) {
-        drawGlow(ctx, startX + contentW / 2, optY + optH / 2, contentW * 0.4, "#2ba640", 0.15);
-      }
-
-      // Option label
-      ctx.fillStyle = textColor;
-      ctx.font = "bold 14px sans-serif";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`${OPTION_LABELS[i]}.`, startX + 14, optY + optH / 2);
-
-      // Option text
-      ctx.font = "13px sans-serif";
-      ctx.fillText(puzzle.options[i], startX + 38, optY + optH / 2, contentW - 60);
-
-      // Check / X icon when revealed
-      if (game.revealed && isCorrect) {
-        ctx.fillStyle = "#2ba640";
-        ctx.font = "bold 16px sans-serif";
-        ctx.textAlign = "right";
-        ctx.fillText("?", startX + contentW - 14, optY + optH / 2);
-      } else if (game.revealed && isSelected && !isCorrect) {
-        ctx.fillStyle = "#ff4444";
-        ctx.font = "bold 16px sans-serif";
-        ctx.textAlign = "right";
-        ctx.fillText("?", startX + contentW - 14, optY + optH / 2);
-      }
-    }
-
-    y += puzzle.options.length * (optH + optGap) + 8;
-
-    // ─── Feedback / Explanation ───────────────────
-    if (game.revealed && anim.feedbackAlpha > 0) {
-      ctx.globalAlpha = Math.min(1, anim.feedbackAlpha);
-
-      const fbColor = anim.feedbackCorrect ? "#2ba640" : "#ff4444";
-      const fbText = anim.feedbackCorrect ? "? 回答正确！" : "? 回答错误";
-
-      // Feedback box
-      drawRoundedRect(ctx, startX, y, contentW, 36, 10);
-      ctx.fillStyle = anim.feedbackCorrect ? "rgba(43,166,64,0.1)" : "rgba(255,68,68,0.1)";
-      ctx.fill();
-      drawRoundedRect(ctx, startX, y, contentW, 36, 10);
-      ctx.strokeStyle = anim.feedbackCorrect ? "rgba(43,166,64,0.2)" : "rgba(255,68,68,0.2)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      ctx.fillStyle = fbColor;
-      ctx.font = "bold 13px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(fbText, cx, y + 18);
-      y += 44;
-
-      // Explanation box
-      drawRoundedRect(ctx, startX, y, contentW, 60, 10);
-      ctx.fillStyle = "rgba(33, 33, 33, 0.8)";
-      ctx.fill();
-      drawRoundedRect(ctx, startX, y, contentW, 60, 10);
-      ctx.strokeStyle = "#333";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      ctx.fillStyle = "#f0b90b";
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
-      ctx.fillText(" 解析", startX + 12, y + 8);
-
-      ctx.fillStyle = "#aaa";
-      ctx.font = "11px sans-serif";
-      const expLines = wrapText(ctx, puzzle.explanation, contentW - 24);
-      let ey = y + 24;
-      for (const el of expLines.slice(0, 3)) {
-        ctx.fillText(el, startX + 12, ey, contentW - 24);
-        ey += 14;
-      }
-      y += 68;
-
-      // "Next" button
-      y += 8;
-      const btnW = contentW;
-      const btnH = 42;
-      drawRoundedRect(ctx, startX, y, btnW, btnH, 10);
-      ctx.fillStyle = "#3ea6ff";
-      ctx.fill();
-
-      ctx.fillStyle = "#0f0f0f";
-      ctx.font = "bold 14px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      const nextText = game.answered >= TOTAL_QUESTIONS ? "查看结果 →" : "下一题 →";
-      ctx.fillText(nextText, cx, y + btnH / 2);
-      y += btnH + 12;
-
-      ctx.globalAlpha = 1;
-    }
-
-    // ─── Submit button (when not revealed and selected) ──
-    if (!game.revealed && game.selected !== null) {
-      const btnW = contentW;
-      const btnH = 42;
-      drawRoundedRect(ctx, startX, y, btnW, btnH, 10);
-      ctx.fillStyle = "#ff4444";
-      ctx.fill();
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 14px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("提交答案", cx, y + btnH / 2);
-      y += btnH + 12;
-    }
-
-    ctx.globalAlpha = 1;
-  }
-
-  // ─── Game Over Screen ──────────────────────────
-  if (game.over) {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
-    ctx.fillRect(0, 0, w, h);
-
-    const cardW = Math.min(w - 32, 360);
-    const cardH = 280;
-    const cardX = (w - cardW) / 2;
-    const cardY = (h - cardH) / 2;
-
-    drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 16);
-    ctx.fillStyle = "rgba(26, 26, 26, 0.95)";
-    ctx.fill();
-    drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 16);
-    ctx.strokeStyle = "#333";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    let gy = cardY + 28;
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "28px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("?", cx, gy);
-    gy += 32;
-
-    ctx.fillStyle = "#f0b90b";
-    ctx.font = "bold 20px sans-serif";
-    ctx.fillText("挑战完成！", cx, gy);
-    gy += 32;
-
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 28px sans-serif";
-    ctx.fillText(`${game.score} 分`, cx, gy);
-    gy += 36;
-
-    ctx.fillStyle = "#8a8a8a";
-    ctx.font = "13px sans-serif";
-    ctx.fillText(`正确 ${game.correct}/${game.answered} · 最高连击 ${game.bestStreak}`, cx, gy);
-    gy += 32;
-
-    // Restart button
-    const rbW = cardW - 40;
-    const rbH = 40;
-    const rbX = cardX + 20;
-    drawRoundedRect(ctx, rbX, gy, rbW, rbH, 10);
-    ctx.fillStyle = "#f0b90b";
-    ctx.fill();
-
-    ctx.fillStyle = "#0f0f0f";
-    ctx.font = "bold 14px sans-serif";
-    ctx.fillText("再来一局", cx, gy + rbH / 2);
-  }
-
-  // Particles
-  particles.render(ctx);
-
-  // Score popups
-  renderScorePopups(ctx, anim.scorePopups);
-
-  // Pause overlay
-  if (game.paused && !game.over) {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(0, 0, w, h);
-    drawText(ctx, "⏸ 已暂停", w / 2, h / 2, w * 0.8, "#ffffff", 28);
-    drawText(ctx, "点击继续", w / 2, h / 2 + 36, w * 0.6, "#8a8a8a", 14);
-  }
-
-  ctx.restore();
+/** Convert "#rrggbb" hex string to numeric color for PixiJS */
+function hexToNum(hex: string): number {
+  return parseInt(hex.replace("#", ""), 16);
 }
 
 // ─── Component ───────────────────────────────────────────
@@ -608,10 +235,16 @@ export default function LogicPage() {
   const soundRef = useRef<SoundEngine>(null!);
   const particlesRef = useRef<ParticleSystem>(null!);
   const inputRef = useRef<InputHandler>(null!);
-  const rafRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(0);
   const scoreSubmittedRef = useRef(false);
   const puzzleOrderRef = useRef<number[]>([]);
+
+  // PixiJS refs
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
+  const frameRef = useRef(0);
+  const lastTimeRef = useRef(0);
 
   // React UI state (only for elements outside canvas)
   const [score, setScore] = useState(0);
@@ -673,42 +306,35 @@ export default function LogicPage() {
     game.timerActive = false;
     game.answered++;
 
-    const anim = animRef.current;
-    const canvas = canvasRef.current;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas ? canvas.width / dpr : 400;
-
     if (game.selected === puzzle.answer) {
-      // Correct
       game.streak++;
       if (game.streak > game.bestStreak) game.bestStreak = game.streak;
       game.correct++;
       const pts = getPoints(puzzle, game.streak);
       game.score += pts;
-      anim.feedbackCorrect = true;
-      anim.targetBgHue = 140; // green tint
+      animRef.current.feedbackCorrect = true;
+      animRef.current.targetBgHue = 140;
 
       soundRef.current?.playScore(pts);
-      particlesRef.current?.emitCelebration(w / 2, 100);
+      particlesRef.current?.emitCelebration(W / 2, 100);
 
-      anim.scorePopups.push({
-        x: w / 2,
+      animRef.current.scorePopups.push({
+        x: W / 2,
         y: 80,
         value: pts,
         life: 1.2,
         combo: game.streak,
       });
     } else {
-      // Wrong
       game.streak = 0;
-      anim.feedbackCorrect = false;
-      anim.shake = { time: 0.3, intensity: 6 };
-      anim.targetBgHue = 0; // red tint
+      animRef.current.feedbackCorrect = false;
+      animRef.current.shake = { time: 0.3, intensity: 6 };
+      animRef.current.targetBgHue = 0;
 
       soundRef.current?.playError();
     }
 
-    anim.feedbackAlpha = 0; // will animate in
+    animRef.current.feedbackAlpha = 0;
 
     setScore(game.score);
     setAnswered(game.answered);
@@ -725,11 +351,10 @@ export default function LogicPage() {
     game.answered++;
     game.streak = 0;
 
-    const anim = animRef.current;
-    anim.feedbackCorrect = false;
-    anim.feedbackAlpha = 0;
-    anim.shake = { time: 0.4, intensity: 8 };
-    anim.targetBgHue = 30; // orange tint
+    animRef.current.feedbackCorrect = false;
+    animRef.current.feedbackAlpha = 0;
+    animRef.current.shake = { time: 0.4, intensity: 8 };
+    animRef.current.targetBgHue = 30;
 
     soundRef.current?.playGameOver();
 
@@ -743,16 +368,11 @@ export default function LogicPage() {
     if (!game || !game.revealed) return;
 
     if (game.answered >= TOTAL_QUESTIONS) {
-      // Game over
       game.over = true;
       animRef.current.targetBgHue = 280;
       soundRef.current?.playLevelUp();
 
-      const canvas = canvasRef.current;
-      const dpr = window.devicePixelRatio || 1;
-      const w = canvas ? canvas.width / dpr : 400;
-      const h = canvas ? canvas.height / dpr : 600;
-      particlesRef.current?.emitCelebration(w / 2, h / 2);
+      particlesRef.current?.emitCelebration(W / 2, H / 2);
 
       submitScore(game.score);
       setGameOver(true);
@@ -765,19 +385,33 @@ export default function LogicPage() {
     game.timer = TIME_PER_QUESTION;
     game.timerActive = true;
 
-    const anim = animRef.current;
-    anim.questionFadeIn = 0;
-    anim.feedbackAlpha = 0;
-    anim.hoverOption = -1;
-    anim.targetBgHue = 280;
+    animRef.current.questionFadeIn = 0;
+    animRef.current.feedbackAlpha = 0;
+    animRef.current.hoverOption = -1;
+    animRef.current.targetBgHue = 280;
   }, [submitScore]);
+
+  // ─── Simple text width estimation for hit-testing ──────
+  const estimateTextLines = useCallback((text: string, maxWidth: number, fontSize: number): number => {
+    // Approximate: CJK chars ~fontSize wide, ASCII ~fontSize*0.6
+    let lineW = 0;
+    let lines = 1;
+    for (let i = 0; i < text.length; i++) {
+      const charW = text.charCodeAt(i) > 127 ? fontSize : fontSize * 0.6;
+      lineW += charW;
+      if (lineW > maxWidth && i > 0) {
+        lines++;
+        lineW = charW;
+      }
+    }
+    return lines;
+  }, []);
 
   // Handle canvas click
   const handleClick = useCallback((canvasX: number, canvasY: number) => {
     const game = gameRef.current;
     if (!game) return;
 
-    // Handle pause click
     if (game.paused && !game.over) {
       game.paused = false;
       setPaused(false);
@@ -785,16 +419,10 @@ export default function LogicPage() {
     }
 
     if (game.over) {
-      // Check restart button click
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const dpr = window.devicePixelRatio || 1;
-      const w = canvas.width / dpr;
-      const h = canvas.height / dpr;
-      const cardW = Math.min(w - 32, 360);
+      const cardW = Math.min(W - 32, 360);
       const cardH = 280;
-      const cardX = (w - cardW) / 2;
-      const cardY = (h - cardH) / 2;
+      const cardX = (W - cardW) / 2;
+      const cardY = (H - cardH) / 2;
       const rbX = cardX + 20;
       const rbW = cardW - 40;
       const rbY = cardY + 28 + 32 + 32 + 36 + 32;
@@ -809,61 +437,39 @@ export default function LogicPage() {
 
     if (game.paused) return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.width / dpr;
     const puzzle = puzzles[puzzleOrderRef.current[game.puzzleIdx]];
     if (!puzzle) return;
 
     const pad = 16;
-    const contentW = Math.min(w - pad * 2, 440);
-    const startX = (w - contentW) / 2;
+    const contentW = Math.min(W - pad * 2, 440);
+    const startX = (W - contentW) / 2;
 
-    // Calculate option positions (need to replicate layout math)
-    // Timer bar + spacing
     let y = 12;
     if (!game.revealed) {
-      y += 6 + 16; // timer bar + spacing
+      y += 6 + 16;
     } else {
       y += 8;
     }
 
-    // Difficulty + title + story + clues + question
-    // We approximate the y offset for options
-    // This is a simplified hit-test; we compute approximate positions
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    ctx.save();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    // Recalculate layout to find option positions
     y += 18; // difficulty
     y += 24; // title
 
-    ctx.font = "13px sans-serif";
-    const storyLines = wrapText(ctx, puzzle.story, contentW);
-    y += storyLines.length * 18 + 8;
+    const storyLineCount = estimateTextLines(puzzle.story, contentW, 13);
+    y += storyLineCount * 18 + 8;
 
     y += 16; // clues header
-    ctx.font = "12px sans-serif";
     for (let i = 0; i < puzzle.clues.length; i++) {
-      const clueLines = wrapText(ctx, puzzle.clues[i], contentW - 20);
-      y += clueLines.length * 16;
+      const clueLineCount = estimateTextLines(puzzle.clues[i], contentW - 20, 12);
+      y += clueLineCount * 16;
     }
     y += 12;
 
-    ctx.font = "bold 14px sans-serif";
-    const qLines = wrapText(ctx, `? ${puzzle.question}`, contentW);
-    y += qLines.length * 20 + 10;
-
-    ctx.restore();
+    const qLineCount = estimateTextLines(`? ${puzzle.question}`, contentW, 14);
+    y += qLineCount * 20 + 10;
 
     const optH = 44;
     const optGap = 8;
 
-    // Check option clicks
     if (!game.revealed) {
       for (let i = 0; i < puzzle.options.length; i++) {
         const optY = y + i * (optH + optGap);
@@ -876,7 +482,6 @@ export default function LogicPage() {
         }
       }
 
-      // Check submit button
       if (game.selected !== null) {
         const btnY = y + puzzle.options.length * (optH + optGap) + 8;
         const btnH = 42;
@@ -888,13 +493,8 @@ export default function LogicPage() {
       }
     }
 
-    // Check "next" button when revealed
     if (game.revealed) {
-      // The next button is after options + feedback + explanation
       const afterOpts = y + puzzle.options.length * (optH + optGap) + 8;
-      // feedback box: 36 + 8 gap
-      // explanation box: 60 + 8 gap
-      // next button starts at afterOpts + 36 + 8 + 60 + 8 + 8
       const nextBtnY = afterOpts + 36 + 8 + 60 + 8 + 8;
       const nextBtnH = 42;
       if (canvasX >= startX && canvasX <= startX + contentW &&
@@ -904,7 +504,7 @@ export default function LogicPage() {
         return;
       }
     }
-  }, [initGame, submitAnswer, nextQuestion]);
+  }, [initGame, submitAnswer, nextQuestion, estimateTextLines]);
 
   // Handle mouse move for hover
   const handleMouseMove = useCallback((canvasX: number, canvasY: number) => {
@@ -914,41 +514,26 @@ export default function LogicPage() {
       return;
     }
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.width / dpr;
     const puzzle = puzzles[puzzleOrderRef.current[game.puzzleIdx]];
     if (!puzzle) return;
 
     const pad = 16;
-    const contentW = Math.min(w - pad * 2, 440);
-    const startX = (w - contentW) / 2;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    ctx.save();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const contentW = Math.min(W - pad * 2, 440);
+    const startX = (W - contentW) / 2;
 
     let y = 12 + 6 + 16 + 18 + 24;
 
-    ctx.font = "13px sans-serif";
-    const storyLines = wrapText(ctx, puzzle.story, contentW);
-    y += storyLines.length * 18 + 8 + 16;
+    const storyLineCount = estimateTextLines(puzzle.story, contentW, 13);
+    y += storyLineCount * 18 + 8 + 16;
 
-    ctx.font = "12px sans-serif";
     for (let i = 0; i < puzzle.clues.length; i++) {
-      const clueLines = wrapText(ctx, puzzle.clues[i], contentW - 20);
-      y += clueLines.length * 16;
+      const clueLineCount = estimateTextLines(puzzle.clues[i], contentW - 20, 12);
+      y += clueLineCount * 16;
     }
     y += 12;
 
-    ctx.font = "bold 14px sans-serif";
-    const qLines = wrapText(ctx, `? ${puzzle.question}`, contentW);
-    y += qLines.length * 20 + 10;
-
-    ctx.restore();
+    const qLineCount = estimateTextLines(`? ${puzzle.question}`, contentW, 14);
+    y += qLineCount * 20 + 10;
 
     const optH = 44;
     const optGap = 8;
@@ -963,7 +548,7 @@ export default function LogicPage() {
       }
     }
     animRef.current.hoverOption = hovered;
-  }, []);
+  }, [estimateTextLines]);
 
   // Toggle pause
   const togglePause = useCallback(() => {
@@ -1036,98 +621,433 @@ export default function LogicPage() {
     initGame();
   }, []);
 
-  // ─── Animation Loop ──────────────────────────────────────
+  // ─── PixiJS Render Loop ────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let destroyed = false;
 
-    const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const parent = canvas.parentElement;
-      if (!parent) return;
-      const w = parent.clientWidth;
-      const h = Math.max(600, w * 1.6);
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-    };
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0f0f0f, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-    resize();
-    window.addEventListener("resize", resize);
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
 
-    const timeUpRef = { fired: false };
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-    const loop = (timestamp: number) => {
-      if (!lastTimeRef.current) lastTimeRef.current = timestamp;
-      const rawDt = timestamp - lastTimeRef.current;
-      lastTimeRef.current = timestamp;
-      const dt = Math.min(rawDt, 50) / 1000;
+      const TEXT_POOL_SIZE = 80;
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+          wordWrap: true,
+          wordWrapWidth: 440,
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
 
-      const anim = animRef.current;
-      const game = gameRef.current;
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) makeText(`t${i}`, { fontSize: 12 });
 
-      if (game && !game.paused) {
-        anim.time += dt;
-        anim.timerPulse += dt;
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: {
+        fill?: string; fontSize?: number; fontWeight?: string;
+        ax?: number; ay?: number; alpha?: number; maxWidth?: number;
+      }) => {
+        if (textIdx >= TEXT_POOL_SIZE) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        if (opts?.maxWidth) {
+          t.style.wordWrap = true;
+          t.style.wordWrapWidth = opts.maxWidth;
+        } else {
+          t.style.wordWrap = false;
+        }
+        t.visible = true;
+      };
 
-        // Timer countdown
-        if (game.timerActive && !game.revealed && !game.over) {
-          game.timer -= dt;
-          if (game.timer <= 0) {
-            game.timer = 0;
-            game.timerActive = false;
-            if (!timeUpRef.fired) {
-              timeUpRef.fired = true;
-              handleTimeUp();
+      const cn = hexToNum;
+      const timeUpRef = { fired: false };
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        frameRef.current++;
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const game = gameRef.current;
+        const anim = animRef.current;
+        if (!game) return;
+
+        // ─── Delta time ──────────────────────────────
+        const now = performance.now();
+        if (!lastTimeRef.current) lastTimeRef.current = now;
+        const rawDt = now - lastTimeRef.current;
+        lastTimeRef.current = now;
+        const dt = Math.min(rawDt, 50) / 1000;
+
+        if (!game.paused) {
+          anim.time += dt;
+          anim.timerPulse += dt;
+
+          if (game.timerActive && !game.revealed && !game.over) {
+            game.timer -= dt;
+            if (game.timer <= 0) {
+              game.timer = 0;
+              game.timerActive = false;
+              if (!timeUpRef.fired) {
+                timeUpRef.fired = true;
+                handleTimeUp();
+              }
             }
+          }
+
+          if (game.timerActive && game.timer > 0) {
+            timeUpRef.fired = false;
+          }
+
+          if (game.revealed && anim.feedbackAlpha < 1) {
+            anim.feedbackAlpha = Math.min(1, anim.feedbackAlpha + dt * 4);
+          }
+
+          if (!game.revealed && anim.questionFadeIn < 1) {
+            anim.questionFadeIn = Math.min(1, anim.questionFadeIn + dt * 3);
+          }
+
+          updateShake(anim.shake, dt);
+          updateScorePopups(anim.scorePopups, dt);
+          particlesRef.current?.update(dt);
+          anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.03);
+        }
+
+        // ─── Background gradient (two rects) ─────────
+        const hue = anim.bgHue;
+        const topColor = hslToHex(hue, 60, 12);
+        const botColor = hslToHex(hue, 60, 6);
+        g.rect(0, 0, W, H / 2).fill({ color: cn(topColor) });
+        g.rect(0, H / 2, W, H / 2).fill({ color: cn(botColor) });
+
+        // ─── Shake offset ────────────────────────────
+        let shakeX = 0, shakeY = 0;
+        if (anim.shake.time > 0) {
+          const mag = anim.shake.intensity * (anim.shake.time / Math.max(anim.shake.time + 0.001, 1));
+          shakeX = (Math.random() * 2 - 1) * mag;
+          shakeY = (Math.random() * 2 - 1) * mag;
+        }
+
+        const puzzle = puzzles[puzzleOrderRef.current[game.puzzleIdx]];
+        if (!puzzle && !game.over) return;
+
+        const pad = 16;
+        const contentW = Math.min(W - pad * 2, 440);
+        const cx = W / 2;
+        const startX = (W - contentW) / 2;
+        let y = 12;
+
+        // ─── Timer bar ──────────────────────────────
+        if (!game.over && !game.revealed && puzzle) {
+          const barW = contentW;
+          const barH = 6;
+          const barX = startX + shakeX;
+          const ratio = Math.max(0, game.timer / TIME_PER_QUESTION);
+          const timerColor = ratio > 0.5 ? "#22c55e" : ratio > 0.2 ? "#f0b90b" : "#ff4444";
+          const pulse = ratio < 0.2 ? 0.7 + 0.3 * Math.sin(anim.timerPulse * 8) : 1;
+
+          g.roundRect(barX, y + shakeY, barW, barH, 3).fill({ color: 0xffffff, alpha: 0.1 });
+
+          if (ratio > 0) {
+            g.roundRect(barX, y + shakeY, barW * ratio, barH, 3).fill({ color: cn(timerColor), alpha: pulse });
+          }
+
+          showText(`${Math.ceil(game.timer)}s`, startX + contentW + shakeX, y + barH + 2 + shakeY, {
+            fill: timerColor, fontSize: 11, fontWeight: "bold", ax: 1, ay: 0,
+          });
+          y += barH + 16;
+        } else {
+          y += 8;
+        }
+
+        // ─── Question card ──────────────────────────
+        if (!game.over && puzzle) {
+          const fadeAlpha = Math.min(1, anim.questionFadeIn);
+
+          // Difficulty + category
+          const diffColor = DIFF_COLORS[puzzle.difficulty] || "#aaa";
+          showText(puzzle.difficulty, startX + shakeX, y + shakeY, {
+            fill: diffColor, fontSize: 11, fontWeight: "bold", alpha: fadeAlpha,
+          });
+          showText(` · ${puzzle.category}`, startX + 35 + shakeX, y + 1 + shakeY, {
+            fill: "#666666", fontSize: 10, alpha: fadeAlpha,
+          });
+          y += 18;
+
+          // Title
+          showText(puzzle.title, startX + shakeX, y + shakeY, {
+            fill: "#ffffff", fontSize: 16, fontWeight: "bold", alpha: fadeAlpha,
+          });
+          y += 24;
+
+          // Story (wrapped text)
+          showText(puzzle.story, startX + shakeX, y + shakeY, {
+            fill: "#aaaaaa", fontSize: 13, alpha: fadeAlpha, maxWidth: contentW,
+          });
+          // Estimate story height for layout
+          const storyCharW = 13;
+          const storyCharsPerLine = Math.floor(contentW / storyCharW);
+          const storyLines = Math.max(1, Math.ceil(puzzle.story.length / Math.max(1, storyCharsPerLine)));
+          y += storyLines * 18 + 8;
+
+          // Clues header
+          showText(`线索（${puzzle.clues.length}条）`, startX + shakeX, y + shakeY, {
+            fill: "#3ea6ff", fontSize: 11, fontWeight: "bold", alpha: fadeAlpha,
+          });
+          y += 16;
+
+          // Clues
+          for (let i = 0; i < puzzle.clues.length; i++) {
+            showText(`${i + 1}.`, startX + shakeX, y + shakeY, {
+              fill: "#555555", fontSize: 12, alpha: fadeAlpha,
+            });
+            showText(puzzle.clues[i], startX + 20 + shakeX, y + shakeY, {
+              fill: "#8a8a8a", fontSize: 12, alpha: fadeAlpha, maxWidth: contentW - 20,
+            });
+            const clueCharW = 12;
+            const clueCharsPerLine = Math.floor((contentW - 20) / clueCharW);
+            const clueLines = Math.max(1, Math.ceil(puzzle.clues[i].length / Math.max(1, clueCharsPerLine)));
+            y += clueLines * 16;
+          }
+          y += 12;
+
+          // Question
+          showText(`? ${puzzle.question}`, startX + shakeX, y + shakeY, {
+            fill: "#f0b90b", fontSize: 14, fontWeight: "bold", alpha: fadeAlpha, maxWidth: contentW,
+          });
+          const qCharW = 14;
+          const qCharsPerLine = Math.floor(contentW / qCharW);
+          const qLines = Math.max(1, Math.ceil((puzzle.question.length + 2) / Math.max(1, qCharsPerLine)));
+          y += qLines * 20 + 10;
+
+          // ─── Options ──────────────────────────────
+          const optH = 44;
+          const optGap = 8;
+
+          for (let i = 0; i < puzzle.options.length; i++) {
+            const optY = y + i * (optH + optGap);
+            const isSelected = game.selected === i;
+            const isCorrect = i === puzzle.answer;
+            const isHovered = anim.hoverOption === i && !game.revealed;
+
+            let bgColor = 0x212121; let bgAlpha = 0.8;
+            let borderColor = 0x333333;
+            let textColor = "#aaaaaa";
+
+            if (game.revealed) {
+              if (isCorrect) {
+                bgColor = 0x2ba640; bgAlpha = 0.15;
+                borderColor = 0x2ba640;
+                textColor = "#2ba640";
+              } else if (isSelected && !isCorrect) {
+                bgColor = 0xff4444; bgAlpha = 0.15;
+                borderColor = 0xff4444;
+                textColor = "#ff4444";
+              }
+            } else if (isSelected) {
+              bgColor = 0x3ea6ff; bgAlpha = 0.15;
+              borderColor = 0x3ea6ff;
+              textColor = "#3ea6ff";
+            } else if (isHovered) {
+              borderColor = 0x555555;
+              textColor = "#ffffff";
+            }
+
+            g.roundRect(startX + shakeX, optY + shakeY, contentW, optH, 10)
+              .fill({ color: bgColor, alpha: bgAlpha * fadeAlpha });
+            g.roundRect(startX + shakeX, optY + shakeY, contentW, optH, 10)
+              .stroke({ color: borderColor, width: 1.5, alpha: fadeAlpha * 0.5 });
+
+            // Glow for correct
+            if (game.revealed && isCorrect) {
+              g.circle(startX + contentW / 2 + shakeX, optY + optH / 2 + shakeY, contentW * 0.4)
+                .fill({ color: 0x2ba640, alpha: 0.08 });
+            }
+
+            // Option label
+            showText(`${OPTION_LABELS[i]}.`, startX + 14 + shakeX, optY + optH / 2 + shakeY, {
+              fill: textColor, fontSize: 14, fontWeight: "bold", ay: 0.5, alpha: fadeAlpha,
+            });
+
+            // Option text
+            showText(puzzle.options[i], startX + 38 + shakeX, optY + optH / 2 + shakeY, {
+              fill: textColor, fontSize: 13, ay: 0.5, alpha: fadeAlpha,
+            });
+
+            // Check / X icon
+            if (game.revealed && isCorrect) {
+              showText("V", startX + contentW - 14 + shakeX, optY + optH / 2 + shakeY, {
+                fill: "#2ba640", fontSize: 16, fontWeight: "bold", ax: 1, ay: 0.5, alpha: fadeAlpha,
+              });
+            } else if (game.revealed && isSelected && !isCorrect) {
+              showText("X", startX + contentW - 14 + shakeX, optY + optH / 2 + shakeY, {
+                fill: "#ff4444", fontSize: 16, fontWeight: "bold", ax: 1, ay: 0.5, alpha: fadeAlpha,
+              });
+            }
+          }
+
+          y += puzzle.options.length * (optH + optGap) + 8;
+
+          // ─── Feedback / Explanation ────────────────
+          if (game.revealed && anim.feedbackAlpha > 0) {
+            const fbAlpha = Math.min(1, anim.feedbackAlpha);
+            const fbCorrect = anim.feedbackCorrect;
+            const fbColor = fbCorrect ? "#2ba640" : "#ff4444";
+            const fbBg = fbCorrect ? 0x2ba640 : 0xff4444;
+            const fbText = fbCorrect ? "V 回答正确！" : "X 回答错误";
+
+            // Feedback box
+            g.roundRect(startX + shakeX, y + shakeY, contentW, 36, 10)
+              .fill({ color: fbBg, alpha: 0.1 * fbAlpha });
+            g.roundRect(startX + shakeX, y + shakeY, contentW, 36, 10)
+              .stroke({ color: fbBg, width: 1, alpha: 0.2 * fbAlpha });
+
+            showText(fbText, cx + shakeX, y + 18 + shakeY, {
+              fill: fbColor, fontSize: 13, fontWeight: "bold", ax: 0.5, ay: 0.5, alpha: fbAlpha,
+            });
+            y += 44;
+
+            // Explanation box
+            g.roundRect(startX + shakeX, y + shakeY, contentW, 60, 10)
+              .fill({ color: 0x212121, alpha: 0.8 * fbAlpha });
+            g.roundRect(startX + shakeX, y + shakeY, contentW, 60, 10)
+              .stroke({ color: 0x333333, width: 1, alpha: fbAlpha });
+
+            showText(" 解析", startX + 12 + shakeX, y + 8 + shakeY, {
+              fill: "#f0b90b", fontSize: 11, fontWeight: "bold", alpha: fbAlpha,
+            });
+
+            showText(puzzle.explanation, startX + 12 + shakeX, y + 24 + shakeY, {
+              fill: "#aaaaaa", fontSize: 11, alpha: fbAlpha, maxWidth: contentW - 24,
+            });
+            y += 68;
+
+            // "Next" button
+            y += 8;
+            const btnW = contentW;
+            const btnH = 42;
+            g.roundRect(startX + shakeX, y + shakeY, btnW, btnH, 10)
+              .fill({ color: 0x3ea6ff, alpha: fbAlpha });
+
+            const nextText = game.answered >= TOTAL_QUESTIONS ? "查看结果 >" : "下一题 >";
+            showText(nextText, cx + shakeX, y + btnH / 2 + shakeY, {
+              fill: "#0f0f0f", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5, alpha: fbAlpha,
+            });
+            y += btnH + 12;
+          }
+
+          // ─── Submit button ────────────────────────
+          if (!game.revealed && game.selected !== null) {
+            const btnW = contentW;
+            const btnH = 42;
+            g.roundRect(startX + shakeX, y + shakeY, btnW, btnH, 10)
+              .fill({ color: 0xff4444 });
+
+            showText("提交答案", cx + shakeX, y + btnH / 2 + shakeY, {
+              fill: "#ffffff", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5,
+            });
           }
         }
 
-        // Reset timeUp flag when moving to next question
-        if (game.timerActive && game.timer > 0) {
-          timeUpRef.fired = false;
+        // ─── Game Over Screen ────────────────────────
+        if (game.over) {
+          g.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.3 });
+
+          const cardW = Math.min(W - 32, 360);
+          const cardH = 280;
+          const cardX = (W - cardW) / 2;
+          const cardY = (H - cardH) / 2;
+
+          g.roundRect(cardX, cardY, cardW, cardH, 16)
+            .fill({ color: 0x1a1a1a, alpha: 0.95 });
+          g.roundRect(cardX, cardY, cardW, cardH, 16)
+            .stroke({ color: 0x333333, width: 1 });
+
+          let gy = cardY + 28;
+          showText("*", cx, gy, { fill: "#ffffff", fontSize: 28, ax: 0.5, ay: 0.5 });
+          gy += 32;
+
+          showText("挑战完成！", cx, gy, { fill: "#f0b90b", fontSize: 20, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          gy += 32;
+
+          showText(`${game.score} 分`, cx, gy, { fill: "#ffffff", fontSize: 28, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          gy += 36;
+
+          showText(`正确 ${game.correct}/${game.answered} · 最高连击 ${game.bestStreak}`, cx, gy, {
+            fill: "#8a8a8a", fontSize: 13, ax: 0.5, ay: 0.5,
+          });
+          gy += 32;
+
+          const rbW = cardW - 40;
+          const rbH = 40;
+          const rbX = cardX + 20;
+          g.roundRect(rbX, gy, rbW, rbH, 10).fill({ color: 0xf0b90b });
+
+          showText("再来一局", cx, gy + rbH / 2, {
+            fill: "#0f0f0f", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5,
+          });
         }
 
-        // Animate feedback fade in
-        if (game.revealed && anim.feedbackAlpha < 1) {
-          anim.feedbackAlpha = Math.min(1, anim.feedbackAlpha + dt * 4);
+        // ─── Score popups ────────────────────────────
+        for (const p of anim.scorePopups) {
+          if (p.life <= 0) continue;
+          const progress = 1 - p.life;
+          const floatY = p.y - progress * 40;
+          let popText = `+${p.value}`;
+          if (p.combo > 1) popText += ` x${p.combo}`;
+          showText(popText, p.x + shakeX, floatY + shakeY, {
+            fill: "#ffd93d", fontSize: 18, fontWeight: "bold", ax: 0.5, ay: 0.5, alpha: Math.max(0, p.life),
+          });
         }
 
-        // Animate question fade in
-        if (!game.revealed && anim.questionFadeIn < 1) {
-          anim.questionFadeIn = Math.min(1, anim.questionFadeIn + dt * 3);
+        // ─── Pause overlay ──────────────────────────
+        if (game.paused && !game.over) {
+          g.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.6 });
+          showText("|| 已暂停", W / 2, H / 2, { fill: "#ffffff", fontSize: 28, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText("点击继续", W / 2, H / 2 + 36, { fill: "#8a8a8a", fontSize: 14, ax: 0.5, ay: 0.5 });
         }
+      });
+    }
 
-        // Update shake
-        updateShake(anim.shake, dt);
-
-        // Update score popups
-        updateScorePopups(anim.scorePopups, dt);
-
-        // Update particles
-        particlesRef.current?.update(dt);
-
-        // Smooth bg hue
-        anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.03);
-      }
-
-      // Render
-      if (game) {
-        const dpr = window.devicePixelRatio || 1;
-        renderGame(ctx, canvas, game, anim, particlesRef.current!, dpr, puzzleOrderRef.current);
-      }
-
-      rafRef.current = requestAnimationFrame(loop);
-    };
-
-    rafRef.current = requestAnimationFrame(loop);
+    initPixi();
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("resize", resize);
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
   }, [handleTimeUp]);
 
@@ -1136,21 +1056,33 @@ export default function LogicPage() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const onClick = (e: MouseEvent) => {
+    const getPos = (e: MouseEvent | Touch) => {
       const rect = canvas.getBoundingClientRect();
-      handleClick(e.clientX - rect.left, e.clientY - rect.top);
+      const scaleX = W / rect.width;
+      const scaleY = H / rect.height;
+      return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+    };
+
+    const onClick = (e: MouseEvent) => {
+      const { x, y } = getPos(e);
+      handleClick(x, y);
     };
 
     const onMove = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      handleMouseMove(e.clientX - rect.left, e.clientY - rect.top);
+      const { x, y } = getPos(e);
+      handleMouseMove(x, y);
     };
 
     canvas.addEventListener("click", onClick);
     canvas.addEventListener("mousemove", onMove);
 
     const input = new InputHandler(canvas);
-    input.onTap((x, y) => handleClick(x, y));
+    input.onTap((tx, ty) => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = W / rect.width;
+      const scaleY = H / rect.height;
+      handleClick(tx * scaleX, ty * scaleY);
+    });
     input.preventDefaults();
     inputRef.current = input;
 
@@ -1171,7 +1103,6 @@ export default function LogicPage() {
       if (!puzzle) return;
 
       if (!game.revealed) {
-        // 1-5 or A-E to select option
         const numKey = parseInt(e.key);
         if (numKey >= 1 && numKey <= puzzle.options.length) {
           game.selected = numKey - 1;
@@ -1186,13 +1117,11 @@ export default function LogicPage() {
           forceUpdate(n => n + 1);
           return;
         }
-        // Enter to submit
         if (e.key === "Enter" && game.selected !== null) {
           submitAnswer();
           return;
         }
       } else {
-        // Enter or Space to go next
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           nextQuestion();
@@ -1219,7 +1148,6 @@ export default function LogicPage() {
   // ─── Cleanup ───────────────────────────────────────────
   useEffect(() => {
     return () => {
-      cancelAnimationFrame(rafRef.current);
       soundRef.current?.dispose();
       inputRef.current?.dispose();
       particlesRef.current?.clear();
@@ -1307,4 +1235,15 @@ export default function LogicPage() {
       </main>
     </>
   );
+}
+
+/** Convert HSL to hex string */
+function hslToHex(h: number, s: number, l: number): string {
+  const a = s / 100 * Math.min(l / 100, 1 - l / 100);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l / 100 - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * Math.max(0, Math.min(1, color))).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
 }

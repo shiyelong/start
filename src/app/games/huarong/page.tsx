@@ -8,9 +8,10 @@ import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
 import { ParticleSystem } from "@/lib/game-engine/particle-system";
 import { InputHandler } from "@/lib/game-engine/input-handler";
-import { easeOutQuad, lerp, updateShake, applyShake, updateScorePopups, renderScorePopups } from "@/lib/game-engine/animation-utils";
+import { easeOutQuad, lerp, updateShake, updateScorePopups } from "@/lib/game-engine/animation-utils";
 import type { ScorePopup, ShakeState } from "@/lib/game-engine/animation-utils";
-import { drawGradientBackground, drawText, drawGlow, drawRoundedRect } from "@/lib/game-engine/render-utils";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Types ───────────────────────────────────────────────
 interface Piece {
@@ -190,7 +191,6 @@ function checkWin(pieces: Piece[]): boolean {
 }
 
 function calcScore(moves: number, elapsed: number): number {
-  // Lower moves = higher score. Base 10000, minus penalties
   const movePenalty = moves * 10;
   const timePenalty = Math.floor(elapsed / 1000) * 2;
   return Math.max(100, 10000 - movePenalty - timePenalty);
@@ -228,164 +228,29 @@ function findPieceAt(pieces: Piece[], col: number, row: number): Piece | undefin
   return pieces.find(p => col >= p.x && col < p.x + p.w && row >= p.y && row < p.y + p.h);
 }
 
-// ─── Renderer ────────────────────────────────────────────
-function renderGame(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  game: GameState,
-  anim: AnimState,
-  particles: ParticleSystem,
-  dpr: number,
-): void {
-  const w = canvas.width / dpr;
-  const h = canvas.height / dpr;
-  const { cellSize, boardW, boardH, boardX, boardY } = getBoardLayout(w);
-
-  ctx.save();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  // Background
-  drawGradientBackground(ctx, w, h, anim.bgHue, 50);
-
-  // Apply shake
-  applyShake(ctx, anim.shake);
-
-  // Title area
-  drawText(ctx, `${LEVELS[game.levelIdx].name}`, w / 2, 22, w * 0.8, "#ffffff", 18);
-  drawText(ctx, `步数: ${game.moves}  时间: ${Math.floor(game.elapsed / 1000)}s`, w / 2, 44, w * 0.8, "#8a8a8a", 12);
-
-  // Board background
-  drawRoundedRect(ctx, boardX, boardY, boardW, boardH, 10);
-  ctx.fillStyle = "rgba(30, 30, 30, 0.9)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(100, 100, 100, 0.4)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Grid cells (empty slots)
-  for (let r = 0; r < GRID_H; r++) {
-    for (let c = 0; c < GRID_W; c++) {
-      const { px, py } = cellToPixel(c, r, boardX, boardY, cellSize);
-      drawRoundedRect(ctx, px, py, cellSize, cellSize, 6);
-      ctx.fillStyle = "rgba(50, 50, 50, 0.5)";
-      ctx.fill();
-    }
-  }
-
-  // Exit marker at bottom center (between columns 1 and 2, row 5)
-  const exitLeft = cellToPixel(1, GRID_H - 1, boardX, boardY, cellSize);
-  const exitW = 2 * cellSize + CELL_GAP;
-  const exitY = boardY + boardH - 3;
-  ctx.save();
-  ctx.shadowColor = "#dc2626";
-  ctx.shadowBlur = 10;
-  drawRoundedRect(ctx, exitLeft.px, exitY, exitW, 4, 2);
-  ctx.fillStyle = "#dc2626";
-  ctx.fill();
-  ctx.restore();
-
-  // Build a map of animating pieces for position override
-  const animMap = new Map<string, { x: number; y: number }>();
-  for (const sa of anim.slideAnims) {
-    const t = easeOutQuad(Math.min(1, sa.progress));
-    animMap.set(sa.id, {
-      x: sa.fromX + (sa.toX - sa.fromX) * t,
-      y: sa.fromY + (sa.toY - sa.fromY) * t,
-    });
-  }
-
-  // Draw pieces
-  for (const piece of game.pieces) {
-    const animPos = animMap.get(piece.id);
-    const drawCol = animPos ? animPos.x : piece.x;
-    const drawRow = animPos ? animPos.y : piece.y;
-
-    const { px, py } = cellToPixel(drawCol, drawRow, boardX, boardY, cellSize);
-    const pw = piece.w * cellSize + (piece.w - 1) * CELL_GAP;
-    const ph = piece.h * cellSize + (piece.h - 1) * CELL_GAP;
-
-    const isSelected = game.selected === piece.id;
-    const isCao = piece.id === "cao";
-
-    // Selected glow
-    if (isSelected) {
-      const glowIntensity = 0.3 + 0.2 * Math.sin(anim.selectedGlow * 4);
-      drawGlow(ctx, px + pw / 2, py + ph / 2, Math.max(pw, ph) * 0.8, isCao ? "#fbbf24" : "#3ea6ff", glowIntensity);
-    }
-
-    // Piece body
-    ctx.save();
-    drawRoundedRect(ctx, px, py, pw, ph, 8);
-
-    // Gradient fill
-    const grad = ctx.createLinearGradient(px, py, px, py + ph);
-    grad.addColorStop(0, piece.color);
-    grad.addColorStop(1, darkenColor(piece.color, 0.3));
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // Border
-    ctx.strokeStyle = isSelected ? (isCao ? "#fbbf24" : "#3ea6ff") : "rgba(255,255,255,0.15)";
-    ctx.lineWidth = isSelected ? 2.5 : 1;
-    ctx.stroke();
-    ctx.restore();
-
-    // Cao Cao special: gold inner glow
-    if (isCao) {
-      ctx.save();
-      drawRoundedRect(ctx, px + 3, py + 3, pw - 6, ph - 6, 6);
-      ctx.strokeStyle = "rgba(251, 191, 36, 0.3)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // Label
-    const fontSize = isCao ? Math.min(cellSize * 0.6, 36) : Math.min(cellSize * 0.45, 24);
-    drawText(ctx, piece.name, px + pw / 2, py + ph / 2, pw * 0.8, "rgba(255,255,255,0.9)", fontSize);
-  }
-
-  // Particles
-  particles.render(ctx);
-
-  // Score popups
-  renderScorePopups(ctx, anim.scorePopups);
-
-  // Win overlay
-  if (game.won) {
-    const alpha = Math.min(0.7, anim.winTime * 2);
-    ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
-    ctx.fillRect(0, 0, w, h);
-
-    const scale = easeOutQuad(Math.min(1, anim.winTime * 2));
-    ctx.save();
-    ctx.translate(w / 2, h / 2 - 30);
-    ctx.scale(scale, scale);
-    drawText(ctx, "?", 0, -30, 100, "#ffffff", 48);
-    drawText(ctx, "曹操逃出！", 0, 15, w * 0.7, "#fbbf24", 24);
-    drawText(ctx, `${game.moves}步 · ${Math.floor(game.elapsed / 1000)}秒 · ${calcScore(game.moves, game.elapsed)}分`, 0, 50, w * 0.8, "#8a8a8a", 14);
-    ctx.restore();
-  }
-
-  // Pause overlay
-  if (game.paused && !game.won) {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(0, 0, w, h);
-    drawText(ctx, "⏸ 已暂停", w / 2, h / 2, w * 0.8, "#ffffff", 28);
-    drawText(ctx, "点击继续", w / 2, h / 2 + 36, w * 0.6, "#8a8a8a", 14);
-  }
-
-  ctx.restore();
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
 }
 
-function darkenColor(hex: string, amount: number): string {
+function darkenHex(hex: string, amount: number): number {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   const dr = Math.round(r * (1 - amount));
   const dg = Math.round(g * (1 - amount));
   const db = Math.round(b * (1 - amount));
-  return `rgb(${dr},${dg},${db})`;
+  return (dr << 16) | (dg << 8) | db;
+}
+
+function hslToNum(h: number, s: number, l: number): number {
+  const a = s * Math.min(l, 1 - l) / 100;
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l / 100 - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color);
+  };
+  return (f(0) << 16) | (f(8) << 8) | f(4);
 }
 
 // ─── Component ───────────────────────────────────────────
@@ -406,9 +271,12 @@ export default function HuarongPage() {
   const soundRef = useRef<SoundEngine>(null!);
   const particlesRef = useRef<ParticleSystem>(null!);
   const inputRef = useRef<InputHandler>(null!);
-  const rafRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(0);
   const scoreSubmittedRef = useRef(false);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
+  const canvasWRef = useRef(0);
 
   // React UI state
   const [moves, setMoves] = useState(0);
@@ -474,11 +342,9 @@ export default function HuarongPage() {
       return;
     }
 
-    // Save undo state
     game.undoStack.push({ pieces: clonePieces(game.pieces), moves: game.moves });
     if (game.undoStack.length > 50) game.undoStack.shift();
 
-    // Start slide animation
     const anim = animRef.current;
     anim.slideAnims.push({
       id: piece.id,
@@ -495,12 +361,11 @@ export default function HuarongPage() {
 
     soundRef.current?.playMove();
 
-    // Check win
     if (checkWin(game.pieces)) {
       game.won = true;
       anim.winTime = 0;
       anim.winCelebrated = false;
-      anim.targetBgHue = 45; // gold
+      anim.targetBgHue = 45;
       anim.shake = { time: 0.4, intensity: 5 };
       soundRef.current?.playLevelUp();
       const score = calcScore(game.moves, game.elapsed);
@@ -533,8 +398,7 @@ export default function HuarongPage() {
   // Handle tap on canvas
   const handleCanvasTap = useCallback((tapX: number, tapY: number) => {
     const game = gameRef.current;
-    const canvas = canvasRef.current;
-    if (!game || !canvas) return;
+    if (!game) return;
 
     if (game.paused) {
       togglePause();
@@ -542,8 +406,7 @@ export default function HuarongPage() {
     }
     if (game.won) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const cw = canvas.width / dpr;
+    const cw = canvasWRef.current || 400;
     const { cellSize, boardX, boardY } = getBoardLayout(cw);
     const cell = pixelToCell(tapX, tapY, boardX, boardY, cellSize);
     if (!cell) {
@@ -554,13 +417,11 @@ export default function HuarongPage() {
 
     const tapped = findPieceAt(game.pieces, cell.col, cell.row);
     if (!tapped) {
-      // Tapped empty cell: if a piece is selected, try to move it there
       if (game.selected) {
         const sel = game.pieces.find(p => p.id === game.selected);
         if (sel) {
           const dx = cell.col - sel.x;
           const dy = cell.row - sel.y;
-          // Try single-step moves toward the tapped cell
           if (Math.abs(dx) + Math.abs(dy) === 1) {
             movePiece(sel.id, dx, dy);
           } else if (dx !== 0 && dy === 0) {
@@ -625,107 +486,311 @@ export default function HuarongPage() {
     } catch { /* ignore malformed data */ }
   }, [syncUI]);
 
-  // ─── Animation Loop ──────────────────────────────────────
+  // ─── Init game on mount ────────────────────────────────
   useEffect(() => {
     initGame(0);
   }, []);
 
+  // ─── PixiJS Render Loop ────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let destroyed = false;
 
-    const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+
+      const parent = canvas!.parentElement;
+      const w = parent ? parent.clientWidth : 400;
+      canvasWRef.current = w;
+
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({
+        canvas: canvas!,
+        width: w,
+        height: CANVAS_H,
+        backgroundColor: 0x0f0f0f,
+        antialias: true,
+      });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
+
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
+
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
+
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // Pre-create text pool (70 objects)
+      for (let i = 0; i < 70; i++) makeText(`t${i}`, { fontSize: 12 });
+
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: {
+        fill?: string; fontSize?: number; fontWeight?: string;
+        ax?: number; ay?: number; alpha?: number;
+      }) => {
+        if (textIdx >= 70) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x;
+        t.y = y;
+        t.anchor.set(opts?.ax ?? 0.5, opts?.ay ?? 0.5);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      const cn = hexToNum;
+      let lastTime = 0;
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        const now = performance.now();
+        if (!lastTime) lastTime = now;
+        const rawDt = now - lastTime;
+        lastTime = now;
+        const dt = Math.min(rawDt, 50) / 1000;
+
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const anim = animRef.current;
+        const game = gameRef.current;
+        if (!game) return;
+
+        const cw = canvasWRef.current || w;
+        const ch = CANVAS_H;
+
+        if (!game.paused) {
+          anim.time += dt;
+          anim.selectedGlow += dt;
+          if (!game.won) {
+            game.elapsed = Date.now() - game.startTime;
+          }
+          anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.03);
+          updateShake(anim.shake, dt);
+          updateScorePopups(anim.scorePopups, dt);
+          particlesRef.current?.update(dt);
+
+          let si = anim.slideAnims.length;
+          while (si-- > 0) {
+            anim.slideAnims[si].progress += dt * 6;
+            if (anim.slideAnims[si].progress >= 1) {
+              anim.slideAnims[si] = anim.slideAnims[anim.slideAnims.length - 1];
+              anim.slideAnims.pop();
+            }
+          }
+
+          if (game.won) {
+            anim.winTime += dt;
+            if (!anim.winCelebrated && anim.winTime > 0.2) {
+              anim.winCelebrated = true;
+              particlesRef.current?.emitCelebration(cw / 2, ch / 2 - 40);
+              particlesRef.current?.emitCelebration(cw * 0.3, ch / 2 - 20);
+              particlesRef.current?.emitCelebration(cw * 0.7, ch / 2 - 20);
+              const score = calcScore(game.moves, game.elapsed);
+              anim.scorePopups.push({
+                x: cw / 2, y: ch / 2 - 80,
+                value: score, life: 2, combo: 1,
+              });
+            }
+          }
+        }
+
+        // ─── Render with PixiJS Graphics ─────────────────
+        const { cellSize, boardW, boardH, boardX, boardY } = getBoardLayout(cw);
+
+        // Shake offset
+        let shakeX = 0, shakeY = 0;
+        if (anim.shake.time > 0) {
+          const mag = anim.shake.intensity * (anim.shake.time / Math.max(anim.shake.time + 0.001, 1));
+          shakeX = (Math.random() * 2 - 1) * mag;
+          shakeY = (Math.random() * 2 - 1) * mag;
+        }
+        app.stage.x = shakeX;
+        app.stage.y = shakeY;
+
+        // Background gradient (top to bottom HSL)
+        const bgTop = hslToNum(anim.bgHue, 50, 12);
+        const bgBot = hslToNum(anim.bgHue, 50, 6);
+        g.rect(0, 0, cw, ch / 2).fill({ color: bgTop });
+        g.rect(0, ch / 2, cw, ch / 2).fill({ color: bgBot });
+
+        // Title area
+        showText(LEVELS[game.levelIdx].name, cw / 2, 22, { fill: "#ffffff", fontSize: 18, fontWeight: "bold" });
+        showText(`步数: ${game.moves}  时间: ${Math.floor(game.elapsed / 1000)}s`, cw / 2, 44, { fill: "#8a8a8a", fontSize: 12 });
+
+        // Board background
+        g.roundRect(boardX, boardY, boardW, boardH, 10).fill({ color: 0x1e1e1e, alpha: 0.9 });
+        g.roundRect(boardX, boardY, boardW, boardH, 10).stroke({ color: 0x646464, width: 1.5, alpha: 0.4 });
+
+        // Grid cells (empty slots)
+        for (let r = 0; r < GRID_H; r++) {
+          for (let c = 0; c < GRID_W; c++) {
+            const { px, py } = cellToPixel(c, r, boardX, boardY, cellSize);
+            g.roundRect(px, py, cellSize, cellSize, 6).fill({ color: 0x323232, alpha: 0.5 });
+          }
+        }
+
+        // Exit marker
+        const exitLeft = cellToPixel(1, GRID_H - 1, boardX, boardY, cellSize);
+        const exitW = 2 * cellSize + CELL_GAP;
+        const exitY = boardY + boardH - 3;
+        g.roundRect(exitLeft.px, exitY, exitW, 4, 2).fill({ color: 0xdc2626 });
+
+        // Build anim map
+        const animMap = new Map<string, { x: number; y: number }>();
+        for (const sa of anim.slideAnims) {
+          const t = easeOutQuad(Math.min(1, sa.progress));
+          animMap.set(sa.id, {
+            x: sa.fromX + (sa.toX - sa.fromX) * t,
+            y: sa.fromY + (sa.toY - sa.fromY) * t,
+          });
+        }
+
+        // Draw pieces
+        for (const piece of game.pieces) {
+          const animPos = animMap.get(piece.id);
+          const drawCol = animPos ? animPos.x : piece.x;
+          const drawRow = animPos ? animPos.y : piece.y;
+
+          const { px, py } = cellToPixel(drawCol, drawRow, boardX, boardY, cellSize);
+          const pw = piece.w * cellSize + (piece.w - 1) * CELL_GAP;
+          const ph = piece.h * cellSize + (piece.h - 1) * CELL_GAP;
+
+          const isSelected = game.selected === piece.id;
+          const isCao = piece.id === "cao";
+
+          // Selected glow
+          if (isSelected) {
+            const glowIntensity = 0.3 + 0.2 * Math.sin(anim.selectedGlow * 4);
+            const glowR = Math.max(pw, ph) * 0.8;
+            const glowColor = isCao ? 0xfbbf24 : 0x3ea6ff;
+            g.circle(px + pw / 2, py + ph / 2, glowR).fill({ color: glowColor, alpha: glowIntensity * 0.3 });
+          }
+
+          // Piece body
+          const pieceColor = cn(piece.color);
+          const darkColor = darkenHex(piece.color, 0.3);
+          g.roundRect(px, py, pw, ph / 2, 8).fill({ color: pieceColor });
+          g.roundRect(px, py + ph / 2, pw, ph / 2, 8).fill({ color: darkColor });
+          // Cover the middle seam
+          g.rect(px, py + ph / 2 - 2, pw, 4).fill({ color: pieceColor });
+
+          // Border
+          const borderColor = isSelected ? (isCao ? 0xfbbf24 : 0x3ea6ff) : 0xffffff;
+          const borderAlpha = isSelected ? 1 : 0.15;
+          const borderWidth = isSelected ? 2.5 : 1;
+          g.roundRect(px, py, pw, ph, 8).stroke({ color: borderColor, width: borderWidth, alpha: borderAlpha });
+
+          // Cao Cao special: gold inner glow
+          if (isCao) {
+            g.roundRect(px + 3, py + 3, pw - 6, ph - 6, 6).stroke({ color: 0xfbbf24, width: 1, alpha: 0.3 });
+          }
+
+          // Label
+          const fontSize = isCao ? Math.min(cellSize * 0.6, 36) : Math.min(cellSize * 0.45, 24);
+          showText(piece.name, px + pw / 2, py + ph / 2, {
+            fill: "rgba(255,255,255,0.9)", fontSize, fontWeight: "bold",
+          });
+        }
+
+        // Particles (render via Graphics)
+        const particles = particlesRef.current;
+        if (particles) {
+          const activeParticles = (particles as unknown as { active: { x: number; y: number; life: number; maxLife: number; color: string; size: number; rotation?: number }[] }).active;
+          if (activeParticles) {
+            for (let i = 0; i < activeParticles.length; i++) {
+              const p = activeParticles[i];
+              const t = p.maxLife > 0 ? p.life / p.maxLife : 0;
+              if (t <= 0) continue;
+              g.rect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size).fill({ color: cn(p.color), alpha: t });
+            }
+          }
+        }
+
+        // Score popups
+        for (const sp of anim.scorePopups) {
+          if (sp.life <= 0) continue;
+          const progress = 1 - sp.life;
+          const floatY = sp.y - progress * 40;
+          const alpha = Math.max(0, Math.min(1, sp.life));
+          let text = `+${sp.value}`;
+          if (sp.combo > 1) text += ` x${sp.combo}`;
+          showText(text, sp.x, floatY, { fill: "#ffd93d", fontSize: 18, fontWeight: "bold", alpha });
+        }
+
+        // Win overlay
+        if (game.won) {
+          const alpha = Math.min(0.7, anim.winTime * 2);
+          g.rect(0, 0, cw, ch).fill({ color: 0x000000, alpha });
+
+          const scale = easeOutQuad(Math.min(1, anim.winTime * 2));
+          showText("曹操逃出！", cw / 2, ch / 2 - 15 + (1 - scale) * 30, {
+            fill: "#fbbf24", fontSize: Math.round(24 * scale), fontWeight: "bold",
+            alpha: scale,
+          });
+          showText(
+            `${game.moves}步 · ${Math.floor(game.elapsed / 1000)}秒 · ${calcScore(game.moves, game.elapsed)}分`,
+            cw / 2, ch / 2 + 20 + (1 - scale) * 30,
+            { fill: "#8a8a8a", fontSize: Math.round(14 * scale), alpha: scale },
+          );
+        }
+
+        // Pause overlay
+        if (game.paused && !game.won) {
+          g.rect(0, 0, cw, ch).fill({ color: 0x000000, alpha: 0.6 });
+          showText("⏸ 已暂停", cw / 2, ch / 2, { fill: "#ffffff", fontSize: 28, fontWeight: "bold" });
+          showText("点击继续", cw / 2, ch / 2 + 36, { fill: "#8a8a8a", fontSize: 14 });
+        }
+      });
+    }
+
+    initPixi();
+
+    const handleResize = () => {
       const parent = canvas.parentElement;
       if (!parent) return;
-      const w = parent.clientWidth;
-      const h = CANVAS_H;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-    };
-
-    resize();
-    window.addEventListener("resize", resize);
-
-    const loop = (timestamp: number) => {
-      if (!lastTimeRef.current) lastTimeRef.current = timestamp;
-      const rawDt = timestamp - lastTimeRef.current;
-      lastTimeRef.current = timestamp;
-      const dt = Math.min(rawDt, 50) / 1000;
-
-      const anim = animRef.current;
-      const game = gameRef.current;
-
-      if (game && !game.paused) {
-        anim.time += dt;
-        anim.selectedGlow += dt;
-
-        // Update elapsed time
-        if (!game.won) {
-          game.elapsed = Date.now() - game.startTime;
-        }
-
-        // Smooth bg hue
-        anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.03);
-
-        // Update shake
-        updateShake(anim.shake, dt);
-
-        // Update score popups
-        updateScorePopups(anim.scorePopups, dt);
-
-        // Update particles
-        particlesRef.current?.update(dt);
-
-        // Update slide animations
-        let si = anim.slideAnims.length;
-        while (si-- > 0) {
-          anim.slideAnims[si].progress += dt * 6; // ~0.17s slide
-          if (anim.slideAnims[si].progress >= 1) {
-            anim.slideAnims[si] = anim.slideAnims[anim.slideAnims.length - 1];
-            anim.slideAnims.pop();
-          }
-        }
-
-        // Win celebration particles
-        if (game.won) {
-          anim.winTime += dt;
-          if (!anim.winCelebrated && anim.winTime > 0.2) {
-            anim.winCelebrated = true;
-            const dpr = window.devicePixelRatio || 1;
-            const cw = canvas.width / dpr;
-            const ch = canvas.height / dpr;
-            particlesRef.current?.emitCelebration(cw / 2, ch / 2 - 40);
-            particlesRef.current?.emitCelebration(cw * 0.3, ch / 2 - 20);
-            particlesRef.current?.emitCelebration(cw * 0.7, ch / 2 - 20);
-
-            const score = calcScore(game.moves, game.elapsed);
-            anim.scorePopups.push({
-              x: cw / 2, y: ch / 2 - 80,
-              value: score, life: 2, combo: 1,
-            });
-          }
-        }
+      const newW = parent.clientWidth;
+      canvasWRef.current = newW;
+      const app = pixiAppRef.current;
+      if (app) {
+        app.renderer.resize(newW, CANVAS_H);
       }
-
-      // Render
-      if (game) {
-        const dpr = window.devicePixelRatio || 1;
-        renderGame(ctx, canvas, game, anim, particlesRef.current!, dpr);
-      }
-
-      rafRef.current = requestAnimationFrame(loop);
     };
-
-    rafRef.current = requestAnimationFrame(loop);
+    window.addEventListener("resize", handleResize);
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("resize", resize);
+      destroyed = true;
+      window.removeEventListener("resize", handleResize);
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
   }, [syncUI]);
 
@@ -736,9 +801,9 @@ export default function HuarongPage() {
 
     const onClick = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const scaleX = (canvas.width / dpr) / rect.width;
-      const scaleY = (canvas.height / dpr) / rect.height;
+      const cw = canvasWRef.current || rect.width;
+      const scaleX = cw / rect.width;
+      const scaleY = CANVAS_H / rect.height;
       const x = (e.clientX - rect.left) * scaleX;
       const y = (e.clientY - rect.top) * scaleY;
       handleCanvasTap(x, y);
@@ -748,10 +813,10 @@ export default function HuarongPage() {
 
     const input = new InputHandler(canvas);
     input.onTap((x, y) => {
-      const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
-      const scaleX = (canvas.width / dpr) / rect.width;
-      const scaleY = (canvas.height / dpr) / rect.height;
+      const cw = canvasWRef.current || rect.width;
+      const scaleX = cw / rect.width;
+      const scaleY = CANVAS_H / rect.height;
       handleCanvasTap(x * scaleX, y * scaleY);
     });
     input.preventDefaults();
@@ -797,7 +862,6 @@ export default function HuarongPage() {
   // ─── Cleanup ───────────────────────────────────────────
   useEffect(() => {
     return () => {
-      cancelAnimationFrame(rafRef.current);
       soundRef.current?.dispose();
       inputRef.current?.dispose();
       particlesRef.current?.clear();

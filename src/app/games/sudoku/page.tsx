@@ -8,9 +8,10 @@ import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
 import { ParticleSystem } from "@/lib/game-engine/particle-system";
 import { InputHandler } from "@/lib/game-engine/input-handler";
-import { lerp, updateShake, applyShake, updateScorePopups, renderScorePopups } from "@/lib/game-engine/animation-utils";
+import { lerp, updateShake, updateScorePopups } from "@/lib/game-engine/animation-utils";
 import type { ScorePopup, ShakeState } from "@/lib/game-engine/animation-utils";
-import { drawGradientBackground, drawText, drawGlow, drawRoundedRect } from "@/lib/game-engine/render-utils";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Types ───────────────────────────────────────────────
 interface GameState {
@@ -38,6 +39,7 @@ interface AnimState {
   selectGlow: number;      // pulsing glow on selected cell
   winFadeIn: number;
   errorFlash: Map<string, number>; // "r,c" → remaining flash time
+  lastTimestamp: number;
 }
 
 // ─── Constants ───────────────────────────────────────────
@@ -49,18 +51,20 @@ const THIN_LINE = 0.8;
 const DIFFS = ["简单", "中等", "困难"];
 const REMOVE_COUNTS = [35, 45, 55];
 
-const COLOR_BG_BOARD = "rgba(15, 15, 15, 0.6)";
-const COLOR_CELL_BG = "#111111";
-const COLOR_CELL_SELECTED = "rgba(62, 166, 255, 0.25)";
-const COLOR_CELL_SAME_NUM = "rgba(62, 166, 255, 0.10)";
-const COLOR_CELL_RELATED = "#1a1a2e";
-const COLOR_GRID_LINE = "#333333";
-const COLOR_GRID_THICK = "#555555";
-const COLOR_ORIGINAL = "#ffffff";
-const COLOR_PLAYER = "#3ea6ff";
-const COLOR_ERROR = "#ff4444";
-const COLOR_NOTE = "#666666";
+const COLOR_CELL_BG = 0x111111;
+const COLOR_CELL_SELECTED = 0x3ea6ff;
+const COLOR_CELL_SAME_NUM = 0x3ea6ff;
+const COLOR_CELL_RELATED = 0x1a1a2e;
+const COLOR_GRID_LINE = 0x333333;
+const COLOR_GRID_THICK = 0x555555;
 const COLOR_ACCENT = "#3ea6ff";
+const COLOR_ERROR_STR = "#ff4444";
+const COLOR_PLAYER_STR = "#3ea6ff";
+
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
 
 // ─── Sudoku Generator (Pure Functions) ───────────────────
 function generateSudoku(difficulty: number): { puzzle: number[][]; solution: number[][] } {
@@ -142,193 +146,6 @@ function initGameState(difficulty: number): GameState {
   };
 }
 
-// ─── Renderer ────────────────────────────────────────────
-function renderGame(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  game: GameState,
-  anim: AnimState,
-  particles: ParticleSystem,
-  dpr: number,
-): void {
-  const w = canvas.width / dpr;
-  const h = canvas.height / dpr;
-
-  ctx.save();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  // Background
-  drawGradientBackground(ctx, w, h, anim.bgHue, 40);
-
-  // Apply shake
-  applyShake(ctx, anim.shake);
-
-  // Board layout
-  const maxBoardWidth = Math.min(w - 16, 420);
-  const boardSize = maxBoardWidth;
-  const boardX = (w - boardSize) / 2;
-  const boardY = 8;
-  const cellSize = (boardSize - BOARD_PADDING * 2) / 9;
-
-  // Board background
-  drawRoundedRect(ctx, boardX, boardY, boardSize, boardSize, 10);
-  ctx.fillStyle = COLOR_BG_BOARD;
-  ctx.fill();
-
-  const innerX = boardX + BOARD_PADDING;
-  const innerY = boardY + BOARD_PADDING;
-  const innerSize = boardSize - BOARD_PADDING * 2;
-
-  // Draw cell backgrounds
-  for (let r = 0; r < 9; r++) {
-    for (let c = 0; c < 9; c++) {
-      const cx = innerX + c * cellSize;
-      const cy = innerY + r * cellSize;
-      const sel = game.selected;
-
-      let bgColor = COLOR_CELL_BG;
-      if (sel) {
-        const [sr, sc] = sel;
-        const isSel = sr === r && sc === c;
-        const sameNum = game.board[r][c] !== 0 && game.board[r][c] === game.board[sr][sc];
-        const sameRow = sr === r;
-        const sameCol = sc === c;
-        const sameBox = Math.floor(sr / 3) === Math.floor(r / 3) && Math.floor(sc / 3) === Math.floor(c / 3);
-
-        if (isSel) {
-          bgColor = COLOR_CELL_SELECTED;
-        } else if (sameNum) {
-          bgColor = COLOR_CELL_SAME_NUM;
-        } else if (sameRow || sameCol || sameBox) {
-          bgColor = COLOR_CELL_RELATED;
-        }
-      }
-
-      ctx.fillStyle = bgColor;
-      ctx.fillRect(cx, cy, cellSize, cellSize);
-
-      // Error flash overlay
-      const errKey = `${r},${c}`;
-      const flashTime = anim.errorFlash.get(errKey);
-      if (flashTime && flashTime > 0) {
-        const flashAlpha = Math.min(1, flashTime * 3) * 0.3;
-        ctx.fillStyle = `rgba(255, 68, 68, ${flashAlpha})`;
-        ctx.fillRect(cx, cy, cellSize, cellSize);
-      }
-    }
-  }
-
-  // Selected cell glow
-  if (game.selected && !game.won) {
-    const [sr, sc] = game.selected;
-    const gcx = innerX + sc * cellSize + cellSize / 2;
-    const gcy = innerY + sr * cellSize + cellSize / 2;
-    const glowIntensity = 0.2 + 0.1 * Math.sin(anim.selectGlow * 3);
-    drawGlow(ctx, gcx, gcy, cellSize * 0.9, COLOR_ACCENT, glowIntensity);
-  }
-
-  // Draw grid lines
-  ctx.strokeStyle = COLOR_GRID_LINE;
-  ctx.lineWidth = THIN_LINE;
-  for (let i = 1; i < 9; i++) {
-    if (i % 3 !== 0) {
-      // Thin horizontal
-      ctx.beginPath();
-      ctx.moveTo(innerX, innerY + i * cellSize);
-      ctx.lineTo(innerX + innerSize, innerY + i * cellSize);
-      ctx.stroke();
-      // Thin vertical
-      ctx.beginPath();
-      ctx.moveTo(innerX + i * cellSize, innerY);
-      ctx.lineTo(innerX + i * cellSize, innerY + innerSize);
-      ctx.stroke();
-    }
-  }
-
-  // Thick lines for 3×3 boxes
-  ctx.strokeStyle = COLOR_GRID_THICK;
-  ctx.lineWidth = THICK_LINE;
-  for (let i = 0; i <= 3; i++) {
-    // Horizontal
-    ctx.beginPath();
-    ctx.moveTo(innerX, innerY + i * 3 * cellSize);
-    ctx.lineTo(innerX + innerSize, innerY + i * 3 * cellSize);
-    ctx.stroke();
-    // Vertical
-    ctx.beginPath();
-    ctx.moveTo(innerX + i * 3 * cellSize, innerY);
-    ctx.lineTo(innerX + i * 3 * cellSize, innerY + innerSize);
-    ctx.stroke();
-  }
-
-  // Draw numbers and notes
-  const fontSize = Math.max(12, cellSize * 0.5);
-  const noteFontSize = Math.max(6, cellSize * 0.2);
-
-  for (let r = 0; r < 9; r++) {
-    for (let c = 0; c < 9; c++) {
-      const cx = innerX + c * cellSize + cellSize / 2;
-      const cy = innerY + r * cellSize + cellSize / 2;
-      const val = game.board[r][c];
-
-      if (val !== 0) {
-        const isOrig = isOriginal(game.puzzle, r, c);
-        const isErr = game.errors.has(`${r},${c}`);
-        const color = isErr ? COLOR_ERROR : isOrig ? COLOR_ORIGINAL : COLOR_PLAYER;
-
-        ctx.save();
-        ctx.fillStyle = color;
-        ctx.font = `bold ${fontSize}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(val), cx, cy);
-        ctx.restore();
-      } else {
-        // Draw notes
-        const noteArr = game.notes[r]?.[c];
-        if (noteArr && noteArr.length > 0) {
-          ctx.save();
-          ctx.fillStyle = COLOR_NOTE;
-          ctx.font = `${noteFontSize}px sans-serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          const noteSet = new Set(noteArr);
-          const subCellW = cellSize / 3;
-          const subCellH = cellSize / 3;
-          const baseX = innerX + c * cellSize;
-          const baseY = innerY + r * cellSize;
-          for (let n = 1; n <= 9; n++) {
-            if (noteSet.has(n)) {
-              const nc = (n - 1) % 3;
-              const nr = Math.floor((n - 1) / 3);
-              const nx = baseX + nc * subCellW + subCellW / 2;
-              const ny = baseY + nr * subCellH + subCellH / 2;
-              ctx.fillText(String(n), nx, ny);
-            }
-          }
-          ctx.restore();
-        }
-      }
-    }
-  }
-
-  // Particles
-  particles.render(ctx);
-
-  // Score popups
-  renderScorePopups(ctx, anim.scorePopups);
-
-  // Pause overlay
-  if (game.paused && !game.won) {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(0, 0, w, h);
-    drawText(ctx, "⏸ 已暂停", w / 2, h / 2, w * 0.8, "#ffffff", 28);
-    drawText(ctx, "点击继续", w / 2, h / 2 + 36, w * 0.6, "#8a8a8a", 14);
-  }
-
-  ctx.restore();
-}
-
 // ─── Component ───────────────────────────────────────────
 export default function SudokuPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -342,13 +159,19 @@ export default function SudokuPage() {
     selectGlow: 0,
     winFadeIn: 0,
     errorFlash: new Map(),
+    lastTimestamp: 0,
   });
   const soundRef = useRef<SoundEngine>(null!);
   const particlesRef = useRef<ParticleSystem>(null!);
   const inputRef = useRef<InputHandler>(null!);
-  const rafRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(0);
   const scoreSubmittedRef = useRef(false);
+
+  // PixiJS refs
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
+  const canvasSizeRef = useRef({ w: 420, h: 436 });
 
   // React UI state (only for elements outside canvas)
   const [score, setScore] = useState(0);
@@ -402,10 +225,7 @@ export default function SudokuPage() {
     const game = gameRef.current;
     if (!game || game.won || game.paused) return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.width / dpr;
+    const w = canvasSizeRef.current.w;
 
     const maxBoardWidth = Math.min(w - 16, 420);
     const boardSize = maxBoardWidth;
@@ -458,9 +278,7 @@ export default function SudokuPage() {
     // Check errors
     game.errors = checkErrors(game.board, game.solution);
 
-    const canvas = canvasRef.current;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas ? canvas.width / dpr : 400;
+    const w = canvasSizeRef.current.w;
     const maxBoardWidth = Math.min(w - 16, 420);
     const boardSize = maxBoardWidth;
     const boardX = (w - boardSize) / 2;
@@ -476,11 +294,11 @@ export default function SudokuPage() {
       soundRef.current?.playError();
       animRef.current.errorFlash.set(`${r},${c}`, 0.5);
       animRef.current.shake = { time: 0.15, intensity: 3 };
-      particlesRef.current?.emitSpark(pcx, pcy, COLOR_ERROR);
+      particlesRef.current?.emitSpark(pcx, pcy, COLOR_ERROR_STR);
     } else if (game.board[r][c] !== 0) {
       // Correct placement
       soundRef.current?.playTone(400 + num * 40, 0.1, "sine");
-      particlesRef.current?.emitSpark(pcx, pcy, COLOR_PLAYER);
+      particlesRef.current?.emitSpark(pcx, pcy, COLOR_PLAYER_STR);
     } else {
       // Cleared
       soundRef.current?.playClick();
@@ -602,95 +420,317 @@ export default function SudokuPage() {
     } catch { /* ignore malformed data */ }
   }, []);
 
-  // ─── Animation Loop ──────────────────────────────────────
+  // ─── Init game on mount ──────────────────────────────────
   useEffect(() => {
     initGame(difficulty);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ─── PixiJS Render Loop ──────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let destroyed = false;
 
-    const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const parent = canvas.parentElement;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+
+      const parent = canvas!.parentElement;
       if (!parent) return;
-      const w = parent.clientWidth;
-      const maxBoardWidth = Math.min(w - 16, 420);
-      const h = maxBoardWidth + 16;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-    };
+      const pw = parent.clientWidth;
+      const maxBoardWidth = Math.min(pw - 16, 420);
+      const W = pw;
+      const H = maxBoardWidth + 16;
+      canvasSizeRef.current = { w: W, h: H };
 
-    resize();
-    window.addEventListener("resize", resize);
+      const pixi = await loadPixi();
+      if (destroyed) return;
 
-    const loop = (timestamp: number) => {
-      if (!lastTimeRef.current) lastTimeRef.current = timestamp;
-      const rawDt = timestamp - lastTimeRef.current;
-      lastTimeRef.current = timestamp;
-      const dt = Math.min(rawDt, 50) / 1000;
+      const app = await createPixiApp({
+        canvas: canvas!,
+        width: W,
+        height: H,
+        backgroundColor: 0x0f0f0f,
+        antialias: true,
+      });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      const anim = animRef.current;
-      const game = gameRef.current;
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
 
-      if (game && !game.paused) {
-        anim.time += dt;
-        anim.selectGlow += dt;
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-        // Timer
-        if (!game.won) {
-          game.time += dt;
-          // Update display time every ~0.5s to avoid excessive re-renders
-          if (Math.floor(game.time * 2) !== Math.floor((game.time - dt) * 2)) {
-            setDisplayTime(game.time);
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // Pre-create text pool (80 objects)
+      for (let i = 0; i < 80; i++) makeText(`t${i}`, { fontSize: 12 });
+
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: {
+        fill?: string; fontSize?: number; fontWeight?: string;
+        ax?: number; ay?: number; alpha?: number;
+      }) => {
+        if (textIdx >= 80) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const game = gameRef.current;
+        const anim = animRef.current;
+        if (!game) return;
+
+        // Delta time
+        const now = performance.now();
+        const rawDt = anim.lastTimestamp ? now - anim.lastTimestamp : 16;
+        anim.lastTimestamp = now;
+        const dt = Math.min(rawDt, 50) / 1000;
+
+        if (!game.paused) {
+          anim.time += dt;
+          anim.selectGlow += dt;
+
+          // Timer
+          if (!game.won) {
+            game.time += dt;
+            if (Math.floor(game.time * 2) !== Math.floor((game.time - dt) * 2)) {
+              setDisplayTime(game.time);
+            }
+          }
+
+          // Update shake
+          updateShake(anim.shake, dt);
+
+          // Update score popups
+          updateScorePopups(anim.scorePopups, dt);
+
+          // Update particles
+          particlesRef.current?.update(dt);
+
+          // Update error flashes
+          for (const [key, time] of Array.from(anim.errorFlash)) {
+            const newTime = time - dt;
+            if (newTime <= 0) anim.errorFlash.delete(key);
+            else anim.errorFlash.set(key, newTime);
+          }
+
+          // Smooth bg hue
+          anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.03);
+
+          // Win fade in
+          if (game.won && anim.winFadeIn < 1) {
+            anim.winFadeIn = Math.min(1, anim.winFadeIn + dt * 2);
           }
         }
 
-        // Update shake
-        updateShake(anim.shake, dt);
+        // ─── Render ──────────────────────────────────────
+        const w = canvasSizeRef.current.w;
+        const h = canvasSizeRef.current.h;
 
-        // Update score popups
-        updateScorePopups(anim.scorePopups, dt);
+        // Background gradient (approximate with rects)
+        const hue = Math.floor(anim.bgHue);
+        g.rect(0, 0, w, h).fill({ color: 0x0f0f0f });
+        // Subtle gradient overlay
+        const gradColor = hslToHex(hue, 40, 8);
+        g.rect(0, 0, w, h).fill({ color: gradColor, alpha: 0.5 });
 
-        // Update particles
-        particlesRef.current?.update(dt);
+        // Apply shake offset
+        const shakeX = anim.shake.time > 0 ? (Math.random() - 0.5) * anim.shake.intensity * 2 : 0;
+        const shakeY = anim.shake.time > 0 ? (Math.random() - 0.5) * anim.shake.intensity * 2 : 0;
 
-        // Update error flashes
-        for (const [key, time] of Array.from(anim.errorFlash)) {
-          const newTime = time - dt;
-          if (newTime <= 0) anim.errorFlash.delete(key);
-          else anim.errorFlash.set(key, newTime);
+        // Board layout
+        const maxBW = Math.min(w - 16, 420);
+        const boardSize = maxBW;
+        const boardX = (w - boardSize) / 2 + shakeX;
+        const boardY = 8 + shakeY;
+        const cellSize = (boardSize - BOARD_PADDING * 2) / 9;
+
+        // Board background
+        g.roundRect(boardX, boardY, boardSize, boardSize, 10).fill({ color: 0x0f0f0f, alpha: 0.6 });
+
+        const innerX = boardX + BOARD_PADDING;
+        const innerY = boardY + BOARD_PADDING;
+        const innerSize = boardSize - BOARD_PADDING * 2;
+
+        // Draw cell backgrounds
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            const cx = innerX + c * cellSize;
+            const cy = innerY + r * cellSize;
+            const sel = game.selected;
+
+            let bgColor = COLOR_CELL_BG;
+            let bgAlpha = 1;
+            if (sel) {
+              const [sr, sc] = sel;
+              const isSel = sr === r && sc === c;
+              const sameNum = game.board[r][c] !== 0 && game.board[r][c] === game.board[sr][sc];
+              const sameRow = sr === r;
+              const sameCol = sc === c;
+              const sameBox = Math.floor(sr / 3) === Math.floor(r / 3) && Math.floor(sc / 3) === Math.floor(c / 3);
+
+              if (isSel) {
+                bgColor = COLOR_CELL_SELECTED;
+                bgAlpha = 0.25;
+              } else if (sameNum) {
+                bgColor = COLOR_CELL_SAME_NUM;
+                bgAlpha = 0.10;
+              } else if (sameRow || sameCol || sameBox) {
+                bgColor = COLOR_CELL_RELATED;
+                bgAlpha = 1;
+              }
+            }
+
+            g.rect(cx, cy, cellSize, cellSize).fill({ color: bgColor, alpha: bgAlpha });
+
+            // Error flash overlay
+            const errKey = `${r},${c}`;
+            const flashTime = anim.errorFlash.get(errKey);
+            if (flashTime && flashTime > 0) {
+              const flashAlpha = Math.min(1, flashTime * 3) * 0.3;
+              g.rect(cx, cy, cellSize, cellSize).fill({ color: 0xff4444, alpha: flashAlpha });
+            }
+          }
         }
 
-        // Smooth bg hue
-        anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.03);
-
-        // Win fade in
-        if (game.won && anim.winFadeIn < 1) {
-          anim.winFadeIn = Math.min(1, anim.winFadeIn + dt * 2);
+        // Selected cell glow
+        if (game.selected && !game.won) {
+          const [sr, sc] = game.selected;
+          const gcx = innerX + sc * cellSize + cellSize / 2;
+          const gcy = innerY + sr * cellSize + cellSize / 2;
+          const glowIntensity = 0.2 + 0.1 * Math.sin(anim.selectGlow * 3);
+          const glowR = cellSize * 0.45;
+          g.circle(gcx, gcy, glowR).fill({ color: hexToNum(COLOR_ACCENT), alpha: glowIntensity });
         }
-      }
 
-      // Render
-      if (game) {
-        const dpr = window.devicePixelRatio || 1;
-        renderGame(ctx, canvas, game, anim, particlesRef.current!, dpr);
-      }
+        // Draw grid lines - thin
+        for (let i = 1; i < 9; i++) {
+          if (i % 3 !== 0) {
+            // Thin horizontal
+            g.rect(innerX, innerY + i * cellSize - THIN_LINE / 2, innerSize, THIN_LINE)
+              .fill({ color: COLOR_GRID_LINE });
+            // Thin vertical
+            g.rect(innerX + i * cellSize - THIN_LINE / 2, innerY, THIN_LINE, innerSize)
+              .fill({ color: COLOR_GRID_LINE });
+          }
+        }
 
-      rafRef.current = requestAnimationFrame(loop);
-    };
+        // Thick lines for 3×3 boxes
+        for (let i = 0; i <= 3; i++) {
+          // Horizontal
+          g.rect(innerX, innerY + i * 3 * cellSize - THICK_LINE / 2, innerSize, THICK_LINE)
+            .fill({ color: COLOR_GRID_THICK });
+          // Vertical
+          g.rect(innerX + i * 3 * cellSize - THICK_LINE / 2, innerY, THICK_LINE, innerSize)
+            .fill({ color: COLOR_GRID_THICK });
+        }
 
-    rafRef.current = requestAnimationFrame(loop);
+        // Draw numbers and notes
+        const fontSize = Math.max(12, cellSize * 0.5);
+        const noteFontSize = Math.max(6, cellSize * 0.2);
+
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            const cx = innerX + c * cellSize + cellSize / 2;
+            const cy = innerY + r * cellSize + cellSize / 2;
+            const val = game.board[r][c];
+
+            if (val !== 0) {
+              const isOrig = isOriginal(game.puzzle, r, c);
+              const isErr = game.errors.has(`${r},${c}`);
+              const color = isErr ? "#ff4444" : isOrig ? "#ffffff" : "#3ea6ff";
+
+              showText(String(val), cx, cy, {
+                fill: color, fontSize, fontWeight: "bold", ax: 0.5, ay: 0.5,
+              });
+            } else {
+              // Draw notes
+              const noteArr = game.notes[r]?.[c];
+              if (noteArr && noteArr.length > 0) {
+                const noteSet = new Set(noteArr);
+                const subCellW = cellSize / 3;
+                const subCellH = cellSize / 3;
+                const baseX = innerX + c * cellSize;
+                const baseY = innerY + r * cellSize;
+                for (let n = 1; n <= 9; n++) {
+                  if (noteSet.has(n)) {
+                    const nc = (n - 1) % 3;
+                    const nr = Math.floor((n - 1) / 3);
+                    const nx = baseX + nc * subCellW + subCellW / 2;
+                    const ny = baseY + nr * subCellH + subCellH / 2;
+                    showText(String(n), nx, ny, {
+                      fill: "#666666", fontSize: noteFontSize, ax: 0.5, ay: 0.5,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Score popups
+        for (const popup of anim.scorePopups) {
+          if (popup.life > 0) {
+            const alpha = Math.min(1, popup.life * 2);
+            showText(`+${popup.value}`, popup.x + shakeX, popup.y - (1.5 - popup.life) * 40 + shakeY, {
+              fill: "#ffd700", fontSize: 18, fontWeight: "bold", ax: 0.5, ay: 0.5, alpha,
+            });
+          }
+        }
+
+        // Pause overlay
+        if (game.paused && !game.won) {
+          g.rect(0, 0, w, h).fill({ color: 0x000000, alpha: 0.6 });
+          showText("已暂停", w / 2, h / 2, {
+            fill: "#ffffff", fontSize: 28, fontWeight: "bold", ax: 0.5, ay: 0.5,
+          });
+          showText("点击继续", w / 2, h / 2 + 36, {
+            fill: "#8a8a8a", fontSize: 14, ax: 0.5, ay: 0.5,
+          });
+        }
+      });
+    }
+
+    initPixi();
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("resize", resize);
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
   }, [difficulty]);
 
@@ -701,12 +741,23 @@ export default function SudokuPage() {
 
     const onClick = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      handleCellClick(e.clientX - rect.left, e.clientY - rect.top);
+      const w = canvasSizeRef.current.w;
+      const h = canvasSizeRef.current.h;
+      const scaleX = w / rect.width;
+      const scaleY = h / rect.height;
+      handleCellClick((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
     };
     canvas.addEventListener("click", onClick);
 
     const input = new InputHandler(canvas);
-    input.onTap((x, y) => handleCellClick(x, y));
+    input.onTap((x, y) => {
+      const rect = canvas.getBoundingClientRect();
+      const w = canvasSizeRef.current.w;
+      const h = canvasSizeRef.current.h;
+      const scaleX = w / rect.width;
+      const scaleY = h / rect.height;
+      handleCellClick(x * scaleX, y * scaleY);
+    });
     input.preventDefaults();
     inputRef.current = input;
 
@@ -769,7 +820,6 @@ export default function SudokuPage() {
   // ─── Cleanup ───────────────────────────────────────────
   useEffect(() => {
     return () => {
-      cancelAnimationFrame(rafRef.current);
       soundRef.current?.dispose();
       inputRef.current?.dispose();
       particlesRef.current?.clear();
@@ -922,4 +972,17 @@ export default function SudokuPage() {
       </main>
     </>
   );
+}
+
+// ─── Helper: HSL to hex number ───────────────────────────
+function hslToHex(h: number, s: number, l: number): number {
+  s /= 100;
+  l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * Math.max(0, Math.min(1, color)));
+  };
+  return (f(0) << 16) | (f(8) << 8) | f(4);
 }

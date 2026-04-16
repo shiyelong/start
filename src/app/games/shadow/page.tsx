@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Header from "@/components/Header";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Type Definitions ────────────────────────────────────
 
@@ -224,7 +226,7 @@ function applyItemEffect(
       result.hp = Math.min(result.maxHp, result.hp + Math.floor(result.maxHp * 0.25));
       break;
     case "atkBoost":
-      result.atkBoostTimer = 900; // 15 seconds at 60fps
+      result.atkBoostTimer = 900;
       break;
     case "shield":
       result.shieldActive = true;
@@ -248,9 +250,9 @@ function checkRectCollision(
 // ─── Shadow Enemy Types ──────────────────────────────────
 
 const ENEMY_TYPES = {
-  specter: { width: 24, height: 22, color: "#8a5cf5" },  // patrol - ghostly purple
-  wraith: { width: 30, height: 28, color: "#c44dff" },   // chase - bright violet
-  phantom: { width: 28, height: 20, color: "#6b3fa0" },  // fly - dark purple
+  specter: { width: 24, height: 22, color: "#8a5cf5" },
+  wraith: { width: 30, height: 28, color: "#c44dff" },
+  phantom: { width: 28, height: 20, color: "#6b3fa0" },
 };
 
 // ─── Background Layers (dark mist, ruined pillars, ghostly wisps) ─
@@ -639,354 +641,21 @@ function spawnItems(spawns: ItemSpawn[], hidden?: HiddenArea[]): ActiveItem[] {
   return items;
 }
 
-
-// ─── Drawing Helpers (Dark/Purple Theme) ─────────────────
-
-function drawPlayer(ctx: CanvasRenderingContext2D, p: Player, camX: number) {
-  const sx = p.x - camX;
-  const sy = p.y;
-  if (p.invincible > 0 && Math.floor(p.invincible / 4) % 2 === 0) return;
-
-  ctx.save();
-  // Body - dark cloak
-  ctx.fillStyle = "#4a2a6e";
-  ctx.fillRect(sx + 4, sy + 8, 20, 20);
-  // Head
-  ctx.fillStyle = "#d4b8e8";
-  ctx.fillRect(sx + 6, sy, 16, 14);
-  // Eyes - glowing purple
-  ctx.fillStyle = "#c44dff";
-  const eyeX = p.facing === "right" ? sx + 16 : sx + 10;
-  ctx.fillRect(eyeX, sy + 4, 3, 3);
-  // Legs
-  ctx.fillStyle = "#2a1a3e";
-  const legOff = p.onGround ? Math.sin(p.animFrame * 0.3) * 3 : 0;
-  ctx.fillRect(sx + 6, sy + 28, 6, 8 + legOff);
-  ctx.fillRect(sx + 16, sy + 28, 6, 8 - legOff);
-  // Attack - purple energy slash
-  if (p.attacking) {
-    ctx.fillStyle = "#c44dff";
-    const atkX = p.facing === "right" ? sx + PLAYER_W : sx - ATTACK_RANGE;
-    ctx.globalAlpha = 0.6;
-    ctx.fillRect(atkX, sy + 4, ATTACK_RANGE, 20);
-    ctx.globalAlpha = 1;
-  }
-  // Shield - ghostly aura
-  if (p.shieldActive) {
-    ctx.strokeStyle = "#a855f7";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(sx + PLAYER_W / 2, sy + PLAYER_H / 2, 22, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  ctx.restore();
+// ─── Hex color to PixiJS number ──────────────────────────
+function hexToNum(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
 }
 
-function drawEnemySprite(ctx: CanvasRenderingContext2D, e: Enemy, camX: number) {
-  const sx = e.x - camX;
-  if (e.dead) {
-    ctx.globalAlpha = Math.max(0, e.deathTimer / 30);
-  }
-  const info = ENEMY_TYPES[e.type as keyof typeof ENEMY_TYPES] || ENEMY_TYPES.specter;
-  ctx.fillStyle = info.color;
-
-  if (e.type === "specter") {
-    // Ghostly floating shape
-    ctx.beginPath();
-    ctx.ellipse(sx + e.width / 2, e.y + e.height / 2, e.width / 2, e.height / 2, 0, 0, Math.PI * 2);
-    ctx.fill();
-    // Wavy bottom
-    ctx.fillRect(sx + 2, e.y + e.height / 2, e.width - 4, e.height / 2);
-    // Hollow eyes
-    ctx.fillStyle = "#1a0a2e";
-    ctx.fillRect(sx + 5, e.y + 5, 5, 5);
-    ctx.fillRect(sx + 14, e.y + 5, 5, 5);
-    // Glowing pupils
-    ctx.fillStyle = "#ff44ff";
-    ctx.fillRect(sx + 6, e.y + 6, 3, 3);
-    ctx.fillRect(sx + 15, e.y + 6, 3, 3);
-  } else if (e.type === "wraith") {
-    // Dark hooded figure
-    ctx.fillRect(sx, e.y, e.width, e.height);
-    // Hood
-    ctx.fillStyle = "#2a0a4e";
-    ctx.beginPath();
-    ctx.moveTo(sx, e.y + 10);
-    ctx.lineTo(sx + e.width / 2, e.y - 4);
-    ctx.lineTo(sx + e.width, e.y + 10);
-    ctx.closePath();
-    ctx.fill();
-    // Glowing red eyes
-    ctx.fillStyle = "#ff2222";
-    ctx.fillRect(sx + 8, e.y + 10, 4, 4);
-    ctx.fillRect(sx + e.width - 12, e.y + 10, 4, 4);
-  } else if (e.type === "phantom") {
-    // Floating wispy form
-    ctx.globalAlpha = Math.max(ctx.globalAlpha * 0.8, 0.3);
-    ctx.fillRect(sx + 6, e.y + 2, 16, 14);
-    const wingOff = Math.sin(e.flyAngle * 3) * 5;
-    ctx.fillRect(sx, e.y + 4 + wingOff, 10, 8);
-    ctx.fillRect(sx + 18, e.y + 4 - wingOff, 10, 8);
-    // Eyes
-    ctx.fillStyle = "#00ffcc";
-    ctx.fillRect(sx + 9, e.y + 6, 3, 3);
-    ctx.fillRect(sx + 16, e.y + 6, 3, 3);
-    ctx.globalAlpha = e.dead ? Math.max(0, e.deathTimer / 30) : 1;
-  }
-
-  // HP bar
-  if (e.hp < e.maxHp && !e.dead) {
-    ctx.fillStyle = "#400040";
-    ctx.fillRect(sx, e.y - 8, e.width, 4);
-    ctx.fillStyle = "#c44dff";
-    ctx.fillRect(sx, e.y - 8, e.width * (e.hp / e.maxHp), 4);
-  }
-  ctx.globalAlpha = 1;
-}
-
-function drawBossSprite(ctx: CanvasRenderingContext2D, b: Boss, camX: number) {
-  const sx = b.x - camX;
-  if (b.dead) {
-    ctx.globalAlpha = Math.max(0, b.deathTimer / 60);
-  }
-  // Body - dark robes
-  ctx.fillStyle = b.name === "Shadow Lord" ? "#2a0a4e" : "#0d0618";
-  ctx.fillRect(sx, b.y, b.width, b.height);
-  // Crown/Hood
-  ctx.fillStyle = b.name === "Shadow Lord" ? "#6b3fa0" : "#3a0a6e";
-  ctx.beginPath();
-  ctx.moveTo(sx, b.y);
-  ctx.lineTo(sx + b.width / 2, b.y - 18);
-  ctx.lineTo(sx + b.width, b.y);
-  ctx.closePath();
-  ctx.fill();
-  // Glowing eyes
-  ctx.fillStyle = "#ff44ff";
-  ctx.fillRect(sx + 10, b.y + 15, 8, 8);
-  ctx.fillRect(sx + b.width - 18, b.y + 15, 8, 8);
-  ctx.fillStyle = "#ff0066";
-  ctx.fillRect(sx + 12, b.y + 17, 4, 4);
-  ctx.fillRect(sx + b.width - 16, b.y + 17, 4, 4);
-  // HP bar
-  ctx.fillStyle = "#400040";
-  ctx.fillRect(sx, b.y - 14, b.width, 6);
-  ctx.fillStyle = "#c44dff";
-  ctx.fillRect(sx, b.y - 14, b.width * (b.hp / b.maxHp), 6);
-  ctx.fillStyle = "#e0c0ff";
-  ctx.font = "10px monospace";
-  ctx.fillText(b.name, sx, b.y - 18);
-  // Projectiles - dark energy orbs
-  b.projectiles.forEach(p => {
-    if (!p.active) return;
-    ctx.fillStyle = "#9333ea";
-    ctx.beginPath();
-    ctx.arc(p.x - camX + p.width / 2, p.y + p.height / 2, p.width / 2, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.globalAlpha = 1;
-}
-
-function drawItem(ctx: CanvasRenderingContext2D, item: ActiveItem, camX: number, frame: number) {
-  if (item.collected) return;
-  const sx = item.x - camX;
-  const bob = Math.sin(frame * 0.05) * 3;
-  switch (item.type) {
-    case "heal":
-      ctx.fillStyle = "#f44";
-      ctx.fillRect(sx + 2, item.y + bob, 12, 4);
-      ctx.fillRect(sx + 6, item.y + bob - 4, 4, 12);
-      break;
-    case "atkBoost":
-      ctx.fillStyle = "#c44dff";
-      ctx.beginPath();
-      ctx.moveTo(sx + 8, item.y + bob - 4);
-      ctx.lineTo(sx + 14, item.y + bob + 6);
-      ctx.lineTo(sx + 2, item.y + bob + 6);
-      ctx.closePath();
-      ctx.fill();
-      break;
-    case "shield":
-      ctx.fillStyle = "#a855f7";
-      ctx.beginPath();
-      ctx.moveTo(sx + 8, item.y + bob - 4);
-      ctx.lineTo(sx + 16, item.y + bob + 2);
-      ctx.lineTo(sx + 8, item.y + bob + 12);
-      ctx.lineTo(sx, item.y + bob + 2);
-      ctx.closePath();
-      ctx.fill();
-      break;
-    case "coin":
-      ctx.fillStyle = "#d8b4fe";
-      ctx.beginPath();
-      ctx.arc(sx + 8, item.y + bob + 4, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#7c3aed";
-      ctx.font = "8px monospace";
-      ctx.fillText("$", sx + 5, item.y + bob + 7);
-      break;
-  }
-}
-
-
-function drawParallaxBg(ctx: CanvasRenderingContext2D, layers: BgLayer[], camX: number) {
-  // Dark sky gradient
-  const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
-  grad.addColorStop(0, "#0d0618");
-  grad.addColorStop(0.4, "#1a0a2e");
-  grad.addColorStop(0.8, "#2a1a3e");
-  grad.addColorStop(1, "#1a0a2e");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
-  layers.forEach(layer => {
-    const offset = camX * layer.speed;
-    layer.elements.forEach(el => {
-      const ex = ((el.x - offset) % (CANVAS_W + 200)) - 100;
-      const ey = el.y;
-      ctx.fillStyle = layer.color;
-      if (el.type === "mist") {
-        // Ghostly mist clouds
-        ctx.globalAlpha = 0.3;
-        ctx.fillStyle = "#6b3fa0";
-        ctx.beginPath();
-        ctx.ellipse(ex, ey, 50 * el.scale, 12 * el.scale, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.ellipse(ex + 30, ey + 5, 35 * el.scale, 10 * el.scale, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      } else if (el.type === "pillar") {
-        // Ruined stone pillars
-        ctx.fillStyle = "#3a2a4e";
-        ctx.fillRect(ex - 15 * el.scale, ey, 30 * el.scale, CANVAS_H - ey);
-        // Cracks
-        ctx.fillStyle = "#2a1a3e";
-        ctx.fillRect(ex - 5, ey + 20, 3, 30);
-        ctx.fillRect(ex + 5, ey + 50, 2, 20);
-        // Broken top
-        ctx.fillStyle = "#4a3a5e";
-        ctx.beginPath();
-        ctx.moveTo(ex - 18 * el.scale, ey);
-        ctx.lineTo(ex - 5, ey - 10 * el.scale);
-        ctx.lineTo(ex + 8, ey - 5 * el.scale);
-        ctx.lineTo(ex + 18 * el.scale, ey);
-        ctx.closePath();
-        ctx.fill();
-      } else if (el.type === "wisp") {
-        // Ghostly floating wisps
-        ctx.globalAlpha = 0.5;
-        ctx.fillStyle = "#a855f7";
-        ctx.beginPath();
-        ctx.arc(ex + 8, ey, 5 * el.scale, 0, Math.PI * 2);
-        ctx.fill();
-        // Trail
-        ctx.fillStyle = "#7c3aed";
-        ctx.globalAlpha = 0.3;
-        ctx.beginPath();
-        ctx.arc(ex + 2, ey + 3, 3 * el.scale, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      } else if (el.type === "tombstone") {
-        // Tombstone decoration
-        ctx.fillStyle = "#4a3a5e";
-        ctx.fillRect(ex, ey, 16 * el.scale, 24 * el.scale);
-        ctx.beginPath();
-        ctx.arc(ex + 8 * el.scale, ey, 8 * el.scale, Math.PI, 0);
-        ctx.fill();
-        // Cross marking
-        ctx.fillStyle = "#6b5a7e";
-        ctx.fillRect(ex + 6 * el.scale, ey + 4, 4, 12);
-        ctx.fillRect(ex + 3 * el.scale, ey + 8, 10, 3);
-      }
-    });
-  });
-}
-
-function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform[], camX: number) {
-  platforms.forEach(p => {
-    const sx = p.x - camX;
-    if (sx > CANVAS_W + 50 || sx + p.width < -50) return;
-    if (p.type === "solid") {
-      // Dark stone platform
-      ctx.fillStyle = "#2a1a3e";
-      ctx.fillRect(sx, p.y, p.width, p.height);
-      // Purple-tinted top edge
-      ctx.fillStyle = "#4a2a6e";
-      ctx.fillRect(sx, p.y, p.width, 6);
-      // Skull/bone decorations
-      for (let i = 0; i < p.width; i += 30) {
-        ctx.fillStyle = "#5a3a7e";
-        ctx.fillRect(sx + i + 5, p.y - 2, 4, 4);
-        ctx.fillRect(sx + i + 15, p.y - 1, 3, 3);
-      }
-    } else {
-      // Floating dark platform
-      ctx.fillStyle = "#3a2a4e";
-      ctx.fillRect(sx, p.y, p.width, p.height);
-      ctx.fillStyle = "#6b3fa0";
-      ctx.fillRect(sx, p.y, p.width, 4);
-      // Dripping shadow effect
-      ctx.strokeStyle = "#4a2a6e";
-      ctx.lineWidth = 1;
-      for (let i = 10; i < p.width; i += 25) {
-        ctx.beginPath();
-        ctx.moveTo(sx + i, p.y + p.height);
-        ctx.lineTo(sx + i + 3, p.y + p.height + 8);
-        ctx.stroke();
-      }
-    }
-  });
-}
-
-
-function drawHUD(ctx: CanvasRenderingContext2D, p: Player, levelId: number, time: number) {
-  // HP bar
-  ctx.fillStyle = "rgba(0,0,0,0.6)";
-  ctx.fillRect(10, 10, 154, 20);
-  ctx.fillStyle = "#400040";
-  ctx.fillRect(12, 12, 150, 16);
-  const hpPct = p.hp / p.maxHp;
-  ctx.fillStyle = hpPct > 0.5 ? "#a855f7" : hpPct > 0.25 ? "#c44dff" : "#f00";
-  ctx.fillRect(12, 12, 150 * hpPct, 16);
-  ctx.fillStyle = "#e0c0ff";
-  ctx.font = "11px monospace";
-  ctx.fillText(`HP: ${p.hp}/${p.maxHp}`, 16, 25);
-
-  // Coins
-  ctx.fillStyle = "#d8b4fe";
-  ctx.beginPath();
-  ctx.arc(190, 20, 8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#e0c0ff";
-  ctx.font = "12px monospace";
-  ctx.fillText(`×${p.coins}`, 202, 24);
-
-  // Level
-  ctx.fillText(`Level ${levelId}`, 260, 24);
-
-  // Score
-  ctx.fillText(`Score: ${p.score}`, 340, 24);
-
-  // Time
-  ctx.fillText(`Time: ${Math.floor(time)}s`, 460, 24);
-
-  // Atk boost indicator
-  if (p.atkBoostTimer > 0) {
-    ctx.fillStyle = "#c44dff";
-    ctx.fillText(`? ATK UP ${Math.ceil(p.atkBoostTimer / 60)}s`, 580, 24);
-  }
-  if (p.shieldActive) {
-    ctx.fillStyle = "#a855f7";
-    ctx.fillText("? SHIELD", 700, 24);
-  }
-}
 
 // ─── Main Component ──────────────────────────────────────
 
 export default function ShadowDungeonPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gsRef = useRef<GameStateRef | null>(null);
-  const rafRef = useRef<number>(0);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
   const [uiPhase, setUiPhase] = useState<GamePhase>("menu");
   const [, setUiLevel] = useState(1);
   const [, setUiHp] = useState(100);
@@ -1025,330 +694,544 @@ export default function ShadowDungeonPage() {
   }, []);
 
 
-  // ─── Game Loop ───────────────────────────────────────
-  const gameLoop = useCallback(() => {
-    const gs = gsRef.current;
+  // ─── PixiJS Render Loop ──────────────────────────────
+  useEffect(() => {
     const canvas = canvasRef.current;
-    if (!gs || !canvas || gs.phase !== "playing") {
-      rafRef.current = requestAnimationFrame(gameLoop);
-      return;
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) { rafRef.current = requestAnimationFrame(gameLoop); return; }
+    if (!canvas) return;
+    let destroyed = false;
 
-    const level = LEVELS[gs.level];
-    gs.frameCount++;
-    gs.time += 1 / 60;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: CANVAS_W, height: CANVAS_H, backgroundColor: 0x0d0618, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-    const p = gs.player;
-    const keys = gs.keys;
-    const tc = gs.touchControls;
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
 
-    // ── Input ──
-    const moveLeft = keys.has("ArrowLeft") || tc.left;
-    const moveRight = keys.has("ArrowRight") || tc.right;
-    const jumpPressed = keys.has("z") || keys.has("Z") || keys.has("ArrowUp") || tc.jump;
-    const attackPressed = keys.has("x") || keys.has("X") || tc.attack;
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-    // ── Player Movement ──
-    p.vx = 0;
-    if (moveLeft) { p.vx = -(MOVE_SPEED); p.facing = "left"; }
-    if (moveRight) { p.vx = MOVE_SPEED; p.facing = "right"; }
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "monospace",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
 
-    // Jump
-    if (jumpPressed && !keys.has("_jumpHeld")) {
-      keys.add("_jumpHeld");
-      const result = applyJump(p.onGround, p.doubleJumpUsed, p.abilities.jumpBonus);
-      if (result) {
-        p.vy = result.vy;
-        p.onGround = result.onGround;
-        p.doubleJumpUsed = result.doubleJumpUsed;
-      }
-    }
-    if (!jumpPressed) keys.delete("_jumpHeld");
+      // Pre-create text pool (70 objects)
+      for (let i = 0; i < 70; i++) makeText(`t${i}`, { fontSize: 12 });
 
-    // Attack
-    if (attackPressed && !p.attacking) {
-      p.attacking = true;
-      p.attackTimer = ATTACK_DURATION;
-    }
-    if (p.attacking) {
-      p.attackTimer--;
-      if (p.attackTimer <= 0) p.attacking = false;
-    }
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; alpha?: number }) => {
+        if (textIdx >= 70) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(0, 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
 
-    // Gravity
-    p.vy = applyGravity(p.vy);
-    p.x += p.vx;
-    p.y += p.vy;
-    p.onGround = false;
+      const cn = hexToNum;
 
-    // Platform collision
-    for (const plat of level.platforms) {
-      const result = checkPlatformCollision(p.x, p.y, PLAYER_W, PLAYER_H, p.vy, plat);
-      if (result) {
-        p.y = result.y;
-        p.vy = result.vy;
-        if (result.onGround) {
-          p.onGround = true;
-          p.doubleJumpUsed = false;
-        }
-      }
-      // Horizontal collision for solid platforms
-      if (plat.type === "solid") {
-        if (p.x + PLAYER_W > plat.x && p.x < plat.x + plat.width &&
-            p.y + PLAYER_H > plat.y + 6 && p.y < plat.y + plat.height) {
-          if (p.vx > 0 && p.x + PLAYER_W - p.vx <= plat.x) {
-            p.x = plat.x - PLAYER_W;
-          } else if (p.vx < 0 && p.x - p.vx >= plat.x + plat.width) {
-            p.x = plat.x + plat.width;
+      app.ticker.add(() => {
+        if (destroyed) return;
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const gs = gsRef.current;
+        if (!gs || gs.phase !== "playing") return;
+
+        const level = LEVELS[gs.level];
+        gs.frameCount++;
+        gs.time += 1 / 60;
+
+        const p = gs.player;
+        const keys = gs.keys;
+        const tc = gs.touchControls;
+
+        // ── Input ──
+        const moveLeft = keys.has("ArrowLeft") || tc.left;
+        const moveRight = keys.has("ArrowRight") || tc.right;
+        const jumpPressed = keys.has("z") || keys.has("Z") || keys.has("ArrowUp") || tc.jump;
+        const attackPressed = keys.has("x") || keys.has("X") || tc.attack;
+
+        // ── Player Movement ──
+        p.vx = 0;
+        if (moveLeft) { p.vx = -(MOVE_SPEED); p.facing = "left"; }
+        if (moveRight) { p.vx = MOVE_SPEED; p.facing = "right"; }
+
+        // Jump
+        if (jumpPressed && !keys.has("_jumpHeld")) {
+          keys.add("_jumpHeld");
+          const result = applyJump(p.onGround, p.doubleJumpUsed, p.abilities.jumpBonus);
+          if (result) {
+            p.vy = result.vy;
+            p.onGround = result.onGround;
+            p.doubleJumpUsed = result.doubleJumpUsed;
           }
         }
-      }
-    }
+        if (!jumpPressed) keys.delete("_jumpHeld");
 
-    // Bounds
-    if (p.x < 0) p.x = 0;
-    if (p.x > level.width - PLAYER_W) p.x = level.width - PLAYER_W;
-
-    // Fall death
-    if (p.y > CANVAS_H + 50) {
-      p.hp = 0;
-    }
-
-    // Invincibility
-    if (p.invincible > 0) p.invincible--;
-
-    // Atk boost timer
-    if (p.atkBoostTimer > 0) p.atkBoostTimer--;
-
-    // Animation
-    p.animTimer++;
-    if (p.animTimer > 8) { p.animTimer = 0; p.animFrame++; }
-
-    // ── Enemy AI ──
-    gs.enemies.forEach(e => {
-      if (e.dead) {
-        e.deathTimer--;
-        return;
-      }
-      switch (e.behavior) {
-        case "patrol":
-          e.x += e.vx;
-          if (Math.abs(e.x - e.originX) > e.patrolRange) e.vx = -e.vx;
-          break;
-        case "chase": {
-          const dx = p.x - e.x;
-          e.vx = dx > 0 ? 1.5 : -1.5;
-          if (Math.abs(dx) < 300) e.x += e.vx;
-          break;
+        // Attack
+        if (attackPressed && !p.attacking) {
+          p.attacking = true;
+          p.attackTimer = ATTACK_DURATION;
         }
-        case "fly":
-          e.flyAngle += 0.03;
-          e.y = e.originX + Math.sin(e.flyAngle) * 30;
-          const fdx = p.x - e.x;
-          if (Math.abs(fdx) < 350) e.x += (fdx > 0 ? 1 : -1);
-          break;
-      }
-
-      // Enemy hits player
-      if (p.invincible <= 0 && !e.dead &&
-          checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, e.x, e.y, e.width, e.height)) {
-        if (p.shieldActive) {
-          p.shieldActive = false;
-          gs.notifications.push({ text: "Shield broken!", timer: 120 });
-        } else {
-          p.hp -= 15;
-          p.score -= 50;
+        if (p.attacking) {
+          p.attackTimer--;
+          if (p.attackTimer <= 0) p.attacking = false;
         }
-        p.invincible = INVINCIBLE_FRAMES;
-      }
 
-      // Player attack hits enemy
-      if (p.attacking && p.attackTimer === ATTACK_DURATION - 1 && !e.dead) {
-        const atkX = p.facing === "right" ? p.x + PLAYER_W : p.x - ATTACK_RANGE;
-        if (checkRectCollision(atkX, p.y + 4, ATTACK_RANGE, 20, e.x, e.y, e.width, e.height)) {
-          const dmg = p.atkBoostTimer > 0 ? p.atk * 2 : p.atk;
-          e.hp -= dmg;
-          if (e.hp <= 0) {
-            e.dead = true;
-            e.deathTimer = 30;
-            p.score += 200;
-            p.coins += 1;
+        // Gravity
+        p.vy = applyGravity(p.vy);
+        p.x += p.vx;
+        p.y += p.vy;
+        p.onGround = false;
+
+        // Platform collision
+        for (const plat of level.platforms) {
+          const result = checkPlatformCollision(p.x, p.y, PLAYER_W, PLAYER_H, p.vy, plat);
+          if (result) {
+            p.y = result.y;
+            p.vy = result.vy;
+            if (result.onGround) {
+              p.onGround = true;
+              p.doubleJumpUsed = false;
+            }
+          }
+          if (plat.type === "solid") {
+            if (p.x + PLAYER_W > plat.x && p.x < plat.x + plat.width &&
+                p.y + PLAYER_H > plat.y + 6 && p.y < plat.y + plat.height) {
+              if (p.vx > 0 && p.x + PLAYER_W - p.vx <= plat.x) {
+                p.x = plat.x - PLAYER_W;
+              } else if (p.vx < 0 && p.x - p.vx >= plat.x + plat.width) {
+                p.x = plat.x + plat.width;
+              }
+            }
           }
         }
-      }
-    });
-    gs.enemies = gs.enemies.filter(e => !e.dead || e.deathTimer > 0);
 
+        // Bounds
+        if (p.x < 0) p.x = 0;
+        if (p.x > level.width - PLAYER_W) p.x = level.width - PLAYER_W;
+        if (p.y > CANVAS_H + 50) p.hp = 0;
+        if (p.invincible > 0) p.invincible--;
+        if (p.atkBoostTimer > 0) p.atkBoostTimer--;
+        p.animTimer++;
+        if (p.animTimer > 8) { p.animTimer = 0; p.animFrame++; }
 
-    // ── Boss AI ──
-    if (gs.boss && !gs.boss.dead) {
-      const b = gs.boss;
-      const hpPct = (b.hp / b.maxHp) * 100;
-      const phaseIdx = hpPct > 50 ? 0 : 1;
-      if (phaseIdx !== b.currentPhase) {
-        b.currentPhase = phaseIdx;
-        b.attackTimer = 30;
-        gs.notifications.push({ text: `${b.name} enraged!`, timer: 120 });
-      }
-      const phase = b.phases[b.currentPhase];
-      b.attackTimer--;
-
-      if (b.attackTimer <= 0) {
-        const attack = phase.attacks[b.currentAttack % phase.attacks.length];
-        if (attack.name.includes("charge") || attack.name.includes("slam") || attack.name.includes("strike") || attack.name.includes("whip")) {
-          b.vx = p.x > b.x ? phase.speed * 3 : -phase.speed * 3;
-        } else if (attack.name.includes("bolt") || attack.name.includes("storm") || attack.name.includes("barrage") || attack.name.includes("fury") || attack.name.includes("void")) {
-          for (let i = 0; i < 3; i++) {
-            b.projectiles.push({
-              x: b.x + b.width / 2, y: b.y + 20,
-              vx: (p.x > b.x ? 3 : -3) + (Math.random() - 0.5) * 2,
-              vy: -2 + Math.random() * 2,
-              width: 10, height: 10, active: true,
-            });
+        // ── Enemy AI ──
+        gs.enemies.forEach(e => {
+          if (e.dead) { e.deathTimer--; return; }
+          switch (e.behavior) {
+            case "patrol":
+              e.x += e.vx;
+              if (Math.abs(e.x - e.originX) > e.patrolRange) e.vx = -e.vx;
+              break;
+            case "chase": {
+              const dx = p.x - e.x;
+              e.vx = dx > 0 ? 1.5 : -1.5;
+              if (Math.abs(dx) < 300) e.x += e.vx;
+              break;
+            }
+            case "fly":
+              e.flyAngle += 0.03;
+              e.y = e.originX + Math.sin(e.flyAngle) * 30;
+              const fdx = p.x - e.x;
+              if (Math.abs(fdx) < 350) e.x += (fdx > 0 ? 1 : -1);
+              break;
           }
-        } else {
-          b.vx = p.x > b.x ? phase.speed : -phase.speed;
-        }
-        b.currentAttack++;
-        b.attackTimer = attack.cooldown;
-      }
 
-      // Boss movement
-      b.x += b.vx;
-      b.vx *= 0.95;
-      const arenaStart = level.width - 1100;
-      if (b.x < arenaStart) b.x = arenaStart;
-      if (b.x > level.width - b.width - 50) b.x = level.width - b.width - 50;
+          if (p.invincible <= 0 && !e.dead &&
+              checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, e.x, e.y, e.width, e.height)) {
+            if (p.shieldActive) {
+              p.shieldActive = false;
+              gs.notifications.push({ text: "Shield broken!", timer: 120 });
+            } else {
+              p.hp -= 15;
+              p.score -= 50;
+            }
+            p.invincible = INVINCIBLE_FRAMES;
+          }
 
-      // Projectiles
-      b.projectiles.forEach(proj => {
-        if (!proj.active) return;
-        proj.x += proj.vx;
-        proj.y += proj.vy;
-        proj.vy += 0.1;
-        if (proj.y > CANVAS_H || proj.x < 0 || proj.x > level.width) {
-          proj.active = false;
+          if (p.attacking && p.attackTimer === ATTACK_DURATION - 1 && !e.dead) {
+            const atkX = p.facing === "right" ? p.x + PLAYER_W : p.x - ATTACK_RANGE;
+            if (checkRectCollision(atkX, p.y + 4, ATTACK_RANGE, 20, e.x, e.y, e.width, e.height)) {
+              const dmg = p.atkBoostTimer > 0 ? p.atk * 2 : p.atk;
+              e.hp -= dmg;
+              if (e.hp <= 0) {
+                e.dead = true;
+                e.deathTimer = 30;
+                p.score += 200;
+                p.coins += 1;
+              }
+            }
+          }
+        });
+        gs.enemies = gs.enemies.filter(e => !e.dead || e.deathTimer > 0);
+
+        // ── Boss AI ──
+        if (gs.boss && !gs.boss.dead) {
+          const b = gs.boss;
+          const hpPct = (b.hp / b.maxHp) * 100;
+          const phaseIdx = hpPct > 50 ? 0 : 1;
+          if (phaseIdx !== b.currentPhase) {
+            b.currentPhase = phaseIdx;
+            b.attackTimer = 30;
+            gs.notifications.push({ text: `${b.name} enraged!`, timer: 120 });
+          }
+          const phase = b.phases[b.currentPhase];
+          b.attackTimer--;
+
+          if (b.attackTimer <= 0) {
+            const attack = phase.attacks[b.currentAttack % phase.attacks.length];
+            if (attack.name.includes("charge") || attack.name.includes("slam") || attack.name.includes("strike") || attack.name.includes("whip")) {
+              b.vx = p.x > b.x ? phase.speed * 3 : -phase.speed * 3;
+            } else if (attack.name.includes("bolt") || attack.name.includes("storm") || attack.name.includes("barrage") || attack.name.includes("fury") || attack.name.includes("void")) {
+              for (let i = 0; i < 3; i++) {
+                b.projectiles.push({
+                  x: b.x + b.width / 2, y: b.y + 20,
+                  vx: (p.x > b.x ? 3 : -3) + (Math.random() - 0.5) * 2,
+                  vy: -2 + Math.random() * 2,
+                  width: 10, height: 10, active: true,
+                });
+              }
+            } else {
+              b.vx = p.x > b.x ? phase.speed : -phase.speed;
+            }
+            b.currentAttack++;
+            b.attackTimer = attack.cooldown;
+          }
+
+          b.x += b.vx;
+          b.vx *= 0.95;
+          const arenaStart = level.width - 1100;
+          if (b.x < arenaStart) b.x = arenaStart;
+          if (b.x > level.width - b.width - 50) b.x = level.width - b.width - 50;
+
+          b.projectiles.forEach(proj => {
+            if (!proj.active) return;
+            proj.x += proj.vx;
+            proj.y += proj.vy;
+            proj.vy += 0.1;
+            if (proj.y > CANVAS_H || proj.x < 0 || proj.x > level.width) proj.active = false;
+            if (p.invincible <= 0 && checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, proj.x, proj.y, proj.width, proj.height)) {
+              if (p.shieldActive) { p.shieldActive = false; } else { p.hp -= 10; }
+              p.invincible = INVINCIBLE_FRAMES;
+              proj.active = false;
+            }
+          });
+          b.projectiles = b.projectiles.filter(proj => proj.active);
+
+          if (p.invincible <= 0 && checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, b.x, b.y, b.width, b.height)) {
+            if (p.shieldActive) { p.shieldActive = false; } else { p.hp -= 20; }
+            p.invincible = INVINCIBLE_FRAMES;
+          }
+
+          if (p.attacking && p.attackTimer === ATTACK_DURATION - 1) {
+            const atkX = p.facing === "right" ? p.x + PLAYER_W : p.x - ATTACK_RANGE;
+            if (checkRectCollision(atkX, p.y + 4, ATTACK_RANGE, 20, b.x, b.y, b.width, b.height)) {
+              const dmg = p.atkBoostTimer > 0 ? p.atk * 2 : p.atk;
+              b.hp -= dmg;
+              if (b.hp <= 0) {
+                b.dead = true;
+                b.deathTimer = 60;
+                p.score += 1000;
+                gs.victoryTimer = 120;
+                gs.notifications.push({ text: `${b.name} defeated!`, timer: 180 });
+              }
+            }
+          }
         }
-        if (p.invincible <= 0 && checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, proj.x, proj.y, proj.width, proj.height)) {
-          if (p.shieldActive) {
-            p.shieldActive = false;
+
+        // ── Items ──
+        gs.items.forEach(item => {
+          if (item.collected) return;
+          if (checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, item.x, item.y, 16, 16)) {
+            item.collected = true;
+            const effect = applyItemEffect(p, item.type);
+            p.hp = effect.hp;
+            p.atkBoostTimer = effect.atkBoostTimer;
+            p.shieldActive = effect.shieldActive;
+            p.coins = effect.coins;
+            p.score = effect.score;
+            const names: Record<string, string> = { heal: "+HP", atkBoost: "ATK UP!", shield: "Shield!", coin: "+Coin" };
+            gs.notifications.push({ text: names[item.type] || "Item!", timer: 120 });
+          }
+        });
+
+        // ── Notifications ──
+        gs.notifications = gs.notifications.filter(n => { n.timer--; return n.timer > 0; });
+
+        // ── Camera ──
+        gs.camera.x = Math.max(0, Math.min(p.x - CANVAS_W / 2 + PLAYER_W / 2, level.width - CANVAS_W));
+
+        // ── Victory check ──
+        const allEnemiesDead = gs.enemies.every(e => e.dead);
+        const bossDefeated = !gs.boss || gs.boss.dead;
+        if (allEnemiesDead && bossDefeated && p.x > level.width - 100) {
+          if (gs.victoryTimer > 0) {
+            gs.victoryTimer--;
           } else {
-            p.hp -= 10;
-          }
-          p.invincible = INVINCIBLE_FRAMES;
-          proj.active = false;
-        }
-      });
-      b.projectiles = b.projectiles.filter(proj => proj.active);
-
-      // Boss hits player (contact)
-      if (p.invincible <= 0 && checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, b.x, b.y, b.width, b.height)) {
-        if (p.shieldActive) {
-          p.shieldActive = false;
-        } else {
-          p.hp -= 20;
-        }
-        p.invincible = INVINCIBLE_FRAMES;
-      }
-
-      // Player attack hits boss
-      if (p.attacking && p.attackTimer === ATTACK_DURATION - 1) {
-        const atkX = p.facing === "right" ? p.x + PLAYER_W : p.x - ATTACK_RANGE;
-        if (checkRectCollision(atkX, p.y + 4, ATTACK_RANGE, 20, b.x, b.y, b.width, b.height)) {
-          const dmg = p.atkBoostTimer > 0 ? p.atk * 2 : p.atk;
-          b.hp -= dmg;
-          if (b.hp <= 0) {
-            b.dead = true;
-            b.deathTimer = 60;
-            p.score += 1000;
-            gs.victoryTimer = 120;
-            gs.notifications.push({ text: `${b.name} defeated!`, timer: 180 });
+            const hpPct = (p.hp / p.maxHp) * 100;
+            const stars = calculateStars(hpPct, gs.time, level.parTime);
+            const result: LevelResult = { stars, time: gs.time, remainingHp: p.hp, score: p.score };
+            gs.levelResults[gs.level] = result;
+            if (gs.level + 1 < LEVELS.length && gs.unlockedLevels <= gs.level + 1) {
+              gs.unlockedLevels = gs.level + 2;
+            }
+            gs.phase = "victory";
+            setUiPhase("victory");
+            setUiResults([...gs.levelResults]);
+            setUiUnlocked(gs.unlockedLevels);
+            setUiScore(p.score);
           }
         }
-      }
-    }
 
-    // ── Items ──
-    gs.items.forEach(item => {
-      if (item.collected) return;
-      if (checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, item.x, item.y, 16, 16)) {
-        item.collected = true;
-        const effect = applyItemEffect(p, item.type);
-        p.hp = effect.hp;
-        p.atkBoostTimer = effect.atkBoostTimer;
-        p.shieldActive = effect.shieldActive;
-        p.coins = effect.coins;
-        p.score = effect.score;
-        const names: Record<string, string> = { heal: "+HP", atkBoost: "ATK UP!", shield: "Shield!", coin: "+Coin" };
-        gs.notifications.push({ text: names[item.type] || "Item!", timer: 120 });
-      }
-    });
-
-    // ── Notifications ──
-    gs.notifications = gs.notifications.filter(n => { n.timer--; return n.timer > 0; });
-
-    // ── Camera ──
-    gs.camera.x = Math.max(0, Math.min(p.x - CANVAS_W / 2 + PLAYER_W / 2, level.width - CANVAS_W));
-
-    // ── Victory check ──
-    const allEnemiesDead = gs.enemies.every(e => e.dead);
-    const bossDefeated = !gs.boss || gs.boss.dead;
-    if (allEnemiesDead && bossDefeated && p.x > level.width - 100) {
-      if (gs.victoryTimer > 0) {
-        gs.victoryTimer--;
-      } else {
-        const hpPct = (p.hp / p.maxHp) * 100;
-        const stars = calculateStars(hpPct, gs.time, level.parTime);
-        const result: LevelResult = { stars, time: gs.time, remainingHp: p.hp, score: p.score };
-        gs.levelResults[gs.level] = result;
-        if (gs.level + 1 < LEVELS.length && gs.unlockedLevels <= gs.level + 1) {
-          gs.unlockedLevels = gs.level + 2;
+        // ── Game Over ──
+        if (p.hp <= 0) {
+          gs.phase = "gameOver";
+          setUiPhase("gameOver");
         }
-        gs.phase = "victory";
-        setUiPhase("victory");
-        setUiResults([...gs.levelResults]);
-        setUiUnlocked(gs.unlockedLevels);
-        setUiScore(p.score);
+
+        // ── Update UI state ──
+        if (gs.frameCount % 10 === 0) {
+          setUiHp(p.hp);
+          setUiMaxHp(p.maxHp);
+          setUiCoins(p.coins);
+          setUiScore(p.score);
+          setUiTime(gs.time);
+        }
+
+        // ── Render (PixiJS) ──
+        const camX = gs.camera.x;
+
+        // ── Parallax Background ──
+        // Dark sky gradient (approximated with layered rects)
+        g.rect(0, 0, CANVAS_W, CANVAS_H * 0.4).fill({ color: 0x0d0618 });
+        g.rect(0, CANVAS_H * 0.4, CANVAS_W, CANVAS_H * 0.4).fill({ color: 0x1a0a2e });
+        g.rect(0, CANVAS_H * 0.8, CANVAS_W, CANVAS_H * 0.2).fill({ color: 0x2a1a3e });
+
+        level.bgLayers.forEach(layer => {
+          const offset = camX * layer.speed;
+          layer.elements.forEach(el => {
+            const ex = ((el.x - offset) % (CANVAS_W + 200)) - 100;
+            const ey = el.y;
+            if (el.type === "mist") {
+              g.circle(ex, ey, 50 * el.scale).fill({ color: cn("#6b3fa0"), alpha: 0.3 });
+              g.circle(ex + 30, ey + 5, 35 * el.scale).fill({ color: cn("#6b3fa0"), alpha: 0.3 });
+            } else if (el.type === "pillar") {
+              g.rect(ex - 15 * el.scale, ey, 30 * el.scale, CANVAS_H - ey).fill({ color: cn("#3a2a4e") });
+              g.rect(ex - 5, ey + 20, 3, 30).fill({ color: cn("#2a1a3e") });
+              g.rect(ex + 5, ey + 50, 2, 20).fill({ color: cn("#2a1a3e") });
+              // Broken top triangle
+              g.poly([
+                ex - 18 * el.scale, ey,
+                ex - 5, ey - 10 * el.scale,
+                ex + 8, ey - 5 * el.scale,
+                ex + 18 * el.scale, ey,
+              ]).fill({ color: cn("#4a3a5e") });
+            } else if (el.type === "wisp") {
+              g.circle(ex + 8, ey, 5 * el.scale).fill({ color: cn("#a855f7"), alpha: 0.5 });
+              g.circle(ex + 2, ey + 3, 3 * el.scale).fill({ color: cn("#7c3aed"), alpha: 0.3 });
+            } else if (el.type === "tombstone") {
+              g.rect(ex, ey, 16 * el.scale, 24 * el.scale).fill({ color: cn("#4a3a5e") });
+              g.circle(ex + 8 * el.scale, ey, 8 * el.scale).fill({ color: cn("#4a3a5e") });
+              g.rect(ex + 6 * el.scale, ey + 4, 4, 12).fill({ color: cn("#6b5a7e") });
+              g.rect(ex + 3 * el.scale, ey + 8, 10, 3).fill({ color: cn("#6b5a7e") });
+            }
+          });
+        });
+
+        // ── Platforms ──
+        level.platforms.forEach(pl => {
+          const sx = pl.x - camX;
+          if (sx > CANVAS_W + 50 || sx + pl.width < -50) return;
+          if (pl.type === "solid") {
+            g.rect(sx, pl.y, pl.width, pl.height).fill({ color: cn("#2a1a3e") });
+            g.rect(sx, pl.y, pl.width, 6).fill({ color: cn("#4a2a6e") });
+            for (let i = 0; i < pl.width; i += 30) {
+              g.rect(sx + i + 5, pl.y - 2, 4, 4).fill({ color: cn("#5a3a7e") });
+              g.rect(sx + i + 15, pl.y - 1, 3, 3).fill({ color: cn("#5a3a7e") });
+            }
+          } else {
+            g.rect(sx, pl.y, pl.width, pl.height).fill({ color: cn("#3a2a4e") });
+            g.rect(sx, pl.y, pl.width, 4).fill({ color: cn("#6b3fa0") });
+            for (let i = 10; i < pl.width; i += 25) {
+              g.moveTo(sx + i, pl.y + pl.height).lineTo(sx + i + 3, pl.y + pl.height + 8).stroke({ color: cn("#4a2a6e"), width: 1 });
+            }
+          }
+        });
+
+        // ── Items ──
+        gs.items.forEach(item => {
+          if (item.collected) return;
+          const sx = item.x - camX;
+          const bob = Math.sin(gs.frameCount * 0.05) * 3;
+          switch (item.type) {
+            case "heal":
+              g.rect(sx + 2, item.y + bob, 12, 4).fill({ color: cn("#ff4444") });
+              g.rect(sx + 6, item.y + bob - 4, 4, 12).fill({ color: cn("#ff4444") });
+              break;
+            case "atkBoost":
+              g.poly([sx + 8, item.y + bob - 4, sx + 14, item.y + bob + 6, sx + 2, item.y + bob + 6]).fill({ color: cn("#c44dff") });
+              break;
+            case "shield":
+              g.poly([sx + 8, item.y + bob - 4, sx + 16, item.y + bob + 2, sx + 8, item.y + bob + 12, sx, item.y + bob + 2]).fill({ color: cn("#a855f7") });
+              break;
+            case "coin":
+              g.circle(sx + 8, item.y + bob + 4, 6).fill({ color: cn("#d8b4fe") });
+              showText("$", sx + 5, item.y + bob, { fill: "#7c3aed", fontSize: 8 });
+              break;
+          }
+        });
+
+        // ── Enemies ──
+        gs.enemies.forEach(e => {
+          const sx = e.x - camX;
+          const alpha = e.dead ? Math.max(0, e.deathTimer / 30) : 1;
+          const info = ENEMY_TYPES[e.type as keyof typeof ENEMY_TYPES] || ENEMY_TYPES.specter;
+
+          if (e.type === "specter") {
+            g.circle(sx + e.width / 2, e.y + e.height / 2, e.width / 2).fill({ color: cn(info.color), alpha });
+            g.rect(sx + 2, e.y + e.height / 2, e.width - 4, e.height / 2).fill({ color: cn(info.color), alpha });
+            g.rect(sx + 5, e.y + 5, 5, 5).fill({ color: cn("#1a0a2e"), alpha });
+            g.rect(sx + 14, e.y + 5, 5, 5).fill({ color: cn("#1a0a2e"), alpha });
+            g.rect(sx + 6, e.y + 6, 3, 3).fill({ color: cn("#ff44ff"), alpha });
+            g.rect(sx + 15, e.y + 6, 3, 3).fill({ color: cn("#ff44ff"), alpha });
+          } else if (e.type === "wraith") {
+            g.rect(sx, e.y, e.width, e.height).fill({ color: cn(info.color), alpha });
+            g.poly([sx, e.y + 10, sx + e.width / 2, e.y - 4, sx + e.width, e.y + 10]).fill({ color: cn("#2a0a4e"), alpha });
+            g.rect(sx + 8, e.y + 10, 4, 4).fill({ color: cn("#ff2222"), alpha });
+            g.rect(sx + e.width - 12, e.y + 10, 4, 4).fill({ color: cn("#ff2222"), alpha });
+          } else if (e.type === "phantom") {
+            const pAlpha = Math.max(alpha * 0.8, 0.3);
+            g.rect(sx + 6, e.y + 2, 16, 14).fill({ color: cn(info.color), alpha: pAlpha });
+            const wingOff = Math.sin(e.flyAngle * 3) * 5;
+            g.rect(sx, e.y + 4 + wingOff, 10, 8).fill({ color: cn(info.color), alpha: pAlpha });
+            g.rect(sx + 18, e.y + 4 - wingOff, 10, 8).fill({ color: cn(info.color), alpha: pAlpha });
+            g.rect(sx + 9, e.y + 6, 3, 3).fill({ color: cn("#00ffcc"), alpha: pAlpha });
+            g.rect(sx + 16, e.y + 6, 3, 3).fill({ color: cn("#00ffcc"), alpha: pAlpha });
+          }
+
+          // HP bar
+          if (e.hp < e.maxHp && !e.dead) {
+            g.rect(sx, e.y - 8, e.width, 4).fill({ color: cn("#400040") });
+            g.rect(sx, e.y - 8, e.width * (e.hp / e.maxHp), 4).fill({ color: cn("#c44dff") });
+          }
+        });
+
+        // ── Boss ──
+        if (gs.boss && (gs.boss.deathTimer > 0 || !gs.boss.dead)) {
+          const b = gs.boss;
+          const sx = b.x - camX;
+          const bAlpha = b.dead ? Math.max(0, b.deathTimer / 60) : 1;
+          const bodyColor = b.name === "Shadow Lord" ? "#2a0a4e" : "#0d0618";
+          const crownColor = b.name === "Shadow Lord" ? "#6b3fa0" : "#3a0a6e";
+          g.rect(sx, b.y, b.width, b.height).fill({ color: cn(bodyColor), alpha: bAlpha });
+          g.poly([sx, b.y, sx + b.width / 2, b.y - 18, sx + b.width, b.y]).fill({ color: cn(crownColor), alpha: bAlpha });
+          g.rect(sx + 10, b.y + 15, 8, 8).fill({ color: cn("#ff44ff"), alpha: bAlpha });
+          g.rect(sx + b.width - 18, b.y + 15, 8, 8).fill({ color: cn("#ff44ff"), alpha: bAlpha });
+          g.rect(sx + 12, b.y + 17, 4, 4).fill({ color: cn("#ff0066"), alpha: bAlpha });
+          g.rect(sx + b.width - 16, b.y + 17, 4, 4).fill({ color: cn("#ff0066"), alpha: bAlpha });
+          // HP bar
+          g.rect(sx, b.y - 14, b.width, 6).fill({ color: cn("#400040") });
+          g.rect(sx, b.y - 14, b.width * (b.hp / b.maxHp), 6).fill({ color: cn("#c44dff") });
+          showText(b.name, sx, b.y - 26, { fill: "#e0c0ff", fontSize: 10 });
+          // Projectiles
+          b.projectiles.forEach(proj => {
+            if (!proj.active) return;
+            g.circle(proj.x - camX + proj.width / 2, proj.y + proj.height / 2, proj.width / 2).fill({ color: cn("#9333ea") });
+          });
+        }
+
+        // ── Player ──
+        {
+          const sx = p.x - camX;
+          const sy = p.y;
+          if (!(p.invincible > 0 && Math.floor(p.invincible / 4) % 2 === 0)) {
+            // Body - dark cloak
+            g.rect(sx + 4, sy + 8, 20, 20).fill({ color: cn("#4a2a6e") });
+            // Head
+            g.rect(sx + 6, sy, 16, 14).fill({ color: cn("#d4b8e8") });
+            // Eyes
+            const eyeX = p.facing === "right" ? sx + 16 : sx + 10;
+            g.rect(eyeX, sy + 4, 3, 3).fill({ color: cn("#c44dff") });
+            // Legs
+            const legOff = p.onGround ? Math.sin(p.animFrame * 0.3) * 3 : 0;
+            g.rect(sx + 6, sy + 28, 6, 8 + legOff).fill({ color: cn("#2a1a3e") });
+            g.rect(sx + 16, sy + 28, 6, 8 - legOff).fill({ color: cn("#2a1a3e") });
+            // Attack slash
+            if (p.attacking) {
+              const atkX = p.facing === "right" ? sx + PLAYER_W : sx - ATTACK_RANGE;
+              g.rect(atkX, sy + 4, ATTACK_RANGE, 20).fill({ color: cn("#c44dff"), alpha: 0.6 });
+            }
+            // Shield aura
+            if (p.shieldActive) {
+              g.circle(sx + PLAYER_W / 2, sy + PLAYER_H / 2, 22).stroke({ color: cn("#a855f7"), width: 2 });
+            }
+          }
+        }
+
+        // ── HUD ──
+        {
+          g.rect(10, 10, 154, 20).fill({ color: 0x000000, alpha: 0.6 });
+          g.rect(12, 12, 150, 16).fill({ color: cn("#400040") });
+          const hpPct = p.hp / p.maxHp;
+          const hpColor = hpPct > 0.5 ? "#a855f7" : hpPct > 0.25 ? "#c44dff" : "#ff0000";
+          g.rect(12, 12, 150 * hpPct, 16).fill({ color: cn(hpColor) });
+          showText(`HP: ${p.hp}/${p.maxHp}`, 16, 13, { fill: "#e0c0ff", fontSize: 11 });
+          // Coins
+          g.circle(190, 20, 8).fill({ color: cn("#d8b4fe") });
+          showText(`×${p.coins}`, 202, 16, { fill: "#e0c0ff", fontSize: 12 });
+          showText(`Level ${level.id}`, 260, 16, { fill: "#e0c0ff", fontSize: 12 });
+          showText(`Score: ${p.score}`, 340, 16, { fill: "#e0c0ff", fontSize: 12 });
+          showText(`Time: ${Math.floor(gs.time)}s`, 460, 16, { fill: "#e0c0ff", fontSize: 12 });
+          if (p.atkBoostTimer > 0) {
+            showText(`ATK UP ${Math.ceil(p.atkBoostTimer / 60)}s`, 580, 16, { fill: "#c44dff", fontSize: 12 });
+          }
+          if (p.shieldActive) {
+            showText("SHIELD", 700, 16, { fill: "#a855f7", fontSize: 12 });
+          }
+        }
+
+        // ── Notifications ──
+        gs.notifications.forEach((n, i) => {
+          showText(n.text, CANVAS_W / 2 - 40, 60 + i * 20, { fill: "#e0c0ff", fontSize: 14, alpha: Math.min(1, n.timer / 30) });
+        });
+      }); // end app.ticker.add
+    } // end initPixi
+
+    initPixi();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
       }
-    }
-
-    // ── Game Over ──
-    if (p.hp <= 0) {
-      gs.phase = "gameOver";
-      setUiPhase("gameOver");
-    }
-
-    // ── Update UI state ──
-    if (gs.frameCount % 10 === 0) {
-      setUiHp(p.hp);
-      setUiMaxHp(p.maxHp);
-      setUiCoins(p.coins);
-      setUiScore(p.score);
-      setUiTime(gs.time);
-    }
-
-    // ── Render ──
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-    drawParallaxBg(ctx, level.bgLayers, gs.camera.x);
-    drawPlatforms(ctx, level.platforms, gs.camera.x);
-    gs.items.forEach(item => drawItem(ctx, item, gs.camera.x, gs.frameCount));
-    gs.enemies.forEach(e => drawEnemySprite(ctx, e, gs.camera.x));
-    if (gs.boss && (gs.boss.deathTimer > 0 || !gs.boss.dead)) {
-      drawBossSprite(ctx, gs.boss, gs.camera.x);
-    }
-    drawPlayer(ctx, p, gs.camera.x);
-    drawHUD(ctx, p, level.id, gs.time);
-
-    // Notifications
-    gs.notifications.forEach((n, i) => {
-      ctx.fillStyle = `rgba(224,192,255,${Math.min(1, n.timer / 30)})`;
-      ctx.font = "14px monospace";
-      ctx.fillText(n.text, CANVAS_W / 2 - 40, 60 + i * 20);
-    });
-
-    rafRef.current = requestAnimationFrame(gameLoop);
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
+    };
   }, []);
 
 
@@ -1370,12 +1253,6 @@ export default function ShadowDungeonPage() {
       window.removeEventListener("keyup", onKeyUp);
     };
   }, []);
-
-  // ─── Start game loop ─────────────────────────────────
-  useEffect(() => {
-    rafRef.current = requestAnimationFrame(gameLoop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [gameLoop]);
 
   // ─── Upgrade handler ─────────────────────────────────
   const handleUpgrade = useCallback((choice: string) => {
@@ -1402,7 +1279,7 @@ export default function ShadowDungeonPage() {
 
   const renderMenu = () => (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-purple-950/90 to-gray-950/90 text-white z-10">
-      <h1 className="text-4xl font-bold mb-2 drop-shadow-lg">? Shadow Dungeon</h1>
+      <h1 className="text-4xl font-bold mb-2 drop-shadow-lg">Shadow Dungeon</h1>
       <p className="text-lg mb-8 text-purple-300">Brave the darkness within!</p>
       <button onClick={() => { setUiPhase("levelSelect"); }} className="px-8 py-3 bg-purple-700 hover:bg-purple-600 rounded-lg text-xl font-bold transition-colors mb-4">
         Enter Dungeon
@@ -1422,8 +1299,8 @@ export default function ShadowDungeonPage() {
               onClick={() => { if (!locked) initLevel(i, gsRef.current?.player.abilities); }}
               className={`w-20 h-24 rounded-lg flex flex-col items-center justify-center text-sm font-bold transition-all ${locked ? "bg-gray-800 opacity-50 cursor-not-allowed" : "bg-purple-800 hover:bg-purple-700 cursor-pointer"}`}>
               <span className="text-lg">{locked ? "" : `${lv.id}`}</span>
-              <span className="text-xs mt-1">{lv.boss ? "? Boss" : "Stage"}</span>
-              {result && <span className="text-purple-300 text-xs">{"?".repeat(result.stars)}{"?".repeat(3 - result.stars)}</span>}
+              <span className="text-xs mt-1">{lv.boss ? "Boss" : "Stage"}</span>
+              {result && <span className="text-purple-300 text-xs">{"★".repeat(result.stars)}{"☆".repeat(3 - result.stars)}</span>}
             </button>
           );
         })}
@@ -1438,10 +1315,10 @@ export default function ShadowDungeonPage() {
     const result = uiResults[gsRef.current?.level ?? 0];
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-purple-950/90 to-violet-900/90 text-white z-10">
-        <h2 className="text-3xl font-bold mb-4">? Level Complete!</h2>
+        <h2 className="text-3xl font-bold mb-4">Level Complete!</h2>
         {result && (
           <div className="text-center mb-6">
-            <p className="text-2xl text-purple-300 mb-2">{"?".repeat(result.stars)}{"?".repeat(3 - result.stars)}</p>
+            <p className="text-2xl text-purple-300 mb-2">{"★".repeat(result.stars)}{"☆".repeat(3 - result.stars)}</p>
             <p>Time: {Math.floor(result.time)}s</p>
             <p>Score: {result.score}</p>
             <p>HP: {result.remainingHp}</p>
@@ -1452,7 +1329,7 @@ export default function ShadowDungeonPage() {
             setUpgradeChoices(["hp", "atk", "jump"]);
             setUiPhase("upgrade");
           }} className="px-6 py-2 bg-purple-700 hover:bg-purple-600 rounded-lg font-bold transition-colors">
-            Continue →
+            Continue
           </button>
           <button onClick={() => setUiPhase("levelSelect")} className="px-6 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors">
             Level Select
@@ -1464,7 +1341,7 @@ export default function ShadowDungeonPage() {
 
   const renderGameOver = () => (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-red-950/90 to-gray-950/90 text-white z-10">
-      <h2 className="text-3xl font-bold mb-4">? Game Over</h2>
+      <h2 className="text-3xl font-bold mb-4">Game Over</h2>
       <p className="mb-6 text-gray-400">Score: {uiScore}</p>
       <div className="flex gap-3">
         <button onClick={() => initLevel(gsRef.current?.level ?? 0, gsRef.current?.player.abilities)} className="px-6 py-2 bg-purple-700 hover:bg-purple-600 rounded-lg font-bold transition-colors">
@@ -1479,9 +1356,9 @@ export default function ShadowDungeonPage() {
 
   const renderUpgrade = () => {
     const labels: Record<string, { icon: string; name: string; desc: string }> = {
-      hp: { icon: "?", name: "Max HP +25", desc: "Increase maximum health" },
+      hp: { icon: "HP", name: "Max HP +25", desc: "Increase maximum health" },
       atk: { icon: "ATK", name: "ATK +5", desc: "Increase attack power" },
-      jump: { icon: "?", name: "Jump +1", desc: "Jump higher" },
+      jump: { icon: "JMP", name: "Jump +1", desc: "Jump higher" },
     };
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-purple-950/90 to-indigo-950/90 text-white z-10">

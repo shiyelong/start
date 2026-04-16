@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Header from "@/components/Header";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Type Definitions ────────────────────────────────────
 
@@ -155,6 +157,12 @@ const ATTACK_DURATION = 15;
 const ATTACK_RANGE = 40;
 const PLAYER_W = 28;
 const PLAYER_H = 36;
+
+// ─── Helper: hex color to number ─────────────────────────
+
+function hexToNum(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
+}
 
 // ─── Pure Functions (exported for testing) ───────────────
 
@@ -635,391 +643,280 @@ function spawnItems(spawns: ItemSpawn[], hidden?: HiddenArea[]): ActiveItem[] {
   return items;
 }
 
-// ─── Drawing Helpers (Sci-Fi / Metal Theme) ──────────────
 
-function drawPlayer(ctx: CanvasRenderingContext2D, p: Player, camX: number) {
-  const sx = p.x - camX;
-  const sy = p.y;
-  if (p.invincible > 0 && Math.floor(p.invincible / 4) % 2 === 0) return;
+// ─── PixiJS Drawing (replaces Canvas 2D draw functions) ──
 
-  ctx.save();
-  // Mech suit body
-  ctx.fillStyle = "#4a6a8a";
-  ctx.fillRect(sx + 4, sy + 8, 20, 20);
-  // Visor/helmet
-  ctx.fillStyle = "#2a3a5a";
-  ctx.fillRect(sx + 4, sy, 20, 14);
-  ctx.fillStyle = "#0ff";
-  const eyeX = p.facing === "right" ? sx + 14 : sx + 8;
-  ctx.fillRect(eyeX, sy + 4, 6, 3);
-  // Legs (metallic)
-  ctx.fillStyle = "#5a6a7a";
-  const legOff = p.onGround ? Math.sin(p.animFrame * 0.3) * 3 : 0;
-  ctx.fillRect(sx + 6, sy + 28, 6, 8 + legOff);
-  ctx.fillRect(sx + 16, sy + 28, 6, 8 - legOff);
-  // Attack (energy blade)
-  if (p.attacking) {
-    ctx.fillStyle = "#0ff";
-    const atkX = p.facing === "right" ? sx + PLAYER_W : sx - ATTACK_RANGE;
-    ctx.globalAlpha = 0.7;
-    ctx.fillRect(atkX, sy + 4, ATTACK_RANGE, 20);
-    ctx.globalAlpha = 1;
-  }
-  // Shield (energy field)
-  if (p.shieldActive) {
-    ctx.strokeStyle = "#0ff";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(sx + PLAYER_W / 2, sy + PLAYER_H / 2, 22, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
+function drawGamePixi(g: PixiGraphics, texts: Map<string, PixiText>, gs: GameStateRef) {
+  g.clear();
+  texts.forEach(t => { t.visible = false; });
 
-function drawEnemySprite(ctx: CanvasRenderingContext2D, e: Enemy, camX: number) {
-  const sx = e.x - camX;
-  if (e.dead) {
-    ctx.globalAlpha = Math.max(0, e.deathTimer / 30);
-  }
-  const info = ENEMY_TYPES[e.type as keyof typeof ENEMY_TYPES] || ENEMY_TYPES.drone;
-  ctx.fillStyle = info.color;
+  const showText = (key: string, str: string, x: number, y: number, anchorX = 0, anchorY = 0) => {
+    const t = texts.get(key);
+    if (t) {
+      t.text = str;
+      t.x = x; t.y = y;
+      t.anchor.set(anchorX, anchorY);
+      t.visible = true;
+    }
+  };
 
-  if (e.type === "drone") {
-    // Hovering drone with propellers
-    ctx.fillStyle = "#4af";
-    ctx.fillRect(sx + 4, e.y + 6, 18, 10);
-    // Propeller arms
-    ctx.fillStyle = "#6cf";
-    const propOff = Math.sin(e.flyAngle * 5 + Date.now() * 0.02) * 2;
-    ctx.fillRect(sx, e.y + 2 + propOff, 8, 4);
-    ctx.fillRect(sx + 18, e.y + 2 - propOff, 8, 4);
-    // Eye sensor
-    ctx.fillStyle = "#f00";
-    ctx.fillRect(sx + 10, e.y + 9, 4, 3);
-  } else if (e.type === "mech-walker") {
-    // Bipedal mech
-    ctx.fillStyle = "#8a8a9a";
-    ctx.fillRect(sx + 4, e.y, 24, 18);
-    // Legs
-    ctx.fillStyle = "#6a6a7a";
-    ctx.fillRect(sx + 6, e.y + 18, 6, 10);
-    ctx.fillRect(sx + 20, e.y + 18, 6, 10);
-    // Cockpit visor
-    ctx.fillStyle = "#f80";
-    ctx.fillRect(sx + 10, e.y + 4, 12, 6);
-    // Shoulder cannons
-    ctx.fillStyle = "#5a5a6a";
-    ctx.fillRect(sx, e.y - 2, 6, 6);
-    ctx.fillRect(sx + 26, e.y - 2, 6, 6);
-  } else if (e.type === "hover-bot") {
-    // Floating orb bot
-    ctx.fillStyle = "#a4f";
-    ctx.beginPath();
-    ctx.arc(sx + e.width / 2, e.y + e.height / 2, e.width / 2, 0, Math.PI * 2);
-    ctx.fill();
-    // Inner glow ring
-    ctx.strokeStyle = "#c6f";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(sx + e.width / 2, e.y + e.height / 2, e.width / 3, 0, Math.PI * 2);
-    ctx.stroke();
-    // Eye
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(sx + 9, e.y + 8, 6, 4);
-  }
+  const level = LEVELS[gs.level];
+  const camX = gs.camera.x;
+  const p = gs.player;
+  const frame = gs.frameCount;
 
-  // HP bar
-  if (e.hp < e.maxHp && !e.dead) {
-    ctx.fillStyle = "#600";
-    ctx.fillRect(sx, e.y - 8, e.width, 4);
-    ctx.fillStyle = "#0ff";
-    ctx.fillRect(sx, e.y - 8, e.width * (e.hp / e.maxHp), 4);
-  }
-  ctx.globalAlpha = 1;
-}
-
-function drawBossSprite(ctx: CanvasRenderingContext2D, b: Boss, camX: number) {
-  const sx = b.x - camX;
-  if (b.dead) {
-    ctx.globalAlpha = Math.max(0, b.deathTimer / 60);
-  }
-
-  if (b.name === "Steel Guardian") {
-    // Armored mech body
-    ctx.fillStyle = "#5a6a7a";
-    ctx.fillRect(sx, b.y, b.width, b.height);
-    // Shoulder plates
-    ctx.fillStyle = "#4a5a6a";
-    ctx.fillRect(sx - 6, b.y + 5, 12, 20);
-    ctx.fillRect(sx + b.width - 6, b.y + 5, 12, 20);
-    // Visor
-    ctx.fillStyle = "#f44";
-    ctx.fillRect(sx + 8, b.y + 12, b.width - 16, 10);
-    // Core glow
-    ctx.fillStyle = "#0af";
-    ctx.beginPath();
-    ctx.arc(sx + b.width / 2, b.y + 40, 8, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    // Core Reactor - floating energy core
-    ctx.fillStyle = "#2a2a4a";
-    ctx.fillRect(sx, b.y, b.width, b.height);
-    // Energy core center
-    ctx.fillStyle = "#0ff";
-    ctx.beginPath();
-    ctx.arc(sx + b.width / 2, b.y + b.height / 2, 18, 0, Math.PI * 2);
-    ctx.fill();
-    // Outer ring
-    ctx.strokeStyle = "#4af";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(sx + b.width / 2, b.y + b.height / 2, 25, 0, Math.PI * 2);
-    ctx.stroke();
-    // Pulsing glow
-    ctx.fillStyle = `rgba(0,255,255,${0.3 + Math.sin(Date.now() * 0.005) * 0.2})`;
-    ctx.beginPath();
-    ctx.arc(sx + b.width / 2, b.y + b.height / 2, 30, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Eyes
-  ctx.fillStyle = "#0ff";
-  ctx.fillRect(sx + 10, b.y + 15, 8, 8);
-  ctx.fillRect(sx + b.width - 18, b.y + 15, 8, 8);
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(sx + 12, b.y + 17, 4, 4);
-  ctx.fillRect(sx + b.width - 16, b.y + 17, 4, 4);
-
-  // HP bar
-  ctx.fillStyle = "#333";
-  ctx.fillRect(sx, b.y - 14, b.width, 6);
-  ctx.fillStyle = "#0ff";
-  ctx.fillRect(sx, b.y - 14, b.width * (b.hp / b.maxHp), 6);
-  ctx.fillStyle = "#fff";
-  ctx.font = "10px monospace";
-  ctx.fillText(b.name, sx, b.y - 18);
-
-  // Projectiles (energy bolts)
-  b.projectiles.forEach(p => {
-    if (!p.active) return;
-    ctx.fillStyle = "#0ff";
-    ctx.fillRect(p.x - camX, p.y, p.width, p.height);
-  });
-  ctx.globalAlpha = 1;
-}
-
-function drawItem(ctx: CanvasRenderingContext2D, item: ActiveItem, camX: number, frame: number) {
-  if (item.collected) return;
-  const sx = item.x - camX;
-  const bob = Math.sin(frame * 0.05) * 3;
-  switch (item.type) {
-    case "heal":
-      ctx.fillStyle = "#f44";
-      ctx.fillRect(sx + 2, item.y + bob, 12, 4);
-      ctx.fillRect(sx + 6, item.y + bob - 4, 4, 12);
-      break;
-    case "atkBoost":
-      ctx.fillStyle = "#fa0";
-      ctx.beginPath();
-      ctx.moveTo(sx + 8, item.y + bob - 4);
-      ctx.lineTo(sx + 14, item.y + bob + 6);
-      ctx.lineTo(sx + 2, item.y + bob + 6);
-      ctx.closePath();
-      ctx.fill();
-      break;
-    case "shield":
-      ctx.fillStyle = "#0af";
-      ctx.beginPath();
-      ctx.moveTo(sx + 8, item.y + bob - 4);
-      ctx.lineTo(sx + 16, item.y + bob + 2);
-      ctx.lineTo(sx + 8, item.y + bob + 12);
-      ctx.lineTo(sx, item.y + bob + 2);
-      ctx.closePath();
-      ctx.fill();
-      break;
-    case "coin":
-      ctx.fillStyle = "#0ff";
-      ctx.beginPath();
-      ctx.arc(sx + 8, item.y + bob + 4, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#088";
-      ctx.font = "8px monospace";
-      ctx.fillText("¤", sx + 5, item.y + bob + 7);
-      break;
-  }
-}
-
-function drawParallaxBg(ctx: CanvasRenderingContext2D, layers: BgLayer[], camX: number) {
-  // Dark sci-fi sky gradient
-  const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
-  grad.addColorStop(0, "#050a18");
-  grad.addColorStop(0.4, "#0a1628");
-  grad.addColorStop(1, "#1a2a4a");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  // ── Background gradient (dark sci-fi sky) ──
+  g.rect(0, 0, CANVAS_W, CANVAS_H * 0.4).fill({ color: 0x050a18 });
+  g.rect(0, CANVAS_H * 0.4, CANVAS_W, CANVAS_H * 0.6).fill({ color: 0x0a1628 });
 
   // Distant stars
-  ctx.fillStyle = "#fff";
   for (let i = 0; i < 30; i++) {
     const starX = ((i * 97 + 13) % CANVAS_W);
     const starY = ((i * 53 + 7) % (CANVAS_H * 0.4));
-    ctx.globalAlpha = 0.3 + (i % 3) * 0.2;
-    ctx.fillRect(starX, starY, 1, 1);
+    g.rect(starX, starY, 1, 1).fill({ color: 0xffffff, alpha: 0.3 + (i % 3) * 0.2 });
   }
-  ctx.globalAlpha = 1;
 
-  layers.forEach(layer => {
+  // ── Parallax background layers ──
+  level.bgLayers.forEach(layer => {
     const offset = camX * layer.speed;
+    const layerColor = hexToNum(layer.color);
     layer.elements.forEach(el => {
       const ex = ((el.x - offset) % (CANVAS_W + 200)) - 100;
       const ey = el.y;
-      ctx.fillStyle = layer.color;
 
       if (el.type === "circuit") {
-        // Circuit board pattern
-        ctx.globalAlpha = 0.3;
-        ctx.strokeStyle = "#0af";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(ex, ey);
-        ctx.lineTo(ex + 40 * el.scale, ey);
-        ctx.lineTo(ex + 40 * el.scale, ey + 20 * el.scale);
-        ctx.lineTo(ex + 60 * el.scale, ey + 20 * el.scale);
-        ctx.stroke();
-        // Node dots
-        ctx.fillStyle = "#0ff";
-        ctx.fillRect(ex - 2, ey - 2, 4, 4);
-        ctx.fillRect(ex + 60 * el.scale - 2, ey + 20 * el.scale - 2, 4, 4);
-        ctx.globalAlpha = 1;
+        // Circuit board pattern - simplified as lines + dots
+        g.rect(ex - 2, ey - 2, 4, 4).fill({ color: 0x00ffff, alpha: 0.3 });
+        g.rect(ex, ey, 40 * el.scale, 2).fill({ color: 0x00aaff, alpha: 0.3 });
+        g.rect(ex + 40 * el.scale, ey, 2, 20 * el.scale).fill({ color: 0x00aaff, alpha: 0.3 });
+        g.rect(ex + 40 * el.scale, ey + 20 * el.scale, 20 * el.scale, 2).fill({ color: 0x00aaff, alpha: 0.3 });
+        g.rect(ex + 60 * el.scale - 2, ey + 20 * el.scale - 2, 4, 4).fill({ color: 0x00ffff, alpha: 0.3 });
       } else if (el.type === "tower") {
-        // Metal tower/building silhouette
-        ctx.fillStyle = layer.color;
-        ctx.fillRect(ex - 20 * el.scale, ey, 40 * el.scale, CANVAS_H - ey);
+        // Metal tower silhouette
+        g.rect(ex - 20 * el.scale, ey, 40 * el.scale, CANVAS_H - ey).fill({ color: layerColor });
         // Windows
-        ctx.fillStyle = "#0af";
-        ctx.globalAlpha = 0.4;
         for (let wy = ey + 10; wy < CANVAS_H - 20; wy += 25) {
-          ctx.fillRect(ex - 12 * el.scale, wy, 8 * el.scale, 5);
-          ctx.fillRect(ex + 4 * el.scale, wy, 8 * el.scale, 5);
+          g.rect(ex - 12 * el.scale, wy, 8 * el.scale, 5).fill({ color: 0x00aaff, alpha: 0.4 });
+          g.rect(ex + 4 * el.scale, wy, 8 * el.scale, 5).fill({ color: 0x00aaff, alpha: 0.4 });
         }
-        ctx.globalAlpha = 1;
         // Antenna
-        ctx.fillStyle = "#3a4a6a";
-        ctx.fillRect(ex - 2, ey - 20 * el.scale, 4, 20 * el.scale);
+        g.rect(ex - 2, ey - 20 * el.scale, 4, 20 * el.scale).fill({ color: 0x3a4a6a });
         // Blinking light
-        ctx.fillStyle = Math.sin(Date.now() * 0.003) > 0 ? "#f00" : "#600";
-        ctx.fillRect(ex - 2, ey - 22 * el.scale, 4, 4);
+        const blinkOn = Math.sin(Date.now() * 0.003) > 0;
+        g.rect(ex - 2, ey - 22 * el.scale, 4, 4).fill({ color: blinkOn ? 0xff0000 : 0x660000 });
       } else if (el.type === "gear") {
         // Rotating gear decoration
-        ctx.fillStyle = "#3a4a5a";
-        ctx.globalAlpha = 0.5;
-        ctx.beginPath();
-        ctx.arc(ex + 15, ey + 15, 15 * el.scale, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "#1a2a3a";
-        ctx.beginPath();
-        ctx.arc(ex + 15, ey + 15, 6 * el.scale, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
+        g.circle(ex + 15, ey + 15, 15 * el.scale).fill({ color: 0x3a4a5a, alpha: 0.5 });
+        g.circle(ex + 15, ey + 15, 6 * el.scale).fill({ color: 0x1a2a3a, alpha: 0.5 });
       } else if (el.type === "pipe") {
         // Industrial pipe
-        ctx.fillStyle = "#4a5a6a";
-        ctx.globalAlpha = 0.6;
-        ctx.fillRect(ex, ey, 60 * el.scale, 8);
-        // Joints
-        ctx.fillStyle = "#6a7a8a";
-        ctx.fillRect(ex + 10, ey - 2, 6, 12);
-        ctx.fillRect(ex + 40 * el.scale, ey - 2, 6, 12);
-        ctx.globalAlpha = 1;
+        g.rect(ex, ey, 60 * el.scale, 8).fill({ color: 0x4a5a6a, alpha: 0.6 });
+        g.rect(ex + 10, ey - 2, 6, 12).fill({ color: 0x6a7a8a, alpha: 0.6 });
+        g.rect(ex + 40 * el.scale, ey - 2, 6, 12).fill({ color: 0x6a7a8a, alpha: 0.6 });
       }
     });
   });
-}
 
-function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform[], camX: number) {
-  platforms.forEach(p => {
-    const sx = p.x - camX;
-    if (sx > CANVAS_W + 50 || sx + p.width < -50) return;
-    if (p.type === "solid") {
-      // Metal platform
-      ctx.fillStyle = "#3a4a5a";
-      ctx.fillRect(sx, p.y, p.width, p.height);
-      // Top edge (neon accent)
-      ctx.fillStyle = "#0af";
-      ctx.fillRect(sx, p.y, p.width, 3);
+  // ── Platforms ──
+  level.platforms.forEach(plat => {
+    const sx = plat.x - camX;
+    if (sx > CANVAS_W + 50 || sx + plat.width < -50) return;
+    if (plat.type === "solid") {
+      g.rect(sx, plat.y, plat.width, plat.height).fill({ color: 0x3a4a5a });
+      // Top edge neon accent
+      g.rect(sx, plat.y, plat.width, 3).fill({ color: 0x00aaff });
       // Rivet details
-      for (let i = 0; i < p.width; i += 24) {
-        ctx.fillStyle = "#5a6a7a";
-        ctx.fillRect(sx + i + 4, p.y + 6, 4, 4);
-        ctx.fillRect(sx + i + 14, p.y + 6, 4, 4);
+      for (let i = 0; i < plat.width; i += 24) {
+        g.rect(sx + i + 4, plat.y + 6, 4, 4).fill({ color: 0x5a6a7a });
+        g.rect(sx + i + 14, plat.y + 6, 4, 4).fill({ color: 0x5a6a7a });
       }
     } else {
-      // Floating metal grate
-      ctx.fillStyle = "#4a5a6a";
-      ctx.fillRect(sx, p.y, p.width, p.height);
-      ctx.fillStyle = "#0af";
-      ctx.fillRect(sx, p.y, p.width, 2);
+      g.rect(sx, plat.y, plat.width, plat.height).fill({ color: 0x4a5a6a });
+      g.rect(sx, plat.y, plat.width, 2).fill({ color: 0x00aaff });
       // Grate lines
-      ctx.strokeStyle = "#3a4a5a";
-      ctx.lineWidth = 1;
-      for (let i = 8; i < p.width; i += 12) {
-        ctx.beginPath();
-        ctx.moveTo(sx + i, p.y + 4);
-        ctx.lineTo(sx + i, p.y + p.height);
-        ctx.stroke();
+      for (let i = 8; i < plat.width; i += 12) {
+        g.rect(sx + i, plat.y + 4, 1, plat.height - 4).fill({ color: 0x3a4a5a });
       }
     }
   });
-}
 
-function drawHUD(ctx: CanvasRenderingContext2D, p: Player, levelId: number, time: number) {
-  // HP bar
-  ctx.fillStyle = "rgba(0,0,0,0.6)";
-  ctx.fillRect(10, 10, 154, 20);
-  ctx.fillStyle = "#333";
-  ctx.fillRect(12, 12, 150, 16);
+  // ── Items ──
+  gs.items.forEach(item => {
+    if (item.collected) return;
+    const sx = item.x - camX;
+    const bob = Math.sin(frame * 0.05) * 3;
+    switch (item.type) {
+      case "heal":
+        g.rect(sx + 2, item.y + bob, 12, 4).fill({ color: 0xff4444 });
+        g.rect(sx + 6, item.y + bob - 4, 4, 12).fill({ color: 0xff4444 });
+        break;
+      case "atkBoost":
+        // Triangle approximated as small rect
+        g.rect(sx + 4, item.y + bob - 2, 8, 10).fill({ color: 0xffaa00 });
+        break;
+      case "shield":
+        // Diamond approximated as small rect
+        g.rect(sx + 2, item.y + bob, 12, 10).fill({ color: 0x00aaff });
+        break;
+      case "coin":
+        g.circle(sx + 8, item.y + bob + 4, 6).fill({ color: 0x00ffff });
+        break;
+    }
+  });
+
+  // ── Enemies ──
+  gs.enemies.forEach(e => {
+    if (e.dead && e.deathTimer <= 0) return;
+    const sx = e.x - camX;
+    const alpha = e.dead ? Math.max(0, e.deathTimer / 30) : 1;
+
+    if (e.type === "drone") {
+      g.rect(sx + 4, e.y + 6, 18, 10).fill({ color: 0x44aaff, alpha });
+      const propOff = Math.sin(e.flyAngle * 5 + Date.now() * 0.02) * 2;
+      g.rect(sx, e.y + 2 + propOff, 8, 4).fill({ color: 0x66ccff, alpha });
+      g.rect(sx + 18, e.y + 2 - propOff, 8, 4).fill({ color: 0x66ccff, alpha });
+      g.rect(sx + 10, e.y + 9, 4, 3).fill({ color: 0xff0000, alpha });
+    } else if (e.type === "mech-walker") {
+      g.rect(sx + 4, e.y, 24, 18).fill({ color: 0x8a8a9a, alpha });
+      g.rect(sx + 6, e.y + 18, 6, 10).fill({ color: 0x6a6a7a, alpha });
+      g.rect(sx + 20, e.y + 18, 6, 10).fill({ color: 0x6a6a7a, alpha });
+      g.rect(sx + 10, e.y + 4, 12, 6).fill({ color: 0xff8800, alpha });
+      g.rect(sx, e.y - 2, 6, 6).fill({ color: 0x5a5a6a, alpha });
+      g.rect(sx + 26, e.y - 2, 6, 6).fill({ color: 0x5a5a6a, alpha });
+    } else if (e.type === "hover-bot") {
+      g.circle(sx + e.width / 2, e.y + e.height / 2, e.width / 2).fill({ color: 0xaa44ff, alpha });
+      g.circle(sx + e.width / 2, e.y + e.height / 2, e.width / 3).stroke({ color: 0xcc66ff, width: 2, alpha });
+      g.rect(sx + 9, e.y + 8, 6, 4).fill({ color: 0xffffff, alpha });
+    }
+
+    // HP bar
+    if (e.hp < e.maxHp && !e.dead) {
+      g.rect(sx, e.y - 8, e.width, 4).fill({ color: 0x660000 });
+      g.rect(sx, e.y - 8, e.width * (e.hp / e.maxHp), 4).fill({ color: 0x00ffff });
+    }
+  });
+
+  // ── Boss ──
+  if (gs.boss && (gs.boss.deathTimer > 0 || !gs.boss.dead)) {
+    const b = gs.boss;
+    const sx = b.x - camX;
+    const alpha = b.dead ? Math.max(0, b.deathTimer / 60) : 1;
+
+    if (b.name === "Steel Guardian") {
+      g.rect(sx, b.y, b.width, b.height).fill({ color: 0x5a6a7a, alpha });
+      g.rect(sx - 6, b.y + 5, 12, 20).fill({ color: 0x4a5a6a, alpha });
+      g.rect(sx + b.width - 6, b.y + 5, 12, 20).fill({ color: 0x4a5a6a, alpha });
+      g.rect(sx + 8, b.y + 12, b.width - 16, 10).fill({ color: 0xff4444, alpha });
+      g.circle(sx + b.width / 2, b.y + 40, 8).fill({ color: 0x00aaff, alpha });
+    } else {
+      // Core Reactor
+      g.rect(sx, b.y, b.width, b.height).fill({ color: 0x2a2a4a, alpha });
+      g.circle(sx + b.width / 2, b.y + b.height / 2, 18).fill({ color: 0x00ffff, alpha });
+      g.circle(sx + b.width / 2, b.y + b.height / 2, 25).stroke({ color: 0x44aaff, width: 3, alpha });
+      const pulseAlpha = (0.3 + Math.sin(Date.now() * 0.005) * 0.2) * alpha;
+      g.circle(sx + b.width / 2, b.y + b.height / 2, 30).fill({ color: 0x00ffff, alpha: pulseAlpha });
+    }
+
+    // Eyes
+    g.rect(sx + 10, b.y + 15, 8, 8).fill({ color: 0x00ffff, alpha });
+    g.rect(sx + b.width - 18, b.y + 15, 8, 8).fill({ color: 0x00ffff, alpha });
+    g.rect(sx + 12, b.y + 17, 4, 4).fill({ color: 0xffffff, alpha });
+    g.rect(sx + b.width - 16, b.y + 17, 4, 4).fill({ color: 0xffffff, alpha });
+
+    // HP bar
+    g.rect(sx, b.y - 14, b.width, 6).fill({ color: 0x333333 });
+    g.rect(sx, b.y - 14, b.width * (b.hp / b.maxHp), 6).fill({ color: 0x00ffff });
+
+    // Boss name text
+    showText("boss_name", b.name, sx, b.y - 20);
+
+    // Projectiles
+    b.projectiles.forEach(proj => {
+      if (!proj.active) return;
+      g.rect(proj.x - camX, proj.y, proj.width, proj.height).fill({ color: 0x00ffff });
+    });
+  }
+
+  // ── Player ──
+  if (!(p.invincible > 0 && Math.floor(p.invincible / 4) % 2 === 0)) {
+    const sx = p.x - camX;
+    const sy = p.y;
+    // Mech suit body
+    g.rect(sx + 4, sy + 8, 20, 20).fill({ color: 0x4a6a8a });
+    // Visor/helmet
+    g.rect(sx + 4, sy, 20, 14).fill({ color: 0x2a3a5a });
+    const eyeX = p.facing === "right" ? sx + 14 : sx + 8;
+    g.rect(eyeX, sy + 4, 6, 3).fill({ color: 0x00ffff });
+    // Legs
+    const legOff = p.onGround ? Math.sin(p.animFrame * 0.3) * 3 : 0;
+    g.rect(sx + 6, sy + 28, 6, 8 + legOff).fill({ color: 0x5a6a7a });
+    g.rect(sx + 16, sy + 28, 6, 8 - legOff).fill({ color: 0x5a6a7a });
+    // Attack (energy blade)
+    if (p.attacking) {
+      const atkX = p.facing === "right" ? sx + PLAYER_W : sx - ATTACK_RANGE;
+      g.rect(atkX, sy + 4, ATTACK_RANGE, 20).fill({ color: 0x00ffff, alpha: 0.7 });
+    }
+    // Shield (energy field)
+    if (p.shieldActive) {
+      g.circle(sx + PLAYER_W / 2, sy + PLAYER_H / 2, 22).stroke({ color: 0x00ffff, width: 2 });
+    }
+  }
+
+  // ── HUD ──
+  // HP bar background
+  g.rect(10, 10, 154, 20).fill({ color: 0x000000, alpha: 0.6 });
+  g.rect(12, 12, 150, 16).fill({ color: 0x333333 });
   const hpPct = p.hp / p.maxHp;
-  ctx.fillStyle = hpPct > 0.5 ? "#0cf" : hpPct > 0.25 ? "#fa0" : "#f00";
-  ctx.fillRect(12, 12, 150 * hpPct, 16);
-  ctx.fillStyle = "#fff";
-  ctx.font = "11px monospace";
-  ctx.fillText(`HP: ${p.hp}/${p.maxHp}`, 16, 25);
+  const hpColor = hpPct > 0.5 ? 0x00ccff : hpPct > 0.25 ? 0xffaa00 : 0xff0000;
+  g.rect(12, 12, 150 * hpPct, 16).fill({ color: hpColor });
+  showText("hud_hp", `HP: ${p.hp}/${p.maxHp}`, 16, 25, 0, 0.5);
 
-  // Coins (energy credits)
-  ctx.fillStyle = "#0ff";
-  ctx.beginPath();
-  ctx.arc(190, 20, 8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#fff";
-  ctx.font = "12px monospace";
-  ctx.fillText(`×${p.coins}`, 202, 24);
+  // Coins
+  g.circle(190, 20, 8).fill({ color: 0x00ffff });
+  showText("hud_coins", `×${p.coins}`, 202, 24, 0, 0.5);
 
   // Level
-  ctx.fillText(`Sector ${levelId}`, 260, 24);
+  showText("hud_level", `Sector ${level.id}`, 260, 24, 0, 0.5);
 
   // Score
-  ctx.fillText(`Score: ${p.score}`, 340, 24);
+  showText("hud_score", `Score: ${p.score}`, 340, 24, 0, 0.5);
 
   // Time
-  ctx.fillText(`Time: ${Math.floor(time)}s`, 460, 24);
+  showText("hud_time", `Time: ${Math.floor(gs.time)}s`, 460, 24, 0, 0.5);
 
   // Atk boost indicator
   if (p.atkBoostTimer > 0) {
-    ctx.fillStyle = "#fa0";
-    ctx.fillText(`? POWER UP ${Math.ceil(p.atkBoostTimer / 60)}s`, 580, 24);
+    showText("hud_power", `POWER UP ${Math.ceil(p.atkBoostTimer / 60)}s`, 580, 24, 0, 0.5);
   }
   if (p.shieldActive) {
-    ctx.fillStyle = "#0af";
-    ctx.fillText("? SHIELD", 700, 24);
+    showText("hud_shield", "SHIELD", 700, 24, 0, 0.5);
   }
+
+  // ── Notifications ──
+  gs.notifications.forEach((n, i) => {
+    const key = `notif_${i}`;
+    const t = texts.get(key);
+    if (t) {
+      t.text = n.text;
+      t.x = CANVAS_W / 2 - 40;
+      t.y = 60 + i * 20;
+      t.alpha = Math.min(1, n.timer / 30);
+      t.visible = true;
+    }
+  });
+
+  });
 }
+
 
 // ─── Main Component ──────────────────────────────────────
 
 export default function MechaCastlePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
   const gsRef = useRef<GameStateRef | null>(null);
-  const rafRef = useRef<number>(0);
   const [uiPhase, setUiPhase] = useState<GamePhase>("menu");
   const [, setUiLevel] = useState(1);
   const [, setUiHp] = useState(100);
@@ -1057,330 +954,6 @@ export default function MechaCastlePage() {
     setUiLevel(level.id);
   }, []);
 
-  // ─── Game Loop ───────────────────────────────────────
-  const gameLoop = useCallback(() => {
-    const gs = gsRef.current;
-    const canvas = canvasRef.current;
-    if (!gs || !canvas || gs.phase !== "playing") {
-      rafRef.current = requestAnimationFrame(gameLoop);
-      return;
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) { rafRef.current = requestAnimationFrame(gameLoop); return; }
-
-    const level = LEVELS[gs.level];
-    gs.frameCount++;
-    gs.time += 1 / 60;
-
-    const p = gs.player;
-    const keys = gs.keys;
-    const tc = gs.touchControls;
-
-    // ── Input ──
-    const moveLeft = keys.has("ArrowLeft") || tc.left;
-    const moveRight = keys.has("ArrowRight") || tc.right;
-    const jumpPressed = keys.has("z") || keys.has("Z") || keys.has("ArrowUp") || tc.jump;
-    const attackPressed = keys.has("x") || keys.has("X") || tc.attack;
-
-    // ── Player Movement ──
-    p.vx = 0;
-    if (moveLeft) { p.vx = -(MOVE_SPEED); p.facing = "left"; }
-    if (moveRight) { p.vx = MOVE_SPEED; p.facing = "right"; }
-
-    // Jump
-    if (jumpPressed && !keys.has("_jumpHeld")) {
-      keys.add("_jumpHeld");
-      const result = applyJump(p.onGround, p.doubleJumpUsed, p.abilities.jumpBonus);
-      if (result) {
-        p.vy = result.vy;
-        p.onGround = result.onGround;
-        p.doubleJumpUsed = result.doubleJumpUsed;
-      }
-    }
-    if (!jumpPressed) keys.delete("_jumpHeld");
-
-    // Attack
-    if (attackPressed && !p.attacking) {
-      p.attacking = true;
-      p.attackTimer = ATTACK_DURATION;
-    }
-    if (p.attacking) {
-      p.attackTimer--;
-      if (p.attackTimer <= 0) p.attacking = false;
-    }
-
-    // Gravity
-    p.vy = applyGravity(p.vy);
-    p.x += p.vx;
-    p.y += p.vy;
-    p.onGround = false;
-
-    // Platform collision
-    for (const plat of level.platforms) {
-      const result = checkPlatformCollision(p.x, p.y, PLAYER_W, PLAYER_H, p.vy, plat);
-      if (result) {
-        p.y = result.y;
-        p.vy = result.vy;
-        if (result.onGround) {
-          p.onGround = true;
-          p.doubleJumpUsed = false;
-        }
-      }
-      // Horizontal collision for solid platforms
-      if (plat.type === "solid") {
-        if (p.x + PLAYER_W > plat.x && p.x < plat.x + plat.width &&
-            p.y + PLAYER_H > plat.y + 6 && p.y < plat.y + plat.height) {
-          if (p.vx > 0 && p.x + PLAYER_W - p.vx <= plat.x) {
-            p.x = plat.x - PLAYER_W;
-          } else if (p.vx < 0 && p.x - p.vx >= plat.x + plat.width) {
-            p.x = plat.x + plat.width;
-          }
-        }
-      }
-    }
-
-    // Bounds
-    if (p.x < 0) p.x = 0;
-    if (p.x > level.width - PLAYER_W) p.x = level.width - PLAYER_W;
-
-    // Fall death
-    if (p.y > CANVAS_H + 50) {
-      p.hp = 0;
-    }
-
-    // Invincibility
-    if (p.invincible > 0) p.invincible--;
-
-    // Atk boost timer
-    if (p.atkBoostTimer > 0) p.atkBoostTimer--;
-
-    // Animation
-    p.animTimer++;
-    if (p.animTimer > 8) { p.animTimer = 0; p.animFrame++; }
-
-    // ── Enemy AI ──
-    gs.enemies.forEach(e => {
-      if (e.dead) {
-        e.deathTimer--;
-        return;
-      }
-      switch (e.behavior) {
-        case "patrol":
-          e.x += e.vx;
-          if (Math.abs(e.x - e.originX) > e.patrolRange) e.vx = -e.vx;
-          break;
-        case "chase": {
-          const dx = p.x - e.x;
-          e.vx = dx > 0 ? 1.5 : -1.5;
-          if (Math.abs(dx) < 300) e.x += e.vx;
-          break;
-        }
-        case "fly":
-          e.flyAngle += 0.03;
-          e.y = e.originX + Math.sin(e.flyAngle) * 30;
-          const fdx = p.x - e.x;
-          if (Math.abs(fdx) < 350) e.x += (fdx > 0 ? 1 : -1);
-          break;
-      }
-
-      // Enemy hits player
-      if (p.invincible <= 0 && !e.dead &&
-          checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, e.x, e.y, e.width, e.height)) {
-        if (p.shieldActive) {
-          p.shieldActive = false;
-          gs.notifications.push({ text: "Shield broken!", timer: 120 });
-        } else {
-          p.hp -= 15;
-          p.score -= 50;
-        }
-        p.invincible = INVINCIBLE_FRAMES;
-      }
-
-      // Player attack hits enemy
-      if (p.attacking && p.attackTimer === ATTACK_DURATION - 1 && !e.dead) {
-        const atkX = p.facing === "right" ? p.x + PLAYER_W : p.x - ATTACK_RANGE;
-        if (checkRectCollision(atkX, p.y + 4, ATTACK_RANGE, 20, e.x, e.y, e.width, e.height)) {
-          const dmg = p.atkBoostTimer > 0 ? p.atk * 2 : p.atk;
-          e.hp -= dmg;
-          if (e.hp <= 0) {
-            e.dead = true;
-            e.deathTimer = 30;
-            p.score += 200;
-            p.coins += 1;
-          }
-        }
-      }
-    });
-    gs.enemies = gs.enemies.filter(e => !e.dead || e.deathTimer > 0);
-
-    // ── Boss AI ──
-    if (gs.boss && !gs.boss.dead) {
-      const b = gs.boss;
-      const hpPct = (b.hp / b.maxHp) * 100;
-      const phaseIdx = hpPct > 50 ? 0 : 1;
-      if (phaseIdx !== b.currentPhase) {
-        b.currentPhase = phaseIdx;
-        b.attackTimer = 30;
-        gs.notifications.push({ text: `${b.name} overloading!`, timer: 120 });
-      }
-      const phase = b.phases[b.currentPhase];
-      b.attackTimer--;
-
-      if (b.attackTimer <= 0) {
-        const attack = phase.attacks[b.currentAttack % phase.attacks.length];
-        if (attack.name.includes("charge") || attack.name.includes("slam") || attack.name.includes("strike")) {
-          b.vx = p.x > b.x ? phase.speed * 3 : -phase.speed * 3;
-        } else if (attack.name.includes("sweep") || attack.name.includes("storm") || attack.name.includes("barrage") || attack.name.includes("fury")) {
-          for (let i = 0; i < 3; i++) {
-            b.projectiles.push({
-              x: b.x + b.width / 2, y: b.y + 20,
-              vx: (p.x > b.x ? 3 : -3) + (Math.random() - 0.5) * 2,
-              vy: -2 + Math.random() * 2,
-              width: 10, height: 10, active: true,
-            });
-          }
-        } else {
-          b.vx = p.x > b.x ? phase.speed : -phase.speed;
-        }
-        b.currentAttack++;
-        b.attackTimer = attack.cooldown;
-      }
-
-      // Boss movement
-      b.x += b.vx;
-      b.vx *= 0.95;
-      const arenaStart = level.width - 1100;
-      if (b.x < arenaStart) b.x = arenaStart;
-      if (b.x > level.width - b.width - 50) b.x = level.width - b.width - 50;
-
-      // Projectiles
-      b.projectiles.forEach(proj => {
-        if (!proj.active) return;
-        proj.x += proj.vx;
-        proj.y += proj.vy;
-        proj.vy += 0.1;
-        if (proj.y > CANVAS_H || proj.x < 0 || proj.x > level.width) {
-          proj.active = false;
-        }
-        if (p.invincible <= 0 && checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, proj.x, proj.y, proj.width, proj.height)) {
-          if (p.shieldActive) {
-            p.shieldActive = false;
-          } else {
-            p.hp -= 10;
-          }
-          p.invincible = INVINCIBLE_FRAMES;
-          proj.active = false;
-        }
-      });
-      b.projectiles = b.projectiles.filter(proj => proj.active);
-
-      // Boss hits player (contact)
-      if (p.invincible <= 0 && checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, b.x, b.y, b.width, b.height)) {
-        if (p.shieldActive) {
-          p.shieldActive = false;
-        } else {
-          p.hp -= 20;
-        }
-        p.invincible = INVINCIBLE_FRAMES;
-      }
-
-      // Player attack hits boss
-      if (p.attacking && p.attackTimer === ATTACK_DURATION - 1) {
-        const atkX = p.facing === "right" ? p.x + PLAYER_W : p.x - ATTACK_RANGE;
-        if (checkRectCollision(atkX, p.y + 4, ATTACK_RANGE, 20, b.x, b.y, b.width, b.height)) {
-          const dmg = p.atkBoostTimer > 0 ? p.atk * 2 : p.atk;
-          b.hp -= dmg;
-          if (b.hp <= 0) {
-            b.dead = true;
-            b.deathTimer = 60;
-            p.score += 1000;
-            gs.victoryTimer = 120;
-            gs.notifications.push({ text: `${b.name} destroyed!`, timer: 180 });
-          }
-        }
-      }
-    }
-
-    // ── Items ──
-    gs.items.forEach(item => {
-      if (item.collected) return;
-      if (checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, item.x, item.y, 16, 16)) {
-        item.collected = true;
-        const effect = applyItemEffect(p, item.type);
-        p.hp = effect.hp;
-        p.atkBoostTimer = effect.atkBoostTimer;
-        p.shieldActive = effect.shieldActive;
-        p.coins = effect.coins;
-        p.score = effect.score;
-        const names: Record<string, string> = { heal: "+HP", atkBoost: "POWER UP!", shield: "Shield!", coin: "+Credit" };
-        gs.notifications.push({ text: names[item.type] || "Item!", timer: 120 });
-      }
-    });
-
-    // ── Notifications ──
-    gs.notifications = gs.notifications.filter(n => { n.timer--; return n.timer > 0; });
-
-    // ── Camera ──
-    gs.camera.x = Math.max(0, Math.min(p.x - CANVAS_W / 2 + PLAYER_W / 2, level.width - CANVAS_W));
-
-    // ── Victory check ──
-    const allEnemiesDead = gs.enemies.every(e => e.dead);
-    const bossDefeated = !gs.boss || gs.boss.dead;
-    if (allEnemiesDead && bossDefeated && p.x > level.width - 100) {
-      if (gs.victoryTimer > 0) {
-        gs.victoryTimer--;
-      } else {
-        const hpPct = (p.hp / p.maxHp) * 100;
-        const stars = calculateStars(hpPct, gs.time, level.parTime);
-        const result: LevelResult = { stars, time: gs.time, remainingHp: p.hp, score: p.score };
-        gs.levelResults[gs.level] = result;
-        if (gs.level + 1 < LEVELS.length && gs.unlockedLevels <= gs.level + 1) {
-          gs.unlockedLevels = gs.level + 2;
-        }
-        gs.phase = "victory";
-        setUiPhase("victory");
-        setUiResults([...gs.levelResults]);
-        setUiUnlocked(gs.unlockedLevels);
-        setUiScore(p.score);
-      }
-    }
-
-    // ── Game Over ──
-    if (p.hp <= 0) {
-      gs.phase = "gameOver";
-      setUiPhase("gameOver");
-    }
-
-    // ── Update UI state ──
-    if (gs.frameCount % 10 === 0) {
-      setUiHp(p.hp);
-      setUiMaxHp(p.maxHp);
-      setUiCoins(p.coins);
-      setUiScore(p.score);
-      setUiTime(gs.time);
-    }
-
-    // ── Render ──
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-    drawParallaxBg(ctx, level.bgLayers, gs.camera.x);
-    drawPlatforms(ctx, level.platforms, gs.camera.x);
-    gs.items.forEach(item => drawItem(ctx, item, gs.camera.x, gs.frameCount));
-    gs.enemies.forEach(e => drawEnemySprite(ctx, e, gs.camera.x));
-    if (gs.boss && (gs.boss.deathTimer > 0 || !gs.boss.dead)) {
-      drawBossSprite(ctx, gs.boss, gs.camera.x);
-    }
-    drawPlayer(ctx, p, gs.camera.x);
-    drawHUD(ctx, p, level.id, gs.time);
-
-    // Notifications
-    gs.notifications.forEach((n, i) => {
-      ctx.fillStyle = `rgba(0,255,255,${Math.min(1, n.timer / 30)})`;
-      ctx.font = "14px monospace";
-      ctx.fillText(n.text, CANVAS_W / 2 - 40, 60 + i * 20);
-    });
-
-    rafRef.current = requestAnimationFrame(gameLoop);
-  }, []);
 
   // ─── Keyboard Events ─────────────────────────────────
   useEffect(() => {
@@ -1401,11 +974,370 @@ export default function MechaCastlePage() {
     };
   }, []);
 
-  // ─── Start game loop ─────────────────────────────────
+  // ─── PixiJS Game Loop ────────────────────────────────
   useEffect(() => {
-    rafRef.current = requestAnimationFrame(gameLoop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [gameLoop]);
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    let destroyed = false;
+
+    async function initAndRun() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas, width: CANVAS_W, height: CANVAS_H, backgroundColor: 0x050a18, antialias: false });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
+
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
+
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
+
+      // Pre-create text pool (70 texts)
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 11,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "monospace",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // HUD texts
+      makeText("hud_hp", { fontSize: 11, fontWeight: "bold" });
+      makeText("hud_coins", { fontSize: 12, fontWeight: "bold" });
+      makeText("hud_level", { fontSize: 12, fontWeight: "bold" });
+      makeText("hud_score", { fontSize: 12, fontWeight: "bold" });
+      makeText("hud_time", { fontSize: 12, fontWeight: "bold" });
+      makeText("hud_power", { fontSize: 12, fill: "#ffaa00", fontWeight: "bold" });
+      makeText("hud_shield", { fontSize: 12, fill: "#00aaff", fontWeight: "bold" });
+      makeText("boss_name", { fontSize: 10, fontWeight: "bold" });
+      // Notification texts (up to 10)
+      for (let i = 0; i < 10; i++) {
+        makeText(`notif_${i}`, { fontSize: 14, fill: "#00ffff", fontWeight: "bold" });
+      }
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        const gs = gsRef.current;
+        if (!gs || gs.phase !== "playing") return;
+
+        const level = LEVELS[gs.level];
+        gs.frameCount++;
+        gs.time += 1 / 60;
+
+        const p = gs.player;
+        const keys = gs.keys;
+        const tc = gs.touchControls;
+
+        // ── Input ──
+        const moveLeft = keys.has("ArrowLeft") || tc.left;
+        const moveRight = keys.has("ArrowRight") || tc.right;
+        const jumpPressed = keys.has("z") || keys.has("Z") || keys.has("ArrowUp") || tc.jump;
+        const attackPressed = keys.has("x") || keys.has("X") || tc.attack;
+
+        // ── Player Movement ──
+        p.vx = 0;
+        if (moveLeft) { p.vx = -(MOVE_SPEED); p.facing = "left"; }
+        if (moveRight) { p.vx = MOVE_SPEED; p.facing = "right"; }
+
+        // Jump
+        if (jumpPressed && !keys.has("_jumpHeld")) {
+          keys.add("_jumpHeld");
+          const result = applyJump(p.onGround, p.doubleJumpUsed, p.abilities.jumpBonus);
+          if (result) {
+            p.vy = result.vy;
+            p.onGround = result.onGround;
+            p.doubleJumpUsed = result.doubleJumpUsed;
+          }
+        }
+        if (!jumpPressed) keys.delete("_jumpHeld");
+
+        // Attack
+        if (attackPressed && !p.attacking) {
+          p.attacking = true;
+          p.attackTimer = ATTACK_DURATION;
+        }
+        if (p.attacking) {
+          p.attackTimer--;
+          if (p.attackTimer <= 0) p.attacking = false;
+        }
+
+        // Gravity
+        p.vy = applyGravity(p.vy);
+        p.x += p.vx;
+        p.y += p.vy;
+        p.onGround = false;
+
+        // Platform collision
+        for (const plat of level.platforms) {
+          const result = checkPlatformCollision(p.x, p.y, PLAYER_W, PLAYER_H, p.vy, plat);
+          if (result) {
+            p.y = result.y;
+            p.vy = result.vy;
+            if (result.onGround) {
+              p.onGround = true;
+              p.doubleJumpUsed = false;
+            }
+          }
+          // Horizontal collision for solid platforms
+          if (plat.type === "solid") {
+            if (p.x + PLAYER_W > plat.x && p.x < plat.x + plat.width &&
+                p.y + PLAYER_H > plat.y + 6 && p.y < plat.y + plat.height) {
+              if (p.vx > 0 && p.x + PLAYER_W - p.vx <= plat.x) {
+                p.x = plat.x - PLAYER_W;
+              } else if (p.vx < 0 && p.x - p.vx >= plat.x + plat.width) {
+                p.x = plat.x + plat.width;
+              }
+            }
+          }
+        }
+
+        // Bounds
+        if (p.x < 0) p.x = 0;
+        if (p.x > level.width - PLAYER_W) p.x = level.width - PLAYER_W;
+
+        // Fall death
+        if (p.y > CANVAS_H + 50) {
+          p.hp = 0;
+        }
+
+        // Invincibility
+        if (p.invincible > 0) p.invincible--;
+
+        // Atk boost timer
+        if (p.atkBoostTimer > 0) p.atkBoostTimer--;
+
+        // Animation
+        p.animTimer++;
+        if (p.animTimer > 8) { p.animTimer = 0; p.animFrame++; }
+
+        // ── Enemy AI ──
+        gs.enemies.forEach(e => {
+          if (e.dead) {
+            e.deathTimer--;
+            return;
+          }
+          switch (e.behavior) {
+            case "patrol":
+              e.x += e.vx;
+              if (Math.abs(e.x - e.originX) > e.patrolRange) e.vx = -e.vx;
+              break;
+            case "chase": {
+              const dx = p.x - e.x;
+              e.vx = dx > 0 ? 1.5 : -1.5;
+              if (Math.abs(dx) < 300) e.x += e.vx;
+              break;
+            }
+            case "fly":
+              e.flyAngle += 0.03;
+              e.y = e.originX + Math.sin(e.flyAngle) * 30;
+              const fdx = p.x - e.x;
+              if (Math.abs(fdx) < 350) e.x += (fdx > 0 ? 1 : -1);
+              break;
+          }
+
+          // Enemy hits player
+          if (p.invincible <= 0 && !e.dead &&
+              checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, e.x, e.y, e.width, e.height)) {
+            if (p.shieldActive) {
+              p.shieldActive = false;
+              gs.notifications.push({ text: "Shield broken!", timer: 120 });
+            } else {
+              p.hp -= 15;
+              p.score -= 50;
+            }
+            p.invincible = INVINCIBLE_FRAMES;
+          }
+
+          // Player attack hits enemy
+          if (p.attacking && p.attackTimer === ATTACK_DURATION - 1 && !e.dead) {
+            const atkX = p.facing === "right" ? p.x + PLAYER_W : p.x - ATTACK_RANGE;
+            if (checkRectCollision(atkX, p.y + 4, ATTACK_RANGE, 20, e.x, e.y, e.width, e.height)) {
+              const dmg = p.atkBoostTimer > 0 ? p.atk * 2 : p.atk;
+              e.hp -= dmg;
+              if (e.hp <= 0) {
+                e.dead = true;
+                e.deathTimer = 30;
+                p.score += 200;
+                p.coins += 1;
+              }
+            }
+          }
+        });
+        gs.enemies = gs.enemies.filter(e => !e.dead || e.deathTimer > 0);
+
+        // ── Boss AI ──
+        if (gs.boss && !gs.boss.dead) {
+          const b = gs.boss;
+          const hpPctB = (b.hp / b.maxHp) * 100;
+          const phaseIdx = hpPctB > 50 ? 0 : 1;
+          if (phaseIdx !== b.currentPhase) {
+            b.currentPhase = phaseIdx;
+            b.attackTimer = 30;
+            gs.notifications.push({ text: `${b.name} overloading!`, timer: 120 });
+          }
+          const phase = b.phases[b.currentPhase];
+          b.attackTimer--;
+
+          if (b.attackTimer <= 0) {
+            const attack = phase.attacks[b.currentAttack % phase.attacks.length];
+            if (attack.name.includes("charge") || attack.name.includes("slam") || attack.name.includes("strike")) {
+              b.vx = p.x > b.x ? phase.speed * 3 : -phase.speed * 3;
+            } else if (attack.name.includes("sweep") || attack.name.includes("storm") || attack.name.includes("barrage") || attack.name.includes("fury")) {
+              for (let i = 0; i < 3; i++) {
+                b.projectiles.push({
+                  x: b.x + b.width / 2, y: b.y + 20,
+                  vx: (p.x > b.x ? 3 : -3) + (Math.random() - 0.5) * 2,
+                  vy: -2 + Math.random() * 2,
+                  width: 10, height: 10, active: true,
+                });
+              }
+            } else {
+              b.vx = p.x > b.x ? phase.speed : -phase.speed;
+            }
+            b.currentAttack++;
+            b.attackTimer = attack.cooldown;
+          }
+
+          // Boss movement
+          b.x += b.vx;
+          b.vx *= 0.95;
+          const arenaStart = level.width - 1100;
+          if (b.x < arenaStart) b.x = arenaStart;
+          if (b.x > level.width - b.width - 50) b.x = level.width - b.width - 50;
+
+          // Projectiles
+          b.projectiles.forEach(proj => {
+            if (!proj.active) return;
+            proj.x += proj.vx;
+            proj.y += proj.vy;
+            proj.vy += 0.1;
+            if (proj.y > CANVAS_H || proj.x < 0 || proj.x > level.width) {
+              proj.active = false;
+            }
+            if (p.invincible <= 0 && checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, proj.x, proj.y, proj.width, proj.height)) {
+              if (p.shieldActive) {
+                p.shieldActive = false;
+              } else {
+                p.hp -= 10;
+              }
+              p.invincible = INVINCIBLE_FRAMES;
+              proj.active = false;
+            }
+          });
+          b.projectiles = b.projectiles.filter(proj => proj.active);
+
+          // Boss hits player (contact)
+          if (p.invincible <= 0 && checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, b.x, b.y, b.width, b.height)) {
+            if (p.shieldActive) {
+              p.shieldActive = false;
+            } else {
+              p.hp -= 20;
+            }
+            p.invincible = INVINCIBLE_FRAMES;
+          }
+
+          // Player attack hits boss
+          if (p.attacking && p.attackTimer === ATTACK_DURATION - 1) {
+            const atkX = p.facing === "right" ? p.x + PLAYER_W : p.x - ATTACK_RANGE;
+            if (checkRectCollision(atkX, p.y + 4, ATTACK_RANGE, 20, b.x, b.y, b.width, b.height)) {
+              const dmg = p.atkBoostTimer > 0 ? p.atk * 2 : p.atk;
+              b.hp -= dmg;
+              if (b.hp <= 0) {
+                b.dead = true;
+                b.deathTimer = 60;
+                p.score += 1000;
+                gs.victoryTimer = 120;
+                gs.notifications.push({ text: `${b.name} destroyed!`, timer: 180 });
+              }
+            }
+          }
+        }
+
+        // ── Items ──
+        gs.items.forEach(item => {
+          if (item.collected) return;
+          if (checkRectCollision(p.x, p.y, PLAYER_W, PLAYER_H, item.x, item.y, 16, 16)) {
+            item.collected = true;
+            const effect = applyItemEffect(p, item.type);
+            p.hp = effect.hp;
+            p.atkBoostTimer = effect.atkBoostTimer;
+            p.shieldActive = effect.shieldActive;
+            p.coins = effect.coins;
+            p.score = effect.score;
+            const names: Record<string, string> = { heal: "+HP", atkBoost: "POWER UP!", shield: "Shield!", coin: "+Credit" };
+            gs.notifications.push({ text: names[item.type] || "Item!", timer: 120 });
+          }
+        });
+
+        // ── Notifications ──
+        gs.notifications = gs.notifications.filter(n => { n.timer--; return n.timer > 0; });
+
+        // ── Camera ──
+        gs.camera.x = Math.max(0, Math.min(p.x - CANVAS_W / 2 + PLAYER_W / 2, level.width - CANVAS_W));
+
+        // ── Victory check ──
+        const allEnemiesDead = gs.enemies.every(e => e.dead);
+        const bossDefeated = !gs.boss || gs.boss.dead;
+        if (allEnemiesDead && bossDefeated && p.x > level.width - 100) {
+          if (gs.victoryTimer > 0) {
+            gs.victoryTimer--;
+          } else {
+            const hpPctV = (p.hp / p.maxHp) * 100;
+            const stars = calculateStars(hpPctV, gs.time, level.parTime);
+            const result: LevelResult = { stars, time: gs.time, remainingHp: p.hp, score: p.score };
+            gs.levelResults[gs.level] = result;
+            if (gs.level + 1 < LEVELS.length && gs.unlockedLevels <= gs.level + 1) {
+              gs.unlockedLevels = gs.level + 2;
+            }
+            gs.phase = "victory";
+            setUiPhase("victory");
+            setUiResults([...gs.levelResults]);
+            setUiUnlocked(gs.unlockedLevels);
+            setUiScore(p.score);
+          }
+        }
+
+        // ── Game Over ──
+        if (p.hp <= 0) {
+          gs.phase = "gameOver";
+          setUiPhase("gameOver");
+        }
+
+        // ── Update UI state ──
+        if (gs.frameCount % 10 === 0) {
+          setUiHp(p.hp);
+          setUiMaxHp(p.maxHp);
+          setUiCoins(p.coins);
+          setUiScore(p.score);
+          setUiTime(gs.time);
+        }
+
+        // ── Render ──
+        drawGamePixi(gfx, texts, gs);
+      });
+    }
+
+    initAndRun();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+        pixiGfxRef.current = null;
+        pixiTextsRef.current.clear();
+      }
+    };
+  }, []);
+
 
   // ─── Upgrade handler ─────────────────────────────────
   const handleUpgrade = useCallback((choice: string) => {
@@ -1432,7 +1364,7 @@ export default function MechaCastlePage() {
 
   const renderMenu = () => (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-slate-900/90 to-blue-900/90 text-white z-10">
-      <h1 className="text-4xl font-bold mb-2 drop-shadow-lg">? Mecha Castle</h1>
+      <h1 className="text-4xl font-bold mb-2 drop-shadow-lg">Mecha Castle</h1>
       <p className="text-lg mb-8 text-blue-300">Conquer the mechanical fortress!</p>
       <button onClick={() => { setUiPhase("levelSelect"); }} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 rounded-lg text-xl font-bold transition-colors mb-4">
         Start Game
@@ -1452,8 +1384,8 @@ export default function MechaCastlePage() {
               onClick={() => { if (!locked) initLevel(i, gsRef.current?.player.abilities); }}
               className={`w-20 h-24 rounded-lg flex flex-col items-center justify-center text-sm font-bold transition-all ${locked ? "bg-gray-700 opacity-50 cursor-not-allowed" : "bg-blue-800 hover:bg-blue-700 cursor-pointer"}`}>
               <span className="text-lg">{locked ? "" : `${lv.id}`}</span>
-              <span className="text-xs mt-1">{lv.boss ? "? Boss" : "Sector"}</span>
-              {result && <span className="text-cyan-300 text-xs">{"?".repeat(result.stars)}{"?".repeat(3 - result.stars)}</span>}
+              <span className="text-xs mt-1">{lv.boss ? "Boss" : "Sector"}</span>
+              {result && <span className="text-cyan-300 text-xs">{"★".repeat(result.stars)}{"☆".repeat(3 - result.stars)}</span>}
             </button>
           );
         })}
@@ -1468,10 +1400,10 @@ export default function MechaCastlePage() {
     const result = uiResults[gsRef.current?.level ?? 0];
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-slate-900/90 to-cyan-800/90 text-white z-10">
-        <h2 className="text-3xl font-bold mb-4">? Sector Clear!</h2>
+        <h2 className="text-3xl font-bold mb-4">Sector Clear!</h2>
         {result && (
           <div className="text-center mb-6">
-            <p className="text-2xl text-cyan-300 mb-2">{"?".repeat(result.stars)}{"?".repeat(3 - result.stars)}</p>
+            <p className="text-2xl text-cyan-300 mb-2">{"★".repeat(result.stars)}{"☆".repeat(3 - result.stars)}</p>
             <p>Time: {Math.floor(result.time)}s</p>
             <p>Score: {result.score}</p>
             <p>HP: {result.remainingHp}</p>
@@ -1494,7 +1426,7 @@ export default function MechaCastlePage() {
 
   const renderGameOver = () => (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-red-900/90 to-gray-900/90 text-white z-10">
-      <h2 className="text-3xl font-bold mb-4">? System Failure</h2>
+      <h2 className="text-3xl font-bold mb-4">System Failure</h2>
       <p className="mb-6 text-gray-300">Score: {uiScore}</p>
       <div className="flex gap-3">
         <button onClick={() => initLevel(gsRef.current?.level ?? 0, gsRef.current?.player.abilities)} className="px-6 py-2 bg-red-600 hover:bg-red-500 rounded-lg font-bold transition-colors">
@@ -1508,10 +1440,10 @@ export default function MechaCastlePage() {
   );
 
   const renderUpgrade = () => {
-    const labels: Record<string, { icon: string; name: string; desc: string }> = {
-      hp: { icon: "?", name: "Max HP +25", desc: "Increase energy capacity" },
-      atk: { icon: "?", name: "ATK +5", desc: "Increase weapon power" },
-      jump: { icon: "JMP", name: "Jump +1", desc: "Boost thrusters" },
+    const labels: Record<string, { name: string; desc: string }> = {
+      hp: { name: "Max HP +25", desc: "Increase energy capacity" },
+      atk: { name: "ATK +5", desc: "Increase weapon power" },
+      jump: { name: "Jump +1", desc: "Boost thrusters" },
     };
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-slate-900/90 to-blue-900/90 text-white z-10">
@@ -1522,7 +1454,6 @@ export default function MechaCastlePage() {
             return (
               <button key={c} onClick={() => handleUpgrade(c)}
                 className="w-36 h-40 bg-blue-900 hover:bg-blue-800 rounded-xl flex flex-col items-center justify-center p-3 transition-all hover:scale-105 border border-cyan-700">
-                <span className="text-3xl mb-2">{l?.icon}</span>
                 <span className="font-bold">{l?.name}</span>
                 <span className="text-xs text-cyan-300 mt-1">{l?.desc}</span>
               </button>

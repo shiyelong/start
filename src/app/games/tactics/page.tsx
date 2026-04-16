@@ -8,6 +8,8 @@ import {
   ChevronLeft, RotateCcw, Swords, Volume2, VolumeX,
   Shield, Target, Map, Play, Trophy, SkipForward
 } from "lucide-react";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "tactics";
@@ -251,6 +253,171 @@ class SoundEngine {
   select() { this.tone(500, 0.08, "sine", 0.08); }
 }
 
+// ─── PixiJS color helper ─────────────────────────────────────────────────────
+function colorToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
+// ─── PixiJS draw function ────────────────────────────────────────────────────
+function drawGamePixi(
+  gfx: PixiGraphics,
+  texts: Map<string, PixiText>,
+  g: GameState,
+  particles: Particle[],
+  popups: DamagePopup[],
+  animTime: number,
+  cursorX: number,
+  cursorY: number,
+  screenState: Screen,
+  dt: number,
+) {
+  gfx.clear();
+  texts.forEach(t => { t.visible = false; });
+
+  let textIdx = 0;
+  const showText = (text: string, x: number, y: number, ax = 0, ay = 0, opts?: { fill?: string; fontSize?: number }) => {
+    const k = `pool_${textIdx++}`;
+    const t = texts.get(k);
+    if (!t) return;
+    t.text = text; t.x = x; t.y = y; t.anchor.set(ax, ay); t.alpha = 1; t.visible = true;
+    if (opts?.fill) t.style.fill = opts.fill;
+  };
+
+  const map = MAPS[g.mapIndex];
+
+  // Background
+  gfx.rect(0, 0, W, H).fill({ color: colorToNum(BG) });
+
+  // Draw terrain
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const t = map.terrain[r][c];
+      const isLight = (r + c) % 2 === 0;
+      const tColor = isLight ? COLORS[`${t}Light` as keyof typeof COLORS] || COLORS[t] : COLORS[t];
+      gfx.rect(c * CELL, r * CELL, CELL, CELL).fill({ color: colorToNum(tColor) });
+
+      // Terrain decorations
+      if (t === "forest") {
+        gfx.circle(c * CELL + CELL * 0.3, r * CELL + CELL * 0.6, 6).fill({ color: 0x0a5a0a });
+        gfx.circle(c * CELL + CELL * 0.7, r * CELL + CELL * 0.5, 7).fill({ color: 0x0a5a0a });
+      } else if (t === "mountain") {
+        gfx.moveTo(c * CELL + CELL * 0.5, r * CELL + CELL * 0.2)
+          .lineTo(c * CELL + CELL * 0.2, r * CELL + CELL * 0.8)
+          .lineTo(c * CELL + CELL * 0.8, r * CELL + CELL * 0.8)
+          .closePath().fill({ color: 0x5a5a5a });
+      } else if (t === "water") {
+        const wave = Math.sin(animTime * 2 + c + r) * 2;
+        gfx.moveTo(c * CELL + 5, r * CELL + CELL * 0.5 + wave)
+          .quadraticCurveTo(c * CELL + CELL * 0.5, r * CELL + CELL * 0.3 + wave, c * CELL + CELL - 5, r * CELL + CELL * 0.5 + wave)
+          .stroke({ color: 0x1a3a6a, width: 1 });
+      }
+
+      // Grid lines
+      gfx.rect(c * CELL, r * CELL, CELL, CELL).stroke({ color: 0xffffff, width: 1, alpha: 0.05 });
+    }
+  }
+
+  // Draw move range highlights
+  for (const k of Array.from(g.moveTargets)) {
+    const [mx, my] = k.split(",").map(Number);
+    gfx.rect(mx * CELL + 1, my * CELL + 1, CELL - 2, CELL - 2).fill({ color: 0x3ea6ff, alpha: 0.2 });
+    gfx.rect(mx * CELL + 1, my * CELL + 1, CELL - 2, CELL - 2).stroke({ color: 0x3ea6ff, width: 1, alpha: 0.5 });
+  }
+
+  // Draw attack range highlights
+  for (const k of Array.from(g.atkTargets)) {
+    const [ax, ay] = k.split(",").map(Number);
+    gfx.rect(ax * CELL + 1, ay * CELL + 1, CELL - 2, CELL - 2).fill({ color: 0xff4757, alpha: 0.25 });
+    gfx.rect(ax * CELL + 1, ay * CELL + 1, CELL - 2, CELL - 2).stroke({ color: 0xff4757, width: 1.5, alpha: 0.6 });
+  }
+
+  // Draw keyboard cursor
+  if (screenState === "playing") {
+    gfx.rect(cursorX * CELL + 2, cursorY * CELL + 2, CELL - 4, CELL - 4)
+      .stroke({ color: 0xffffff, width: 2, alpha: 0.4 });
+  }
+
+  // Draw units
+  const labels: Record<UnitType, string> = { infantry: "I", cavalry: "C", archer: "A", mage: "M" };
+  for (const u of g.units) {
+    if (u.hp <= 0) continue;
+    const def = UNIT_DEFS[u.type];
+    const ux = u.x * CELL + CELL / 2;
+    const uy = u.y * CELL + CELL / 2;
+    const baseColor = u.team === "player" ? def.color : def.enemyColor;
+    const isSelected = u.id === g.selectedId;
+    const isDimmed = u.team === "player" && u.moved && u.attacked;
+    const alpha = isDimmed ? 0.5 : 1;
+
+    // Unit body
+    gfx.circle(ux, uy, CELL / 2 - 5).fill({ color: colorToNum(baseColor), alpha });
+
+    // Selection ring
+    if (isSelected) {
+      const pulse = 1 + Math.sin(animTime * 4) * 0.08;
+      gfx.circle(ux, uy, (CELL / 2 - 3) * pulse).stroke({ color: 0xffffff, width: 2.5, alpha });
+    }
+
+    // Team indicator ring
+    const teamColor = u.team === "player" ? 0x3ea6ff : 0xff4757;
+    gfx.circle(ux, uy, CELL / 2 - 5).stroke({ color: teamColor, width: 1.5, alpha: 0.6 * alpha });
+
+    // Unit type letter
+    showText(labels[u.type], ux, uy, 0.5, 0.5);
+
+    // HP bar
+    const barW = CELL - 12, barH = 4;
+    const barX = u.x * CELL + 6, barY = u.y * CELL + CELL - 8;
+    gfx.rect(barX, barY, barW, barH).fill({ color: 0x000000, alpha: 0.6 });
+    const hpRatio = u.hp / u.maxHp;
+    const hpColor = hpRatio > 0.6 ? 0x2ed573 : hpRatio > 0.3 ? 0xffa502 : 0xff4757;
+    gfx.rect(barX, barY, barW * hpRatio, barH).fill({ color: hpColor });
+  }
+
+  // Draw particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.1;
+    p.life -= dt / p.maxLife;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    gfx.circle(p.x, p.y, p.size * p.life).fill({ color: colorToNum(p.color), alpha: p.life });
+  }
+
+  // Draw damage popups
+  for (let i = popups.length - 1; i >= 0; i--) {
+    const pop = popups[i];
+    pop.y -= 1;
+    pop.life -= dt * 1.5;
+    if (pop.life <= 0) { popups.splice(i, 1); continue; }
+    showText(`-${pop.value}`, pop.x, pop.y, 0.5, 0.5, { fill: pop.color });
+  }
+
+  // HUD bar at bottom
+  const hudY = ROWS * CELL;
+  gfx.rect(0, hudY, W, 80).fill({ color: 0x0f0f0f, alpha: 0.95 });
+  gfx.moveTo(0, hudY).lineTo(W, hudY).stroke({ color: 0x3ea6ff, width: 1, alpha: 0.3 });
+
+  showText(`Wave ${g.level}/3`, 10, hudY + 12, 0, 0);
+  showText(`Score: ${g.score}`, 10, hudY + 28, 0, 0, { fill: "#aaaaaa" });
+  showText(`Turn: ${g.turnCount}`, 10, hudY + 44, 0, 0, { fill: "#aaaaaa" });
+
+  // Turn indicator
+  const turnColor = g.turn === "player" ? PRIMARY : "#ff4757";
+  showText(g.turn === "player" ? "Your Turn" : "Enemy Turn", W - 10, hudY + 12, 1, 0, { fill: turnColor });
+
+  // Selected unit info
+  const sel = g.units.find(u => u.id === g.selectedId);
+  if (sel) {
+    showText(`${UNIT_DEFS[sel.type].label} HP:${sel.hp}/${sel.maxHp} ATK:${sel.atk} DEF:${sel.def}`, W - 10, hudY + 28, 1, 0, { fill: "#cccccc" });
+    showText(`Move:${sel.moveRange} Range:${sel.atkRange}`, W - 10, hudY + 44, 1, 0, { fill: "#cccccc" });
+  }
+
+  // Controls hint
+  showText("WASD/Arrows: Move cursor | Enter: Select | E: End turn | Esc: Deselect", W / 2, hudY + 66, 0.5, 0.5, { fill: "#555555" });
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 export default function TacticsGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -258,7 +425,10 @@ export default function TacticsGame() {
   const particlesRef = useRef<Particle[]>([]);
   const popupsRef = useRef<DamagePopup[]>([]);
   const animTimeRef = useRef(0);
-  const rafRef = useRef(0);
+
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
 
   const [screen, setScreen] = useState<Screen>("title");
   const [muted, setMuted] = useState(false);
@@ -586,10 +756,8 @@ export default function TacticsGame() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / (window.devicePixelRatio || 1) / rect.width;
-    const scaleY = canvas.height / (window.devicePixelRatio || 1) / rect.height;
-    const mx = (clientX - rect.left) * scaleX;
-    const my = (clientY - rect.top) * scaleY;
+    const mx = (clientX - rect.left) * (W / rect.width);
+    const my = (clientY - rect.top) * (H / rect.height);
     const gx = Math.floor(mx / CELL);
     const gy = Math.floor(my / CELL);
     handleGridClick(gx, gy);
@@ -623,227 +791,72 @@ export default function TacticsGame() {
     return () => window.removeEventListener("keydown", onKey);
   }, [screen, handleGridClick, endPlayerTurn, rerender]);
 
-  // ─── Canvas Rendering ───────────────────────────────────────────────────────
+  // ─── PixiJS Rendering ───────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
-
+    if (!canvas || screen !== "playing") return;
+    let destroyed = false;
     let lastTime = 0;
-    const render = (time: number) => {
-      const dt = Math.min((time - lastTime) / 1000, 0.05);
-      lastTime = time;
-      animTimeRef.current = time / 1000;
 
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = BG;
-      ctx.fillRect(0, 0, W, H);
+    async function initAndRun() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: colorToNum(BG) });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      const g = gameRef.current;
-      const map = MAPS[g.mapIndex];
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
 
-      // Draw terrain
-      for (let r = 0; r < ROWS; r++) {
-        for (let c = 0; c < COLS; c++) {
-          const t = map.terrain[r][c];
-          const isLight = (r + c) % 2 === 0;
-          ctx.fillStyle = isLight ? COLORS[`${t}Light` as keyof typeof COLORS] || COLORS[t] : COLORS[t];
-          ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-          // Terrain decorations
-          if (t === "forest") {
-            ctx.fillStyle = "#0a5a0a";
-            ctx.beginPath();
-            ctx.arc(c * CELL + CELL * 0.3, r * CELL + CELL * 0.6, 6, 0, Math.PI * 2);
-            ctx.arc(c * CELL + CELL * 0.7, r * CELL + CELL * 0.5, 7, 0, Math.PI * 2);
-            ctx.fill();
-          } else if (t === "mountain") {
-            ctx.fillStyle = "#5a5a5a";
-            ctx.beginPath();
-            ctx.moveTo(c * CELL + CELL * 0.5, r * CELL + CELL * 0.2);
-            ctx.lineTo(c * CELL + CELL * 0.2, r * CELL + CELL * 0.8);
-            ctx.lineTo(c * CELL + CELL * 0.8, r * CELL + CELL * 0.8);
-            ctx.fill();
-          } else if (t === "water") {
-            ctx.fillStyle = "#1a3a6a";
-            const wave = Math.sin(animTimeRef.current * 2 + c + r) * 2;
-            ctx.beginPath();
-            ctx.moveTo(c * CELL + 5, r * CELL + CELL * 0.5 + wave);
-            ctx.quadraticCurveTo(c * CELL + CELL * 0.5, r * CELL + CELL * 0.3 + wave, c * CELL + CELL - 5, r * CELL + CELL * 0.5 + wave);
-            ctx.stroke();
-          }
-
-          // Grid lines
-          ctx.strokeStyle = "rgba(255,255,255,0.05)";
-          ctx.strokeRect(c * CELL, r * CELL, CELL, CELL);
-        }
+      // Pre-create text pool (70 texts: ~10 units labels + ~10 damage popups + ~10 HUD + buffer)
+      const TEXT_POOL_SIZE = 70;
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: 13,
+          fill: "#ffffff",
+          fontWeight: "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(`pool_${i}`, t);
       }
 
-      // Draw move range highlights
-      for (const k of Array.from(g.moveTargets)) {
-        const [mx, my] = k.split(",").map(Number);
-        ctx.fillStyle = "rgba(62,166,255,0.2)";
-        ctx.fillRect(mx * CELL + 1, my * CELL + 1, CELL - 2, CELL - 2);
-        ctx.strokeStyle = "rgba(62,166,255,0.5)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(mx * CELL + 1, my * CELL + 1, CELL - 2, CELL - 2);
+      app.ticker.add(() => {
+        if (destroyed) return;
+        const now = performance.now();
+        const dt = Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+        animTimeRef.current = now / 1000;
+
+        drawGamePixi(
+          gfx, texts, gameRef.current,
+          particlesRef.current, popupsRef.current,
+          animTimeRef.current,
+          cursorRef.current.x, cursorRef.current.y,
+          screen, dt,
+        );
+      });
+      lastTime = performance.now();
+    }
+
+    initAndRun();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+        pixiGfxRef.current = null;
+        pixiTextsRef.current.clear();
       }
-
-      // Draw attack range highlights
-      for (const k of Array.from(g.atkTargets)) {
-        const [ax, ay] = k.split(",").map(Number);
-        ctx.fillStyle = "rgba(255,71,87,0.25)";
-        ctx.fillRect(ax * CELL + 1, ay * CELL + 1, CELL - 2, CELL - 2);
-        ctx.strokeStyle = "rgba(255,71,87,0.6)";
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(ax * CELL + 1, ay * CELL + 1, CELL - 2, CELL - 2);
-      }
-
-      // Draw keyboard cursor
-      if (screen === "playing") {
-        const cx = cursorRef.current.x, cy = cursorRef.current.y;
-        ctx.strokeStyle = "rgba(255,255,255,0.4)";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([4, 4]);
-        ctx.strokeRect(cx * CELL + 2, cy * CELL + 2, CELL - 4, CELL - 4);
-        ctx.setLineDash([]);
-      }
-
-      // Draw units
-      for (const u of g.units) {
-        if (u.hp <= 0) continue;
-        const def = UNIT_DEFS[u.type];
-        const ux = u.x * CELL + CELL / 2;
-        const uy = u.y * CELL + CELL / 2;
-        const baseColor = u.team === "player" ? def.color : def.enemyColor;
-        const isSelected = u.id === g.selectedId;
-        const isDimmed = u.team === "player" && u.moved && u.attacked;
-
-        // Unit body
-        ctx.globalAlpha = isDimmed ? 0.5 : 1;
-        ctx.fillStyle = baseColor;
-        ctx.beginPath();
-        ctx.arc(ux, uy, CELL / 2 - 5, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Selection ring
-        if (isSelected) {
-          ctx.strokeStyle = "#fff";
-          ctx.lineWidth = 2.5;
-          const pulse = 1 + Math.sin(animTimeRef.current * 4) * 0.08;
-          ctx.beginPath();
-          ctx.arc(ux, uy, (CELL / 2 - 3) * pulse, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-
-        // Team indicator ring
-        ctx.strokeStyle = u.team === "player" ? "rgba(62,166,255,0.6)" : "rgba(255,71,87,0.6)";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(ux, uy, CELL / 2 - 5, 0, Math.PI * 2);
-        ctx.stroke();
-
-        // Unit type letter
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 16px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        const labels: Record<UnitType, string> = { infantry: "I", cavalry: "C", archer: "A", mage: "M" };
-        ctx.fillText(labels[u.type], ux, uy);
-
-        // HP bar
-        const barW = CELL - 12, barH = 4;
-        const barX = u.x * CELL + 6, barY = u.y * CELL + CELL - 8;
-        ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.fillRect(barX, barY, barW, barH);
-        const hpRatio = u.hp / u.maxHp;
-        ctx.fillStyle = hpRatio > 0.6 ? "#2ed573" : hpRatio > 0.3 ? "#ffa502" : "#ff4757";
-        ctx.fillRect(barX, barY, barW * hpRatio, barH);
-
-        ctx.globalAlpha = 1;
-      }
-
-      // Draw particles
-      for (let i = particlesRef.current.length - 1; i >= 0; i--) {
-        const p = particlesRef.current[i];
-        p.x += p.vx; p.y += p.vy;
-        p.vy += 0.1;
-        p.life -= dt / p.maxLife;
-        if (p.life <= 0) { particlesRef.current.splice(i, 1); continue; }
-        ctx.globalAlpha = p.life;
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-
-      // Draw damage popups
-      for (let i = popupsRef.current.length - 1; i >= 0; i--) {
-        const pop = popupsRef.current[i];
-        pop.y -= 1;
-        pop.life -= dt * 1.5;
-        if (pop.life <= 0) { popupsRef.current.splice(i, 1); continue; }
-        ctx.globalAlpha = pop.life;
-        ctx.fillStyle = pop.color;
-        ctx.font = "bold 18px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(`-${pop.value}`, pop.x, pop.y);
-      }
-      ctx.globalAlpha = 1;
-
-      // HUD bar at bottom
-      const hudY = ROWS * CELL;
-      ctx.fillStyle = "rgba(15,15,15,0.95)";
-      ctx.fillRect(0, hudY, W, 80);
-      ctx.strokeStyle = "rgba(62,166,255,0.3)";
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(0, hudY); ctx.lineTo(W, hudY); ctx.stroke();
-
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 13px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(`Wave ${g.level}/3`, 10, hudY + 18);
-      ctx.fillStyle = "#aaa";
-      ctx.font = "12px sans-serif";
-      ctx.fillText(`Score: ${g.score}`, 10, hudY + 36);
-      ctx.fillText(`Turn: ${g.turnCount}`, 10, hudY + 52);
-
-      // Turn indicator
-      ctx.textAlign = "right";
-      ctx.fillStyle = g.turn === "player" ? PRIMARY : "#ff4757";
-      ctx.font = "bold 13px sans-serif";
-      ctx.fillText(g.turn === "player" ? "Your Turn" : "Enemy Turn", W - 10, hudY + 18);
-
-      // Selected unit info
-      const sel = g.units.find(u => u.id === g.selectedId);
-      if (sel) {
-        ctx.textAlign = "right";
-        ctx.fillStyle = "#ccc";
-        ctx.font = "12px sans-serif";
-        ctx.fillText(`${UNIT_DEFS[sel.type].label} HP:${sel.hp}/${sel.maxHp} ATK:${sel.atk} DEF:${sel.def}`, W - 10, hudY + 36);
-        ctx.fillText(`Move:${sel.moveRange} Range:${sel.atkRange}`, W - 10, hudY + 52);
-      }
-
-      // Controls hint
-      ctx.textAlign = "center";
-      ctx.fillStyle = "#555";
-      ctx.font = "10px sans-serif";
-      ctx.fillText("WASD/Arrows: Move cursor | Enter: Select | E: End turn | Esc: Deselect", W / 2, hudY + 72);
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(render);
     };
-
-    rafRef.current = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(rafRef.current);
   }, [screen]);
 
   // ─── Canvas event listeners ─────────────────────────────────────────────────

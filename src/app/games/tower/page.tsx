@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Header from "@/components/Header";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 const W = 480, H = 480, GRID = 32, COLS = W / GRID, ROWS = H / GRID;
 type TowerType = "arrow" | "cannon" | "ice";
@@ -15,8 +17,65 @@ const TOWER_INFO: Record<TowerType, { name: string; cost: number; color: string;
   ice: { name: "冰塔", cost: 75, color: "#65b8ff", range: 3, damage: 5, rate: 45 },
 };
 
+function colorToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
+function drawGamePixi(g: PixiGraphics, texts: Map<string, PixiText>, s: { towers: Tower[]; enemies: Enemy[]; bullets: Bullet[] }) {
+  g.clear();
+  texts.forEach(t => { t.visible = false; });
+
+  const showText = (key: string, text: string, x: number, y: number, ax = 0, ay = 0) => {
+    const t = texts.get(key);
+    if (!t) return;
+    t.text = text; t.x = x; t.y = y; t.anchor.set(ax, ay); t.alpha = 1; t.visible = true;
+  };
+
+  // Background
+  g.rect(0, 0, W, H).fill({ color: 0x111111 });
+
+  // Grid lines
+  for (let x = 0; x <= COLS; x++) {
+    g.rect(x * GRID, 0, 1, H).fill({ color: 0x1a1a1a });
+  }
+  for (let y = 0; y <= ROWS; y++) {
+    g.rect(0, y * GRID, W, 1).fill({ color: 0x1a1a1a });
+  }
+
+  // Path
+  for (const [px, py] of PATH) {
+    g.rect(px * GRID, py * GRID, GRID, GRID).fill({ color: 0x1a1a2e });
+  }
+
+  // Towers
+  s.towers.forEach((t, i) => {
+    const info = TOWER_INFO[t.type];
+    g.rect(t.x * GRID + 4, t.y * GRID + 4, GRID - 8, GRID - 8).fill({ color: colorToNum(info.color) });
+    const label = t.type === "arrow" ? "弓" : t.type === "cannon" ? "炮" : "冰";
+    if (i < 60) showText(`tw_${i}`, label, t.x * GRID + GRID / 2, t.y * GRID + GRID / 2, 0.5, 0.5);
+  });
+
+  // Enemies
+  s.enemies.forEach((e, i) => {
+    const ec = e.slow > 0 ? 0x65b8ff : 0xff4444;
+    g.circle(e.x, e.y, 10).fill({ color: ec });
+    // HP bar
+    g.rect(e.x - 12, e.y - 16, 24, 4).fill({ color: 0x333333 });
+    g.rect(e.x - 12, e.y - 16, 24 * (e.hp / e.maxHp), 4).fill({ color: 0x2ba640 });
+    // Enemy index label (optional, skip for perf)
+    void i;
+  });
+
+  // Bullets
+  for (const b of s.bullets) {
+    g.circle(b.x, b.y, 3).fill({ color: colorToNum(TOWER_INFO[b.type].color) });
+  }
+}
+
 export default function TowerPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pixiAppRef = useRef<Application | null>(null);
   const [gold, setGold] = useState(200);
   const [lives, setLives] = useState(20);
   const [wave, setWave] = useState(0);
@@ -38,8 +97,8 @@ export default function TowerPage() {
     const s = sRef.current;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const gx = Math.floor((cx - rect.left) / GRID);
-    const gy = Math.floor((cy - rect.top) / GRID);
+    const gx = Math.floor((cx - rect.left) / (rect.width / COLS));
+    const gy = Math.floor((cy - rect.top) / (rect.height / ROWS));
     if (PATH.some(([px, py]) => px === gx && py === gy)) return;
     if (s.towers.some(t => t.x === gx && t.y === gy)) return;
     const info = TOWER_INFO[selectedTower];
@@ -51,98 +110,105 @@ export default function TowerPage() {
 
   useEffect(() => {
     if (!started || !canvasRef.current) return;
-    const ctx = canvasRef.current.getContext("2d")!;
+    const canvas = canvasRef.current;
     const s = sRef.current;
-    let raf: number;
+    let destroyed = false;
 
-    const loop = () => {
-      if (s.lives <= 0) { setGameOver(true); return; }
-      s.frame++;
+    async function initAndRun() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas, width: W, height: H, backgroundColor: 0x111111, antialias: false });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      // Spawn enemies
-      if (s.waveActive && s.enemiesLeft > 0 && s.frame % 40 === 0) {
-        const hp = 50 + s.wave * 20;
-        s.enemies.push({ x: PATH[0][0] * GRID + GRID / 2, y: PATH[0][1] * GRID + GRID / 2, hp, maxHp: hp, speed: 1 + s.wave * 0.1, pathIdx: 0, reward: 10 + s.wave * 2, slow: 0 });
-        s.enemiesLeft--;
-        if (s.enemiesLeft === 0) s.waveActive = false;
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = new Map<string, PixiText>();
+
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 10,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // Pre-create text pool for tower labels (up to 60) 
+      for (let i = 0; i < 60; i++) makeText(`tw_${i}`, { fontSize: 10, fill: "#ffffff", fontWeight: "bold" });
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        if (s.lives <= 0) { setGameOver(true); return; }
+        s.frame++;
+
+        // Spawn enemies
+        if (s.waveActive && s.enemiesLeft > 0 && s.frame % 40 === 0) {
+          const hp = 50 + s.wave * 20;
+          s.enemies.push({ x: PATH[0][0] * GRID + GRID / 2, y: PATH[0][1] * GRID + GRID / 2, hp, maxHp: hp, speed: 1 + s.wave * 0.1, pathIdx: 0, reward: 10 + s.wave * 2, slow: 0 });
+          s.enemiesLeft--;
+          if (s.enemiesLeft === 0) s.waveActive = false;
+        }
+
+        // Move enemies
+        s.enemies = s.enemies.filter(e => {
+          if (e.pathIdx >= PATH.length - 1) { s.lives--; setLives(s.lives); return false; }
+          const [tx, ty] = PATH[e.pathIdx + 1];
+          const targetX = tx * GRID + GRID / 2, targetY = ty * GRID + GRID / 2;
+          const dx = targetX - e.x, dy = targetY - e.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const spd = e.slow > 0 ? e.speed * 0.5 : e.speed;
+          if (e.slow > 0) e.slow--;
+          if (dist < spd * 2) { e.pathIdx++; } else { e.x += (dx / dist) * spd; e.y += (dy / dist) * spd; }
+          return e.hp > 0;
+        });
+
+        // Towers shoot
+        s.towers.forEach(t => {
+          if (t.cooldown > 0) { t.cooldown--; return; }
+          const info = TOWER_INFO[t.type];
+          const tcx = t.x * GRID + GRID / 2, tcy = t.y * GRID + GRID / 2;
+          const target = s.enemies.find(e => { const d = Math.sqrt((e.x - tcx) ** 2 + (e.y - tcy) ** 2); return d < t.range * GRID; });
+          if (target) {
+            s.bullets.push({ x: tcx, y: tcy, tx: target.x, ty: target.y, speed: 5, damage: t.damage, type: t.type });
+            t.cooldown = info.rate;
+          }
+        });
+
+        // Move bullets
+        s.bullets = s.bullets.filter(b => {
+          const dx = b.tx - b.x, dy = b.ty - b.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 8) {
+            const hit = s.enemies.find(e => Math.sqrt((e.x - b.tx) ** 2 + (e.y - b.ty) ** 2) < GRID);
+            if (hit) { hit.hp -= b.damage; if (b.type === "ice") hit.slow = 60; if (hit.hp <= 0) { s.gold += hit.reward; setGold(s.gold); } }
+            return false;
+          }
+          b.x += (dx / dist) * b.speed;
+          b.y += (dy / dist) * b.speed;
+          return true;
+        });
+
+        // Draw with PixiJS
+        drawGamePixi(gfx, texts, s);
+      });
+    }
+
+    initAndRun();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
       }
-
-      // Move enemies
-      s.enemies = s.enemies.filter(e => {
-        if (e.pathIdx >= PATH.length - 1) { s.lives--; setLives(s.lives); return false; }
-        const [tx, ty] = PATH[e.pathIdx + 1];
-        const targetX = tx * GRID + GRID / 2, targetY = ty * GRID + GRID / 2;
-        const dx = targetX - e.x, dy = targetY - e.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const spd = e.slow > 0 ? e.speed * 0.5 : e.speed;
-        if (e.slow > 0) e.slow--;
-        if (dist < spd * 2) { e.pathIdx++; } else { e.x += (dx / dist) * spd; e.y += (dy / dist) * spd; }
-        return e.hp > 0;
-      });
-
-      // Towers shoot
-      s.towers.forEach(t => {
-        if (t.cooldown > 0) { t.cooldown--; return; }
-        const info = TOWER_INFO[t.type];
-        const tcx = t.x * GRID + GRID / 2, tcy = t.y * GRID + GRID / 2;
-        const target = s.enemies.find(e => { const d = Math.sqrt((e.x - tcx) ** 2 + (e.y - tcy) ** 2); return d < t.range * GRID; });
-        if (target) {
-          s.bullets.push({ x: tcx, y: tcy, tx: target.x, ty: target.y, speed: 5, damage: t.damage, type: t.type });
-          t.cooldown = info.rate;
-        }
-      });
-
-      // Move bullets
-      s.bullets = s.bullets.filter(b => {
-        const dx = b.tx - b.x, dy = b.ty - b.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 8) {
-          const hit = s.enemies.find(e => Math.sqrt((e.x - b.tx) ** 2 + (e.y - b.ty) ** 2) < GRID);
-          if (hit) { hit.hp -= b.damage; if (b.type === "ice") hit.slow = 60; if (hit.hp <= 0) { s.gold += hit.reward; setGold(s.gold); } }
-          return false;
-        }
-        b.x += (dx / dist) * b.speed;
-        b.y += (dy / dist) * b.speed;
-        return true;
-      });
-
-      // Draw
-      ctx.fillStyle = "#111";
-      ctx.fillRect(0, 0, W, H);
-      // Grid
-      ctx.strokeStyle = "#1a1a1a";
-      for (let x = 0; x <= COLS; x++) { ctx.beginPath(); ctx.moveTo(x * GRID, 0); ctx.lineTo(x * GRID, H); ctx.stroke(); }
-      for (let y = 0; y <= ROWS; y++) { ctx.beginPath(); ctx.moveTo(0, y * GRID); ctx.lineTo(W, y * GRID); ctx.stroke(); }
-      // Path
-      PATH.forEach(([px, py]) => { ctx.fillStyle = "#1a1a2e"; ctx.fillRect(px * GRID, py * GRID, GRID, GRID); });
-      // Towers
-      s.towers.forEach(t => {
-        const info = TOWER_INFO[t.type];
-        ctx.fillStyle = info.color;
-        ctx.fillRect(t.x * GRID + 4, t.y * GRID + 4, GRID - 8, GRID - 8);
-        ctx.fillStyle = "#fff";
-        ctx.font = "10px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(t.type === "arrow" ? "弓" : t.type === "cannon" ? "炮" : "冰", t.x * GRID + GRID / 2, t.y * GRID + GRID / 2 + 4);
-      });
-      // Enemies
-      s.enemies.forEach(e => {
-        ctx.fillStyle = e.slow > 0 ? "#65b8ff" : "#ff4444";
-        ctx.beginPath(); ctx.arc(e.x, e.y, 10, 0, Math.PI * 2); ctx.fill();
-        // HP bar
-        ctx.fillStyle = "#333"; ctx.fillRect(e.x - 12, e.y - 16, 24, 4);
-        ctx.fillStyle = "#2ba640"; ctx.fillRect(e.x - 12, e.y - 16, 24 * (e.hp / e.maxHp), 4);
-      });
-      // Bullets
-      s.bullets.forEach(b => {
-        ctx.fillStyle = TOWER_INFO[b.type].color;
-        ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, Math.PI * 2); ctx.fill();
-      });
-
-      raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
   }, [started]);
 
   return (

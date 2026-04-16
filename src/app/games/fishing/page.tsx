@@ -6,11 +6,11 @@ import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
-import { ParticleSystem } from "@/lib/game-engine/particle-system";
 import { InputHandler } from "@/lib/game-engine/input-handler";
-import { easeOutQuad, lerp, updateShake, applyShake, updateScorePopups, renderScorePopups } from "@/lib/game-engine/animation-utils";
+import { lerp, updateShake, updateScorePopups } from "@/lib/game-engine/animation-utils";
 import type { ScorePopup, ShakeState } from "@/lib/game-engine/animation-utils";
-import { drawGradientBackground, drawText, drawGlow, drawRoundedRect } from "@/lib/game-engine/render-utils";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Types ───────────────────────────────────────────────
 interface Fish {
@@ -34,19 +34,25 @@ interface SwimmingFish {
   color: string;
   wobble: number;
   wobbleSpeed: number;
-  depth: number; // 0-1 for parallax
+  depth: number;
+}
+
+interface Particle {
+  x: number; y: number; vx: number; vy: number;
+  life: number; maxLife: number; color: string; size: number;
+  gravity: number;
 }
 
 interface GameState {
   gold: number;
   bait: number;
-  collection: string[];    // fish names collected
-  caught: CaughtFish[];    // recent catches
-  totalGold: number;       // total gold earned (score)
+  collection: string[];
+  caught: CaughtFish[];
+  totalGold: number;
   phase: "idle" | "casting" | "waiting" | "bite" | "reeling" | "caught" | "missed";
-  castTime: number;        // time since cast
-  biteDelay: number;       // random delay before bite
-  biteTimer: number;       // time window to reel in
+  castTime: number;
+  biteDelay: number;
+  biteTimer: number;
   currentFish: Fish | null;
   paused: boolean;
   over: boolean;
@@ -58,24 +64,26 @@ interface AnimState {
   targetBgHue: number;
   shake: ShakeState;
   scorePopups: ScorePopup[];
+  particles: Particle[];
   waveOffset: number;
-  lineY: number;           // fishing line end Y
+  lineY: number;
   lineTargetY: number;
-  bobberBob: number;       // bobber bobbing animation
-  catchScale: number;      // scale animation for catch display
-  catchFadeIn: number;     // fade in for catch result
-  alertPulse: number;      // pulse for bite alert
+  bobberBob: number;
+  catchScale: number;
+  catchFadeIn: number;
+  alertPulse: number;
   swimmingFish: SwimmingFish[];
 }
 
 // ─── Constants ───────────────────────────────────────────
 const GAME_ID = "fishing";
 const CANVAS_H = 360;
-const WATER_START = 100;   // Y where water begins
-const BITE_WINDOW = 2.0;   // seconds to tap after bite
+const WATER_START = 100;
+const BITE_WINDOW = 2.0;
 const MIN_BITE_DELAY = 1.5;
 const MAX_BITE_DELAY = 3.5;
 const MAX_SWIMMING_FISH = 12;
+const MAX_PARTICLES = 120;
 
 const FISH_POOL: Fish[] = [
   { name: "鲫鱼", emoji: "F1", rarity: "common", weight: "0.3-1.2kg", price: 5, chance: 30 },
@@ -174,93 +182,115 @@ function createSwimmingFish(w: number, h: number): SwimmingFish {
   };
 }
 
-// ─── Renderer ────────────────────────────────────────────
-function renderGame(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
+function spawnParticles(
+  particles: Particle[], x: number, y: number,
+  colors: string[], count: number,
+  opts?: { speed?: [number, number]; size?: [number, number]; life?: [number, number]; angle?: [number, number]; gravity?: number },
+) {
+  const [sMin, sMax] = opts?.speed ?? [40, 100];
+  const [szMin, szMax] = opts?.size ?? [2, 4];
+  const [lMin, lMax] = opts?.life ?? [0.3, 0.7];
+  const [aMin, aMax] = opts?.angle ?? [0, Math.PI * 2];
+  const grav = opts?.gravity ?? 0;
+  for (let i = 0; i < count && particles.length < MAX_PARTICLES; i++) {
+    const angle = aMin + Math.random() * (aMax - aMin);
+    const speed = sMin + Math.random() * (sMax - sMin);
+    const life = lMin + Math.random() * (lMax - lMin);
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life, maxLife: life,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size: szMin + Math.random() * (szMax - szMin),
+      gravity: grav,
+    });
+  }
+}
+
+function spawnCelebration(particles: Particle[], cx: number, cy: number) {
+  const colors = ["#ff4444", "#f0b90b", "#3ea6ff", "#a855f7", "#22c55e", "#ffffff"];
+  spawnParticles(particles, cx, cy, colors, 30, {
+    speed: [80, 200], size: [2, 5], life: [0.5, 1.2], gravity: 120,
+  });
+}
+
+// ─── PixiJS Renderer ─────────────────────────────────────
+function colorToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
+function drawGamePixi(
+  g: PixiGraphics,
+  texts: Map<string, PixiText>,
   game: GameState,
   anim: AnimState,
-  particles: ParticleSystem,
-  dpr: number,
+  w: number,
+  h: number,
 ): void {
-  const w = canvas.width / dpr;
-  const h = canvas.height / dpr;
+  g.clear();
+  texts.forEach(t => { t.visible = false; });
 
-  ctx.save();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const showText = (key: string, text: string, x: number, y: number, ax = 0, ay = 0, alpha = 1) => {
+    const t = texts.get(key);
+    if (!t) return;
+    t.text = text; t.x = x; t.y = y; t.anchor.set(ax, ay); t.alpha = alpha; t.visible = true;
+  };
 
-  // Sky gradient
-  const skyGrad = ctx.createLinearGradient(0, 0, 0, WATER_START);
-  skyGrad.addColorStop(0, `hsl(${anim.bgHue}, 60%, 12%)`);
-  skyGrad.addColorStop(1, `hsl(${anim.bgHue + 10}, 50%, 8%)`);
-  ctx.fillStyle = skyGrad;
-  ctx.fillRect(0, 0, w, WATER_START);
+  // Shake offset
+  let shakeX = 0, shakeY = 0;
+  if (anim.shake.time > 0) {
+    const mag = anim.shake.intensity * (anim.shake.time / Math.max(anim.shake.time + 0.001, 1));
+    shakeX = (Math.random() * 2 - 1) * mag;
+    shakeY = (Math.random() * 2 - 1) * mag;
+  }
 
-  // Water gradient
-  const waterGrad = ctx.createLinearGradient(0, WATER_START, 0, h);
-  waterGrad.addColorStop(0, "rgba(10, 60, 120, 0.95)");
-  waterGrad.addColorStop(0.5, "rgba(5, 35, 80, 0.98)");
-  waterGrad.addColorStop(1, "rgba(2, 15, 40, 1)");
-  ctx.fillStyle = waterGrad;
-  ctx.fillRect(0, WATER_START, w, h - WATER_START);
+  // Sky background (approximate gradient with bands)
+  const skyHue = anim.bgHue;
+  // Top sky
+  g.rect(shakeX, shakeY, w, WATER_START).fill({ color: colorToNum(hslToHex(skyHue, 60, 12)) });
 
-  // Apply shake
-  applyShake(ctx, anim.shake);
+  // Water background
+  g.rect(shakeX, WATER_START + shakeY, w, h - WATER_START).fill({ color: 0x0a3c78 });
+  // Deeper water
+  g.rect(shakeX, WATER_START + (h - WATER_START) * 0.5 + shakeY, w, (h - WATER_START) * 0.5).fill({ color: 0x052350, alpha: 0.8 });
+  g.rect(shakeX, h - 40 + shakeY, w, 40).fill({ color: 0x020f28, alpha: 0.6 });
 
-  // Animated waves
-  ctx.save();
+  // Animated waves (simplified with rects for performance)
   for (let layer = 0; layer < 3; layer++) {
     const alpha = 0.15 - layer * 0.04;
     const speed = 1 + layer * 0.5;
     const amplitude = 4 + layer * 2;
-    ctx.beginPath();
-    ctx.moveTo(0, WATER_START);
-    for (let x = 0; x <= w; x += 4) {
-      const y = WATER_START + Math.sin((x * 0.02) + anim.waveOffset * speed + layer * 2) * amplitude
+    for (let x = 0; x < w; x += 8) {
+      const waveY = WATER_START + Math.sin((x * 0.02) + anim.waveOffset * speed + layer * 2) * amplitude
         + Math.sin((x * 0.01) + anim.waveOffset * speed * 0.7) * amplitude * 0.5;
-      ctx.lineTo(x, y);
+      g.rect(x + shakeX, waveY + shakeY, 8, h - waveY).fill({ color: 0x3ea6ff, alpha });
     }
-    ctx.lineTo(w, h);
-    ctx.lineTo(0, h);
-    ctx.closePath();
-    ctx.fillStyle = `rgba(62, 166, 255, ${alpha})`;
-    ctx.fill();
   }
-  ctx.restore();
 
-  // Swimming fish (behind fishing line)
+  // Swimming fish
   for (const sf of anim.swimmingFish) {
     const wobbleY = Math.sin(sf.wobble) * 3 * sf.depth;
-    const fx = sf.x;
-    const fy = sf.y + wobbleY;
-    const facing = sf.vx > 0 ? 1 : -1;
+    const fx = sf.x + shakeX;
+    const fy = sf.y + wobbleY + shakeY;
+    const fishAlpha = 0.3 + sf.depth * 0.5;
+    const fc = colorToNum(sf.color);
 
-    ctx.save();
-    ctx.globalAlpha = 0.3 + sf.depth * 0.5;
-    ctx.translate(fx, fy);
-    ctx.scale(facing, 1);
-
-    // Fish body (ellipse)
-    ctx.beginPath();
-    ctx.ellipse(0, 0, sf.size, sf.size * 0.5, 0, 0, Math.PI * 2);
-    ctx.fillStyle = sf.color;
-    ctx.fill();
+    // Fish body (ellipse approximated with circle)
+    g.ellipse(fx, fy, sf.size, sf.size * 0.5).fill({ color: fc, alpha: fishAlpha });
 
     // Tail
-    ctx.beginPath();
-    ctx.moveTo(-sf.size, 0);
-    ctx.lineTo(-sf.size - sf.size * 0.5, -sf.size * 0.4);
-    ctx.lineTo(-sf.size - sf.size * 0.5, sf.size * 0.4);
-    ctx.closePath();
-    ctx.fill();
+    const dir = sf.vx > 0 ? -1 : 1;
+    const tx = fx + dir * sf.size;
+    g.moveTo(tx, fy)
+      .lineTo(tx + dir * sf.size * 0.5, fy - sf.size * 0.4)
+      .lineTo(tx + dir * sf.size * 0.5, fy + sf.size * 0.4)
+      .closePath().fill({ color: fc, alpha: fishAlpha });
 
     // Eye
-    ctx.beginPath();
-    ctx.arc(sf.size * 0.4, -sf.size * 0.1, sf.size * 0.12, 0, Math.PI * 2);
-    ctx.fillStyle = "#fff";
-    ctx.fill();
-
-    ctx.restore();
+    const ex = fx + (sf.vx > 0 ? 1 : -1) * sf.size * 0.4;
+    g.circle(ex, fy - sf.size * 0.1, sf.size * 0.12).fill({ color: 0xffffff, alpha: fishAlpha });
   }
 
   // Fishing rod + line
@@ -268,51 +298,37 @@ function renderGame(
   const rodTipY = 20;
 
   if (game.phase !== "idle") {
-    // Rod (simple line from top)
-    ctx.strokeStyle = "#8B7355";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(rodX - 30, -5);
-    ctx.lineTo(rodX, rodTipY);
-    ctx.stroke();
+    // Rod
+    g.moveTo(rodX - 30 + shakeX, -5 + shakeY)
+      .lineTo(rodX + shakeX, rodTipY + shakeY)
+      .stroke({ color: 0x8b7355, width: 3 });
 
     // Fishing line
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(rodX, rodTipY);
-    ctx.lineTo(rodX, anim.lineY);
-    ctx.stroke();
+    g.moveTo(rodX + shakeX, rodTipY + shakeY)
+      .lineTo(rodX + shakeX, anim.lineY + shakeY)
+      .stroke({ color: 0xffffff, width: 1, alpha: 0.5 });
 
     // Bobber
     const bobberY = Math.min(anim.lineY, WATER_START + 10);
     const bobY = bobberY + Math.sin(anim.bobberBob) * 3;
 
-    // Bobber body
-    ctx.beginPath();
-    ctx.arc(rodX, bobY, 5, 0, Math.PI * 2);
-    ctx.fillStyle = "#ff4444";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(rodX, bobY - 4, 3, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffffff";
-    ctx.fill();
+    g.circle(rodX + shakeX, bobY + shakeY, 5).fill({ color: 0xff4444 });
+    g.circle(rodX + shakeX, bobY - 4 + shakeY, 3).fill({ color: 0xffffff });
 
     // Line from bobber to hook
     if (anim.lineY > bobberY + 10) {
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(rodX, bobY + 5);
-      ctx.lineTo(rodX, anim.lineY);
-      ctx.stroke();
+      g.moveTo(rodX + shakeX, bobY + 5 + shakeY)
+        .lineTo(rodX + shakeX, anim.lineY + shakeY)
+        .stroke({ color: 0xffffff, width: 0.5, alpha: 0.3 });
 
-      // Hook
-      ctx.strokeStyle = "#ccc";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(rodX + 3, anim.lineY, 4, -Math.PI * 0.5, Math.PI, false);
-      ctx.stroke();
+      // Hook (small arc approximated)
+      const hx = rodX + 3 + shakeX;
+      const hy = anim.lineY + shakeY;
+      g.moveTo(hx, hy - 4)
+        .lineTo(hx + 3, hy)
+        .lineTo(hx, hy + 4)
+        .lineTo(hx - 2, hy + 2)
+        .stroke({ color: 0xcccccc, width: 1.5 });
     }
   }
 
@@ -321,122 +337,96 @@ function renderGame(
     const pulse = 0.5 + 0.5 * Math.sin(anim.alertPulse * 8);
     const alertY = WATER_START - 30;
 
-    // Exclamation mark
-    drawGlow(ctx, rodX, alertY, 30, "#ff4444", pulse * 0.6);
-    ctx.save();
-    ctx.font = `bold ${20 + pulse * 6}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = `rgba(255, 68, 68, ${0.7 + pulse * 0.3})`;
-    ctx.fillText("? 上钩了！", rodX, alertY);
-    ctx.restore();
+    // Glow circle
+    g.circle(rodX + shakeX, alertY + shakeY, 30).fill({ color: 0xff4444, alpha: pulse * 0.3 });
+
+    // Alert text
+    showText("alert_text", "! 上钩了！", rodX + shakeX, alertY + shakeY, 0.5, 0.5, 0.7 + pulse * 0.3);
 
     // Timer bar
     const barW = 120;
     const barH = 6;
-    const barX = rodX - barW / 2;
-    const barY = alertY + 18;
+    const barX = rodX - barW / 2 + shakeX;
+    const barY = alertY + 18 + shakeY;
     const remaining = Math.max(0, game.biteTimer / BITE_WINDOW);
 
-    drawRoundedRect(ctx, barX, barY, barW, barH, 3);
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    ctx.fill();
-
-    drawRoundedRect(ctx, barX, barY, barW * remaining, barH, 3);
-    ctx.fillStyle = remaining > 0.3 ? "#22c55e" : "#ff4444";
-    ctx.fill();
+    g.roundRect(barX, barY, barW, barH, 3).fill({ color: 0x000000, alpha: 0.5 });
+    if (remaining > 0) {
+      g.roundRect(barX, barY, barW * remaining, barH, 3).fill({ color: remaining > 0.3 ? 0x22c55e : 0xff4444 });
+    }
   }
 
   // Waiting text
   if (game.phase === "waiting") {
     const dots = ".".repeat(1 + Math.floor(anim.time * 2) % 3);
-    ctx.save();
-    ctx.font = "14px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(62, 166, 255, 0.7)";
-    ctx.fillText(`等待鱼上钩${dots}`, rodX, WATER_START - 15);
-    ctx.restore();
+    showText("waiting_text", `等待鱼上钩${dots}`, rodX + shakeX, WATER_START - 15 + shakeY, 0.5, 0.5, 0.7);
   }
 
   // Catch result display
   if (game.phase === "caught" && game.currentFish) {
     const fish = game.currentFish;
     const cy = h / 2 - 20;
-    const scale = easeOutQuad(Math.min(1, anim.catchScale));
     const alpha = Math.min(1, anim.catchFadeIn);
 
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(rodX, cy);
-    ctx.scale(scale, scale);
-
-    // Glow behind fish
-    drawGlow(ctx, 0, 0, 60, RARITY_COLORS[fish.rarity], 0.5);
+    // Glow
+    g.circle(rodX + shakeX, cy + shakeY, 60).fill({ color: colorToNum(RARITY_COLORS[fish.rarity]), alpha: alpha * 0.3 });
 
     // Fish emoji
-    ctx.font = "40px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(fish.emoji, 0, -10);
-
+    showText("catch_emoji", fish.emoji, rodX + shakeX, cy - 10 + shakeY, 0.5, 0.5, alpha);
     // Fish name
-    ctx.font = "bold 16px sans-serif";
-    ctx.fillStyle = RARITY_COLORS[fish.rarity];
-    ctx.fillText(fish.name, 0, 25);
-
+    showText("catch_name", fish.name, rodX + shakeX, cy + 25 + shakeY, 0.5, 0.5, alpha);
     // Rarity + price
-    ctx.font = "12px sans-serif";
-    ctx.fillStyle = "#8a8a8a";
-    ctx.fillText(`${RARITY_LABELS[fish.rarity]} · +${fish.price}金`, 0, 45);
-
-    ctx.restore();
+    showText("catch_info", `${RARITY_LABELS[fish.rarity]} · +${fish.price}金`, rodX + shakeX, cy + 45 + shakeY, 0.5, 0.5, alpha);
   }
 
   // Miss display
   if (game.phase === "missed") {
     const alpha = Math.min(1, anim.catchFadeIn);
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.font = "bold 18px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = "#ff6b6b";
-    ctx.fillText("鱼跑了！", rodX, h / 2 - 10);
-    ctx.font = "13px sans-serif";
-    ctx.fillStyle = "#8a8a8a";
-    ctx.fillText("下次手速快一点", rodX, h / 2 + 15);
-    ctx.restore();
+    showText("miss_text", "鱼跑了！", rodX + shakeX, h / 2 - 10 + shakeY, 0.5, 0.5, alpha);
+    showText("miss_hint", "下次手速快一点", rodX + shakeX, h / 2 + 15 + shakeY, 0.5, 0.5, alpha);
   }
 
   // Idle prompt
   if (game.phase === "idle" && game.bait > 0) {
     const pulse = 0.6 + 0.4 * Math.sin(anim.time * 2);
-    ctx.save();
-    ctx.globalAlpha = pulse;
-    ctx.font = "14px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#8a8a8a";
-    ctx.fillText("点击「抛竿」开始钓鱼", rodX, h / 2);
-    ctx.restore();
+    showText("idle_text", "点击「抛竿」开始钓鱼", rodX + shakeX, h / 2 + shakeY, 0.5, 0.5, pulse);
   }
 
   // Particles
-  particles.render(ctx);
+  for (const p of anim.particles) {
+    if (p.life <= 0) continue;
+    g.circle(p.x + shakeX, p.y + shakeY, p.size).fill({ color: colorToNum(p.color), alpha: Math.max(0, p.life / p.maxLife) });
+  }
 
   // Score popups
-  renderScorePopups(ctx, anim.scorePopups);
+  for (const p of anim.scorePopups) {
+    if (p.life <= 0) continue;
+    const progress = 1 - p.life;
+    const floatY = p.y - progress * 40;
+    const popAlpha = Math.max(0, Math.min(1, p.life));
+    let text = `+${p.value}`;
+    if (p.combo > 1) text += ` x${p.combo}`;
+    showText("popup_0", text, p.x + shakeX, floatY + shakeY, 0.5, 0.5, popAlpha);
+  }
 
   // Pause overlay
   if (game.paused) {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(0, 0, w, h);
-    drawText(ctx, "⏸ 已暂停", w / 2, h / 2, w * 0.8, "#ffffff", 28);
-    drawText(ctx, "点击继续", w / 2, h / 2 + 36, w * 0.6, "#8a8a8a", 14);
+    g.rect(0, 0, w, h).fill({ color: 0x000000, alpha: 0.6 });
+    showText("pause_title", "⏸ 已暂停", w / 2, h / 2, 0.5, 0.5);
+    showText("pause_hint", "点击继续", w / 2, h / 2 + 36, 0.5, 0.5, 0.7);
   }
-
-  ctx.restore();
 }
 
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
 
 // ─── Component ───────────────────────────────────────────
 export default function FishingPage() {
@@ -448,6 +438,7 @@ export default function FishingPage() {
     targetBgHue: 210,
     shake: { time: 0, intensity: 0 },
     scorePopups: [],
+    particles: [],
     waveOffset: 0,
     lineY: 20,
     lineTargetY: 20,
@@ -458,12 +449,13 @@ export default function FishingPage() {
     swimmingFish: [],
   });
   const soundRef = useRef<SoundEngine>(null!);
-  const particlesRef = useRef<ParticleSystem>(null!);
   const inputRef = useRef<InputHandler>(null!);
-  const rafRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(0);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
   const scoreSubmittedRef = useRef(false);
-  const phaseTimerRef = useRef<number>(0); // for auto-transitions
+  const phaseTimerRef = useRef<number>(0);
+  const lastTimeRef = useRef<number>(0);
 
   // React UI state (only for elements outside canvas)
   const [gold, setGold] = useState(0);
@@ -475,10 +467,9 @@ export default function FishingPage() {
   const [paused, setPaused] = useState(false);
   const [, forceUpdate] = useState(0);
 
-  // Initialize sound + particles
+  // Initialize sound
   useEffect(() => {
     soundRef.current = new SoundEngine(GAME_ID);
-    particlesRef.current = new ParticleSystem(300);
   }, []);
 
   // Submit score
@@ -511,13 +502,13 @@ export default function FishingPage() {
     gameRef.current = initGameState();
     const anim = animRef.current;
     anim.scorePopups = [];
+    anim.particles = [];
     anim.shake = { time: 0, intensity: 0 };
     anim.lineY = 20;
     anim.lineTargetY = 20;
     anim.catchScale = 0;
     anim.catchFadeIn = 0;
     anim.targetBgHue = 210;
-    particlesRef.current?.clear();
     scoreSubmittedRef.current = false;
     phaseTimerRef.current = 0;
     setLastCatch(null);
@@ -549,19 +540,14 @@ export default function FishingPage() {
     const canvas = canvasRef.current;
     if (canvas) {
       const dpr = window.devicePixelRatio || 1;
-      const w = canvas.width / dpr;
-      particlesRef.current?.emit(w / 2, WATER_START + 10, {
-        count: 15,
-        color: ["#3ea6ff", "#65b8ff", "#ffffff"],
-        speed: [40, 100],
-        size: [2, 4],
-        life: [0.3, 0.7],
-        angle: [-Math.PI, 0],
-        gravity: 80,
-      });
+      const cw = canvas.width / dpr;
+      spawnParticles(anim.particles, cw / 2, WATER_START + 10,
+        ["#3ea6ff", "#65b8ff", "#ffffff"], 15,
+        { speed: [40, 100], size: [2, 4], life: [0.3, 0.7], angle: [-Math.PI, 0], gravity: 80 },
+      );
     }
 
-    soundRef.current?.playTone(300, 0.15, "sine"); // cast sound
+    soundRef.current?.playTone(300, 0.15, "sine");
     syncUI();
   }, [syncUI]);
 
@@ -587,7 +573,7 @@ export default function FishingPage() {
     const anim = animRef.current;
     anim.catchScale = 0;
     anim.catchFadeIn = 0;
-    anim.targetBgHue = 120; // green for catch
+    anim.targetBgHue = 120;
     anim.shake = { time: 0.3, intensity: 4 };
     phaseTimerRef.current = 0;
 
@@ -595,32 +581,28 @@ export default function FishingPage() {
     const canvas = canvasRef.current;
     if (canvas) {
       const dpr = window.devicePixelRatio || 1;
-      const w = canvas.width / dpr;
-      const h = canvas.height / dpr;
-      const cx = w / 2;
-      const cy = h / 2 - 20;
+      const cw = canvas.width / dpr;
+      const ch = canvas.height / dpr;
+      const cx = cw / 2;
+      const cy = ch / 2 - 20;
 
       if (fish.rarity === "legendary") {
-        particlesRef.current?.emitCelebration(cx, cy);
-        particlesRef.current?.emitCelebration(cx - 40, cy - 20);
-        particlesRef.current?.emitCelebration(cx + 40, cy - 20);
+        spawnCelebration(anim.particles, cx, cy);
+        spawnCelebration(anim.particles, cx - 40, cy - 20);
+        spawnCelebration(anim.particles, cx + 40, cy - 20);
       } else if (fish.rarity === "epic") {
-        particlesRef.current?.emitExplosion(cx, cy, RARITY_COLORS.epic, 30);
+        spawnParticles(anim.particles, cx, cy, [RARITY_COLORS.epic], 30,
+          { speed: [60, 150], size: [2, 5], life: [0.4, 1.0], gravity: 80 });
       } else {
-        particlesRef.current?.emitExplosion(cx, cy, RARITY_COLORS[fish.rarity], 15);
+        spawnParticles(anim.particles, cx, cy, [RARITY_COLORS[fish.rarity]], 15,
+          { speed: [40, 100], size: [2, 4], life: [0.3, 0.8], gravity: 60 });
       }
 
-      // Score popup
       anim.scorePopups.push({
-        x: cx,
-        y: cy - 50,
-        value: fish.price,
-        life: 1.5,
-        combo: 1,
+        x: cx, y: cy - 50, value: fish.price, life: 1.5, combo: 1,
       });
     }
 
-    // Sound based on rarity
     if (fish.rarity === "legendary") {
       soundRef.current?.playLevelUp();
     } else if (fish.rarity === "epic") {
@@ -631,8 +613,6 @@ export default function FishingPage() {
 
     setLastCatch(caught);
     syncUI();
-
-    // Submit score
     submitScore(game.totalGold);
   }, [syncUI, submitScore]);
 
@@ -688,11 +668,12 @@ export default function FishingPage() {
       game.phase = "idle";
       game.paused = false;
       game.currentFish = null;
-      animRef.current.scorePopups = [];
-      animRef.current.lineY = 20;
-      animRef.current.lineTargetY = 20;
-      animRef.current.targetBgHue = 210;
-      particlesRef.current?.clear();
+      const anim = animRef.current;
+      anim.scorePopups = [];
+      anim.particles = [];
+      anim.lineY = 20;
+      anim.lineTargetY = 20;
+      anim.targetBgHue = 210;
       scoreSubmittedRef.current = false;
       if (d.caught && d.caught.length > 0) {
         setLastCatch(d.caught[0]);
@@ -702,151 +683,221 @@ export default function FishingPage() {
     } catch { /* ignore malformed data */ }
   }, [syncUI]);
 
-  // ─── Animation Loop ──────────────────────────────────────
+  // ─── Init game on mount ──────────────────────────────────
   useEffect(() => {
     initGame();
   }, []);
 
+  // ─── PixiJS Game Loop ────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let destroyed = false;
 
-    const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const parent = canvas.parentElement;
-      if (!parent) return;
-      const w = parent.clientWidth;
-      const h = CANVAS_H;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-    };
+    async function initAndRun() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
 
-    resize();
-    window.addEventListener("resize", resize);
+      const parent = canvas!.parentElement;
+      const cw = parent ? parent.clientWidth : 400;
 
-    const loop = (timestamp: number) => {
-      if (!lastTimeRef.current) lastTimeRef.current = timestamp;
-      const rawDt = timestamp - lastTimeRef.current;
-      lastTimeRef.current = timestamp;
-      const dt = Math.min(rawDt, 50) / 1000;
+      const app = await createPixiApp({
+        canvas: canvas!,
+        width: cw,
+        height: CANVAS_H,
+        backgroundColor: 0x0a0a1a,
+        antialias: true,
+      });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      const anim = animRef.current;
-      const game = gameRef.current;
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
 
-      if (game && !game.paused) {
-        anim.time += dt;
-        anim.waveOffset += dt;
-        anim.bobberBob += dt * 3;
+      // Text pool
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-        // Smooth line movement
-        anim.lineY = lerp(anim.lineY, anim.lineTargetY, 0.08);
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 14,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
 
-        // Update shake
-        updateShake(anim.shake, dt);
+      // Pre-create text pool (60-80 texts)
+      makeText("alert_text", { fontSize: 20, fill: "#ff4444", fontWeight: "bold" });
+      makeText("waiting_text", { fontSize: 14, fill: "#3ea6ff" });
+      makeText("catch_emoji", { fontSize: 40 });
+      makeText("catch_name", { fontSize: 16, fill: "#f0b90b", fontWeight: "bold" });
+      makeText("catch_info", { fontSize: 12, fill: "#8a8a8a" });
+      makeText("miss_text", { fontSize: 18, fill: "#ff6b6b", fontWeight: "bold" });
+      makeText("miss_hint", { fontSize: 13, fill: "#8a8a8a" });
+      makeText("idle_text", { fontSize: 14, fill: "#8a8a8a" });
+      makeText("pause_title", { fontSize: 28, fill: "#ffffff", fontWeight: "bold" });
+      makeText("pause_hint", { fontSize: 14, fill: "#8a8a8a" });
+      makeText("popup_0", { fontSize: 18, fill: "#ffd93d", fontWeight: "bold" });
+      // Reserve extra text slots for score popups and dynamic content
+      for (let i = 1; i < 10; i++) {
+        makeText(`popup_${i}`, { fontSize: 18, fill: "#ffd93d", fontWeight: "bold" });
+      }
+      // Extra pool for future use
+      for (let i = 0; i < 60; i++) {
+        makeText(`pool_${i}`, { fontSize: 12, fill: "#ffffff" });
+      }
 
-        // Update score popups
-        updateScorePopups(anim.scorePopups, dt);
+      lastTimeRef.current = 0;
 
-        // Update particles
-        particlesRef.current?.update(dt);
+      // Resize handler
+      const resize = () => {
+        if (destroyed) return;
+        const p = canvas!.parentElement;
+        if (!p) return;
+        const newW = p.clientWidth;
+        app.renderer.resize(newW, CANVAS_H);
+      };
+      resize();
+      window.addEventListener("resize", resize);
 
-        // Smooth bg hue
-        anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.03);
+      app.ticker.add((ticker) => {
+        if (destroyed) return;
+        const dt = Math.min(ticker.deltaMS, 50) / 1000;
 
-        // Swimming fish
-        const dpr = window.devicePixelRatio || 1;
-        const cw = canvas.width / dpr;
-        const ch = canvas.height / dpr;
+        const anim = animRef.current;
+        const game = gameRef.current;
+        if (!game) return;
 
-        // Spawn new fish
-        if (anim.swimmingFish.length < MAX_SWIMMING_FISH && Math.random() < dt * 0.8) {
-          anim.swimmingFish.push(createSwimmingFish(cw, ch));
-        }
+        const rw = app.renderer.width / (window.devicePixelRatio || 1);
+        const rh = CANVAS_H;
 
-        // Update swimming fish
-        let fi = anim.swimmingFish.length;
-        while (fi-- > 0) {
-          const sf = anim.swimmingFish[fi];
-          sf.x += sf.vx * dt;
-          sf.wobble += sf.wobbleSpeed * dt;
-          // Remove if off screen
-          if ((sf.vx > 0 && sf.x > cw + 30) || (sf.vx < 0 && sf.x < -30)) {
-            anim.swimmingFish[fi] = anim.swimmingFish[anim.swimmingFish.length - 1];
-            anim.swimmingFish.pop();
+        if (!game.paused) {
+          anim.time += dt;
+          anim.waveOffset += dt;
+          anim.bobberBob += dt * 3;
+
+          // Smooth line movement
+          anim.lineY = lerp(anim.lineY, anim.lineTargetY, 0.08);
+
+          // Update shake
+          updateShake(anim.shake, dt);
+
+          // Update score popups
+          updateScorePopups(anim.scorePopups, dt);
+
+          // Update particles
+          let pi = anim.particles.length;
+          while (pi-- > 0) {
+            const p = anim.particles[pi];
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.vy += p.gravity * dt;
+            p.life -= dt;
+            p.vx *= 0.97;
+            p.vy *= 0.97;
+            if (p.life <= 0) {
+              anim.particles[pi] = anim.particles[anim.particles.length - 1];
+              anim.particles.pop();
+            }
           }
-        }
 
-        // Phase state machine
-        if (game.phase === "casting") {
-          game.castTime += dt;
-          if (game.castTime > 0.5) {
-            game.phase = "waiting";
-            game.castTime = 0;
-            anim.targetBgHue = 210;
-            syncUI();
+          // Smooth bg hue
+          anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.03);
+
+          // Swimming fish
+          if (anim.swimmingFish.length < MAX_SWIMMING_FISH && Math.random() < dt * 0.8) {
+            anim.swimmingFish.push(createSwimmingFish(rw, rh));
           }
-        } else if (game.phase === "waiting") {
-          game.castTime += dt;
-          if (game.castTime >= game.biteDelay) {
-            game.phase = "bite";
-            game.biteTimer = BITE_WINDOW;
-            anim.alertPulse = 0;
-            soundRef.current?.playTone(800, 0.1, "square"); // bite alert
-            syncUI();
+          let fi = anim.swimmingFish.length;
+          while (fi-- > 0) {
+            const sf = anim.swimmingFish[fi];
+            sf.x += sf.vx * dt;
+            sf.wobble += sf.wobbleSpeed * dt;
+            if ((sf.vx > 0 && sf.x > rw + 30) || (sf.vx < 0 && sf.x < -30)) {
+              anim.swimmingFish[fi] = anim.swimmingFish[anim.swimmingFish.length - 1];
+              anim.swimmingFish.pop();
+            }
           }
-        } else if (game.phase === "bite") {
-          game.biteTimer -= dt;
-          anim.alertPulse += dt;
-          if (game.biteTimer <= 0) {
-            // Missed!
-            game.phase = "missed";
+
+          // Phase state machine
+          if (game.phase === "casting") {
+            game.castTime += dt;
+            if (game.castTime > 0.5) {
+              game.phase = "waiting";
+              game.castTime = 0;
+              anim.targetBgHue = 210;
+              syncUI();
+            }
+          } else if (game.phase === "waiting") {
+            game.castTime += dt;
+            if (game.castTime >= game.biteDelay) {
+              game.phase = "bite";
+              game.biteTimer = BITE_WINDOW;
+              anim.alertPulse = 0;
+              soundRef.current?.playTone(800, 0.1, "square");
+              syncUI();
+            }
+          } else if (game.phase === "bite") {
+            game.biteTimer -= dt;
+            anim.alertPulse += dt;
+            if (game.biteTimer <= 0) {
+              game.phase = "missed";
+              anim.lineTargetY = 20;
+              anim.catchFadeIn = 0;
+              anim.targetBgHue = 0;
+              phaseTimerRef.current = 0;
+              soundRef.current?.playError();
+              syncUI();
+            }
+          } else if (game.phase === "caught") {
+            anim.catchScale = Math.min(1, anim.catchScale + dt * 4);
+            anim.catchFadeIn = Math.min(1, anim.catchFadeIn + dt * 3);
+            phaseTimerRef.current += dt;
             anim.lineTargetY = 20;
-            anim.catchFadeIn = 0;
-            anim.targetBgHue = 0; // red tint
-            phaseTimerRef.current = 0;
-            soundRef.current?.playError();
-            syncUI();
-          }
-        } else if (game.phase === "caught") {
-          anim.catchScale = Math.min(1, anim.catchScale + dt * 4);
-          anim.catchFadeIn = Math.min(1, anim.catchFadeIn + dt * 3);
-          phaseTimerRef.current += dt;
-          anim.lineTargetY = 20;
-          // Auto return to idle after 2.5s
-          if (phaseTimerRef.current > 2.5) {
-            game.phase = "idle";
-            anim.targetBgHue = 210;
-            syncUI();
-          }
-        } else if (game.phase === "missed") {
-          anim.catchFadeIn = Math.min(1, anim.catchFadeIn + dt * 3);
-          phaseTimerRef.current += dt;
-          if (phaseTimerRef.current > 2.0) {
-            game.phase = "idle";
-            anim.targetBgHue = 210;
-            syncUI();
+            if (phaseTimerRef.current > 2.5) {
+              game.phase = "idle";
+              anim.targetBgHue = 210;
+              syncUI();
+            }
+          } else if (game.phase === "missed") {
+            anim.catchFadeIn = Math.min(1, anim.catchFadeIn + dt * 3);
+            phaseTimerRef.current += dt;
+            if (phaseTimerRef.current > 2.0) {
+              game.phase = "idle";
+              anim.targetBgHue = 210;
+              syncUI();
+            }
           }
         }
-      }
 
-      // Render
-      if (game) {
-        const dpr = window.devicePixelRatio || 1;
-        renderGame(ctx, canvas, game, anim, particlesRef.current!, dpr);
-      }
+        // Render
+        drawGamePixi(gfx, texts, game, anim, rw, rh);
+      });
 
-      rafRef.current = requestAnimationFrame(loop);
-    };
+      // Cleanup resize on destroy
+      return () => {
+        window.removeEventListener("resize", resize);
+      };
+    }
 
-    rafRef.current = requestAnimationFrame(loop);
+    const cleanupPromise = initAndRun();
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("resize", resize);
+      destroyed = true;
+      cleanupPromise?.then(cleanup => cleanup?.());
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+        pixiGfxRef.current = null;
+        pixiTextsRef.current.clear();
+      }
     };
   }, [syncUI]);
 
@@ -918,10 +969,8 @@ export default function FishingPage() {
   // ─── Cleanup ───────────────────────────────────────────
   useEffect(() => {
     return () => {
-      cancelAnimationFrame(rafRef.current);
       soundRef.current?.dispose();
       inputRef.current?.dispose();
-      particlesRef.current?.clear();
     };
   }, []);
 

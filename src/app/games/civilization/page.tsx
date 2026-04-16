@@ -10,6 +10,8 @@ import {
   Home, ShoppingBag, Factory, Wheat, GraduationCap, Heart,
   Trash2, Volume2, VolumeX
 } from "lucide-react";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 /* ========== 常量 ========== */
 const GAME_ID = "city-builder";
@@ -39,6 +41,11 @@ const C = {
   panelBorder: "#333333",
 };
 
+/** Convert "#rrggbb" to 0xRRGGBB */
+function hexToNum(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
+}
+
 /* ========== 建筑定义 ========== */
 type BuildingType = "house" | "shop" | "factory" | "farm" | "school" | "hospital";
 interface BuildingDef {
@@ -47,7 +54,7 @@ interface BuildingDef {
   cost: number;
   color: string;
   roofColor: string;
-  size: number; // grid cells (square)
+  size: number;
   effects: {
     population?: number;
     income?: number;
@@ -135,7 +142,7 @@ interface GameState {
   day: number;
   dayTick: number;
   isNight: boolean;
-  speed: number; // 1 or 2
+  speed: number;
   gold: number;
   population: number;
   food: number;
@@ -305,196 +312,32 @@ function spawnNPC(buildings: Building[]): NPC | null {
   };
 }
 
-
-/* ========== 渲染函数 ========== */
-function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hoverGX: number, hoverGY: number) {
-  const { buildings, npcs, cameraX, cameraY, isNight, selectedBuilding, demolishMode } = state;
-
-  // Sky / background
-  const nightAlpha = isNight ? 0.4 : 0;
-  ctx.fillStyle = C.grass;
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.save();
-  ctx.translate(-cameraX, -cameraY);
-
-  // Grid
-  ctx.strokeStyle = C.gridLine;
-  ctx.lineWidth = 0.5;
-  for (let x = 0; x <= COLS; x++) {
-    ctx.beginPath(); ctx.moveTo(x * GRID, 0); ctx.lineTo(x * GRID, ROWS * GRID); ctx.stroke();
-  }
-  for (let y = 0; y <= ROWS; y++) {
-    ctx.beginPath(); ctx.moveTo(0, y * GRID); ctx.lineTo(COLS * GRID, y * GRID); ctx.stroke();
-  }
-
-  // Grass variation
-  for (let y = 0; y < ROWS; y++) {
-    for (let x = 0; x < COLS; x++) {
-      if ((x + y) % 3 === 0) {
-        ctx.fillStyle = C.grassLight;
-        ctx.fillRect(x * GRID + 2, y * GRID + 2, 3, 3);
-      }
-    }
-  }
-
-  // Buildings
-  for (const b of buildings) {
-    const def = BUILDING_DEFS[b.type];
-    const bx = b.gridX * GRID;
-    const by = b.gridY * GRID;
-    const bw = def.size * GRID;
-    const bh = def.size * GRID;
-
-    // Shadow
-    ctx.fillStyle = "rgba(0,0,0,0.3)";
-    ctx.fillRect(bx + 2, by + 2, bw, bh);
-
-    // Body
-    ctx.fillStyle = def.color;
-    ctx.fillRect(bx, by, bw, bh);
-
-    // Roof
-    ctx.fillStyle = def.roofColor;
-    ctx.fillRect(bx, by, bw, bh * 0.3);
-
-    // Border
-    ctx.strokeStyle = "#555";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(bx, by, bw, bh);
-
-    // Level indicator
-    if (b.level > 1) {
-      ctx.fillStyle = C.gold;
-      ctx.font = "bold 8px monospace";
-      ctx.textAlign = "right";
-      ctx.fillText(`Lv${b.level}`, bx + bw - 2, by + bh - 3);
-    }
-
-    // Type icon (text abbreviation)
-    ctx.fillStyle = C.white;
-    ctx.font = "bold 10px monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const label = def.name.charAt(0);
-    ctx.fillText(label, bx + bw / 2, by + bh / 2 + 2);
-  }
-
-  // NPCs
-  for (const npc of npcs) {
-    // Body
-    ctx.fillStyle = npc.color;
-    ctx.beginPath();
-    ctx.arc(npc.x, npc.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-    // Head
-    ctx.fillStyle = "#ddd";
-    ctx.beginPath();
-    ctx.arc(npc.x, npc.y - 4, 2, 0, Math.PI * 2);
-    ctx.fill();
-    // Satisfaction indicator
-    if (!npc.satisfied) {
-      ctx.fillStyle = C.red;
-      ctx.font = "bold 6px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("!", npc.x, npc.y - 9);
-    }
-  }
-
-  // Hover preview
-  if (selectedBuilding && hoverGX >= 0 && hoverGY >= 0) {
-    const def = BUILDING_DEFS[selectedBuilding];
-    const sz = def.size;
-    const ok = canPlace(buildings, selectedBuilding, hoverGX, hoverGY);
-    ctx.fillStyle = ok ? "rgba(62,166,255,0.25)" : "rgba(255,68,68,0.25)";
-    ctx.fillRect(hoverGX * GRID, hoverGY * GRID, sz * GRID, sz * GRID);
-    ctx.strokeStyle = ok ? C.primary : C.red;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(hoverGX * GRID, hoverGY * GRID, sz * GRID, sz * GRID);
-    // Label
-    ctx.fillStyle = ok ? C.primary : C.red;
-    ctx.font = "bold 10px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText(def.name, (hoverGX + sz / 2) * GRID, (hoverGY + sz / 2) * GRID + 4);
-  }
-
-  // Demolish hover
-  if (demolishMode && hoverGX >= 0 && hoverGY >= 0) {
-    const target = buildings.find(b => {
-      const sz = BUILDING_DEFS[b.type].size;
-      return hoverGX >= b.gridX && hoverGX < b.gridX + sz && hoverGY >= b.gridY && hoverGY < b.gridY + sz;
-    });
-    if (target) {
-      const def = BUILDING_DEFS[target.type];
-      ctx.fillStyle = "rgba(255,68,68,0.3)";
-      ctx.fillRect(target.gridX * GRID, target.gridY * GRID, def.size * GRID, def.size * GRID);
-      ctx.strokeStyle = C.red;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(target.gridX * GRID, target.gridY * GRID, def.size * GRID, def.size * GRID);
-    }
-  }
-
-  ctx.restore();
-
-  // Night overlay
-  if (nightAlpha > 0) {
-    ctx.fillStyle = `rgba(0,0,20,${nightAlpha})`;
-    ctx.fillRect(0, 0, W, H);
-  }
-
-  // Day/night indicator bar at top
-  const dayProgress = state.dayTick / DAY_TICKS;
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  ctx.fillRect(0, 0, W, 16);
-  // Sun/moon position
-  const sunX = dayProgress * W;
-  if (!isNight) {
-    ctx.fillStyle = "#f0b90b";
-    ctx.beginPath(); ctx.arc(sunX, 8, 5, 0, Math.PI * 2); ctx.fill();
-  } else {
-    ctx.fillStyle = "#aaaacc";
-    ctx.beginPath(); ctx.arc(sunX, 8, 4, 0, Math.PI * 2); ctx.fill();
-  }
-  // Day label
-  ctx.fillStyle = C.white;
-  ctx.font = "bold 9px monospace";
-  ctx.textAlign = "left";
-  ctx.fillText(`第${state.day}天 ${isNight ? "夜晚" : "白天"}`, 4, 12);
-}
-
 /* ========== 主组件 ========== */
 export default function CityBuilderPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef<GameState>({ ...createInitialState("normal"), phase: "title" });
-  const animRef = useRef<number>(0);
   const hoverRef = useRef({ gx: -1, gy: -1 });
   const [, forceUpdate] = useState(0);
   const rerender = useCallback(() => forceUpdate(n => n + 1), []);
 
+  /* ---- PixiJS refs ---- */
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
+
   const state = stateRef.current;
 
-  /* ---- 游戏循环 ---- */
-  const gameLoop = useCallback(() => {
+  /* ---- 游戏逻辑 tick (called from pixi ticker) ---- */
+  const tickGame = useCallback(() => {
     const s = stateRef.current;
-    if (s.phase !== "playing") {
-      // Still draw
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        if (ctx) drawGame(ctx, s, hoverRef.current.gx, hoverRef.current.gy);
-      }
-      animRef.current = requestAnimationFrame(gameLoop);
-      return;
-    }
+    if (s.phase !== "playing") return;
 
     const diff = DIFFICULTIES.find(d => d.id === s.difficulty)!;
     const ticksPerFrame = s.speed;
 
     for (let tick = 0; tick < ticksPerFrame; tick++) {
       s.dayTick++;
-
-      // Day/night transition
-      const wasNight = s.isNight;
       s.isNight = s.dayTick > DAY_TICKS * 0.6;
 
       // New day
@@ -503,7 +346,6 @@ export default function CityBuilderPage() {
         s.day++;
         soundMgr.play("day");
 
-        // Recalc
         const res = recalcResources(s.buildings, diff);
         s.maxPopulation = res.maxPop;
         s.totalJobs = res.totalJobs;
@@ -511,22 +353,18 @@ export default function CityBuilderPage() {
         s.totalFoodProd = res.foodProd;
         s.totalMaterialProd = res.matProd;
 
-        // Income
         s.gold += res.income;
         s.food += res.foodProd;
         s.material += res.matProd;
 
-        // Consumption
         const foodConsume = Math.floor(s.population * 2 * diff.consumeMul);
         s.food -= foodConsume;
 
-        // Happiness from resources
         s.happiness = res.hap;
         if (s.food < 0) { s.happiness -= 20; s.food = 0; }
         if (s.population > s.totalJobs && s.totalJobs > 0) s.happiness -= 10;
         s.happiness = Math.max(0, Math.min(100, s.happiness));
 
-        // Population growth/decline
         if (s.food > 0 && s.happiness > 30 && s.population < s.maxPopulation) {
           const growth = Math.min(2, s.maxPopulation - s.population);
           s.population += growth;
@@ -542,10 +380,8 @@ export default function CityBuilderPage() {
           if (loss > 0) s.log.push(`第${s.day}天: -${loss}人口饥荒`);
         }
 
-        // Score
         s.score = s.population * 10 + s.buildings.length * 5 + s.day + Math.floor(s.happiness / 2);
 
-        // Random events
         if (Math.random() < diff.eventChance && s.day > 3) {
           const events = [
             { msg: `第${s.day}天: 商人来访，+50金币`, effect: () => { s.gold += 50; } },
@@ -560,23 +396,18 @@ export default function CityBuilderPage() {
           soundMgr.play("alert");
         }
 
-        // Keep log trimmed
         if (s.log.length > 20) s.log = s.log.slice(-20);
 
-        // Sync NPC count with population
         while (s.npcs.length < Math.min(s.population, 40)) {
           const npc = spawnNPC(s.buildings);
-          if (npc) s.npcs.push(npc);
-          else break;
+          if (npc) s.npcs.push(npc); else break;
         }
         while (s.npcs.length > s.population) s.npcs.pop();
 
-        // Victory check: 100 population
         if (s.population >= 100) {
           s.phase = "victory";
           s.log.push("城市繁荣！人口达到100，胜利！");
           soundMgr.play("victory");
-          // Submit score
           try {
             fetchWithAuth("/api/games/scores", {
               method: "POST",
@@ -588,7 +419,6 @@ export default function CityBuilderPage() {
           return;
         }
 
-        // Game over: 0 population after day 5 with buildings
         if (s.population <= 0 && s.day > 5 && s.buildings.length > 0) {
           s.phase = "gameover";
           s.log.push("城市荒废，所有居民离开了...");
@@ -606,7 +436,6 @@ export default function CityBuilderPage() {
         const dy = npc.targetY - npc.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < 2) {
-          // Pick new target
           if (s.buildings.length > 0) {
             const tb = s.buildings[Math.floor(Math.random() * s.buildings.length)];
             const def = BUILDING_DEFS[tb.type];
@@ -620,26 +449,212 @@ export default function CityBuilderPage() {
           npc.x += (dx / dist) * npc.speed;
           npc.y += (dy / dist) * npc.speed;
         }
-        // Satisfaction
         npc.satisfied = s.happiness > 30 && s.food > 0;
       }
     }
-
-    // Draw
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      if (ctx) drawGame(ctx, s, hoverRef.current.gx, hoverRef.current.gy);
-    }
-
-    animRef.current = requestAnimationFrame(gameLoop);
   }, [rerender]);
 
+  /* ---- PixiJS init + render loop ---- */
   useEffect(() => {
-    animRef.current = requestAnimationFrame(gameLoop);
-    return () => cancelAnimationFrame(animRef.current);
-  }, [gameLoop]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let destroyed = false;
 
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: hexToNum(C.grass), antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
+
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
+
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
+
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 10,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "monospace",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // Pre-create text pool (70 objects)
+      for (let i = 0; i < 70; i++) makeText(`t${i}`, { fontSize: 10 });
+
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => {
+        if (textIdx >= 70) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 10;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      const cn = hexToNum;
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+
+        // Run game logic
+        tickGame();
+
+        // Clear graphics each frame
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const s = stateRef.current;
+        const { buildings, npcs, cameraX, cameraY, isNight, selectedBuilding, demolishMode } = s;
+        const hgx = hoverRef.current.gx;
+        const hgy = hoverRef.current.gy;
+
+        // Background
+        g.rect(0, 0, W, H).fill({ color: cn(C.grass) });
+
+        // Grid lines (offset by camera)
+        for (let x = 0; x <= COLS; x++) {
+          g.rect(x * GRID - cameraX, 0 - cameraY, 0.5, ROWS * GRID).fill({ color: cn(C.gridLine), alpha: 0.5 });
+        }
+        for (let y = 0; y <= ROWS; y++) {
+          g.rect(0 - cameraX, y * GRID - cameraY, COLS * GRID, 0.5).fill({ color: cn(C.gridLine), alpha: 0.5 });
+        }
+
+        // Grass variation
+        for (let y = 0; y < ROWS; y++) {
+          for (let x = 0; x < COLS; x++) {
+            if ((x + y) % 3 === 0) {
+              g.rect(x * GRID + 2 - cameraX, y * GRID + 2 - cameraY, 3, 3).fill({ color: cn(C.grassLight) });
+            }
+          }
+        }
+
+        // Buildings
+        for (const b of buildings) {
+          const def = BUILDING_DEFS[b.type];
+          const bx = b.gridX * GRID - cameraX;
+          const by = b.gridY * GRID - cameraY;
+          const bw = def.size * GRID;
+          const bh = def.size * GRID;
+
+          // Shadow
+          g.rect(bx + 2, by + 2, bw, bh).fill({ color: 0x000000, alpha: 0.3 });
+          // Body
+          g.rect(bx, by, bw, bh).fill({ color: cn(def.color) });
+          // Roof
+          g.rect(bx, by, bw, bh * 0.3).fill({ color: cn(def.roofColor) });
+          // Border
+          g.rect(bx, by, bw, 1).fill({ color: 0x555555 });
+          g.rect(bx, by + bh - 1, bw, 1).fill({ color: 0x555555 });
+          g.rect(bx, by, 1, bh).fill({ color: 0x555555 });
+          g.rect(bx + bw - 1, by, 1, bh).fill({ color: 0x555555 });
+
+          // Level indicator
+          if (b.level > 1) {
+            showText(`Lv${b.level}`, bx + bw - 2, by + bh - 3, { fill: C.gold, fontSize: 8, fontWeight: "bold", ax: 1, ay: 1 });
+          }
+
+          // Type label
+          const label = def.name.charAt(0);
+          showText(label, bx + bw / 2, by + bh / 2 + 2, { fill: C.white, fontSize: 10, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+        }
+
+        // NPCs
+        for (const npc of npcs) {
+          const nx = npc.x - cameraX;
+          const ny = npc.y - cameraY;
+          // Body
+          g.circle(nx, ny, 3).fill({ color: cn(npc.color) });
+          // Head
+          g.circle(nx, ny - 4, 2).fill({ color: 0xdddddd });
+          // Satisfaction indicator
+          if (!npc.satisfied) {
+            showText("!", nx, ny - 9, { fill: C.red, fontSize: 6, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          }
+        }
+
+        // Hover preview
+        if (selectedBuilding && hgx >= 0 && hgy >= 0) {
+          const def = BUILDING_DEFS[selectedBuilding];
+          const sz = def.size;
+          const ok = canPlace(buildings, selectedBuilding, hgx, hgy);
+          const hx = hgx * GRID - cameraX;
+          const hy = hgy * GRID - cameraY;
+          g.rect(hx, hy, sz * GRID, sz * GRID).fill({ color: ok ? cn(C.primary) : cn(C.red), alpha: 0.25 });
+          // Border for hover
+          g.rect(hx, hy, sz * GRID, 2).fill({ color: ok ? cn(C.primary) : cn(C.red) });
+          g.rect(hx, hy + sz * GRID - 2, sz * GRID, 2).fill({ color: ok ? cn(C.primary) : cn(C.red) });
+          g.rect(hx, hy, 2, sz * GRID).fill({ color: ok ? cn(C.primary) : cn(C.red) });
+          g.rect(hx + sz * GRID - 2, hy, 2, sz * GRID).fill({ color: ok ? cn(C.primary) : cn(C.red) });
+          showText(def.name, hx + (sz * GRID) / 2, hy + (sz * GRID) / 2 + 4, { fill: ok ? C.primary : C.red, fontSize: 10, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+        }
+
+        // Demolish hover
+        if (demolishMode && hgx >= 0 && hgy >= 0) {
+          const target = buildings.find(b => {
+            const sz = BUILDING_DEFS[b.type].size;
+            return hgx >= b.gridX && hgx < b.gridX + sz && hgy >= b.gridY && hgy < b.gridY + sz;
+          });
+          if (target) {
+            const def = BUILDING_DEFS[target.type];
+            const tx = target.gridX * GRID - cameraX;
+            const ty = target.gridY * GRID - cameraY;
+            g.rect(tx, ty, def.size * GRID, def.size * GRID).fill({ color: cn(C.red), alpha: 0.3 });
+            g.rect(tx, ty, def.size * GRID, 2).fill({ color: cn(C.red) });
+            g.rect(tx, ty + def.size * GRID - 2, def.size * GRID, 2).fill({ color: cn(C.red) });
+            g.rect(tx, ty, 2, def.size * GRID).fill({ color: cn(C.red) });
+            g.rect(tx + def.size * GRID - 2, ty, 2, def.size * GRID).fill({ color: cn(C.red) });
+          }
+        }
+
+        // Night overlay
+        if (isNight) {
+          g.rect(0, 0, W, H).fill({ color: 0x000014, alpha: 0.4 });
+        }
+
+        // Day/night indicator bar at top
+        const dayProgress = s.dayTick / DAY_TICKS;
+        g.rect(0, 0, W, 16).fill({ color: 0x000000, alpha: 0.5 });
+        const sunX = dayProgress * W;
+        if (!isNight) {
+          g.circle(sunX, 8, 5).fill({ color: cn(C.gold) });
+        } else {
+          g.circle(sunX, 8, 4).fill({ color: 0xaaaacc });
+        }
+        showText(`第${s.day}天 ${isNight ? "夜晚" : "白天"}`, 4, 3, { fill: C.white, fontSize: 9, fontWeight: "bold" });
+      });
+    }
+
+    initPixi();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
+    };
+  }, [tickGame]);
 
   /* ---- 输入处理 ---- */
   const getGridPos = useCallback((clientX: number, clientY: number) => {
@@ -659,7 +674,6 @@ export default function CityBuilderPage() {
     const { gx, gy } = getGridPos(e.clientX, e.clientY);
     if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
 
-    // Demolish mode
     if (s.demolishMode) {
       const idx = s.buildings.findIndex(b => {
         const sz = BUILDING_DEFS[b.type].size;
@@ -673,7 +687,6 @@ export default function CityBuilderPage() {
         s.buildings.splice(idx, 1);
         s.log.push(`拆除了${def.name}，回收${refund}金币`);
         soundMgr.play("demolish");
-        // Recalc
         const diff = DIFFICULTIES.find(d => d.id === s.difficulty)!;
         const res = recalcResources(s.buildings, diff);
         s.maxPopulation = res.maxPop;
@@ -686,7 +699,6 @@ export default function CityBuilderPage() {
       return;
     }
 
-    // Build mode
     if (s.selectedBuilding) {
       const def = BUILDING_DEFS[s.selectedBuilding];
       const diff = DIFFICULTIES.find(d => d.id === s.difficulty)!;
@@ -718,7 +730,6 @@ export default function CityBuilderPage() {
       s.log.push(`建造了${def.name}（-${cost}金币）`);
       soundMgr.play("build");
 
-      // Recalc
       const res = recalcResources(s.buildings, diff);
       s.maxPopulation = res.maxPop;
       s.totalJobs = res.totalJobs;
@@ -777,7 +788,6 @@ export default function CityBuilderPage() {
       s.camStartX = s.cameraX;
       s.camStartY = s.cameraY;
     } else {
-      // Tap to build/demolish
       const { gx, gy } = getGridPos(t.clientX, t.clientY);
       hoverRef.current = { gx, gy };
     }
@@ -809,7 +819,6 @@ export default function CityBuilderPage() {
       touchRef.current = null;
       return;
     }
-    // Tap to place
     if (s.selectedBuilding || s.demolishMode) {
       const t = e.changedTouches[0];
       const { gx, gy } = getGridPos(t.clientX, t.clientY);
@@ -927,7 +936,6 @@ export default function CityBuilderPage() {
     s.phase = "playing";
     s.selectedBuilding = null;
     s.demolishMode = false;
-    // Rebuild NPCs
     for (let i = 0; i < Math.min(s.population, 40); i++) {
       const npc = spawnNPC(s.buildings);
       if (npc) s.npcs.push(npc);
@@ -1006,7 +1014,6 @@ export default function CityBuilderPage() {
       case "hospital": return <Heart size={14} />;
     }
   };
-
 
   /* ========== 渲染 ========== */
   return (
@@ -1139,7 +1146,6 @@ export default function CityBuilderPage() {
 
             {/* 控制栏 */}
             <div className="flex flex-wrap gap-1.5 mb-2">
-              {/* 建筑按钮 */}
               {BUILDING_ORDER.map((type, i) => {
                 const def = BUILDING_DEFS[type];
                 const cost = Math.floor(def.cost * diff.costMul);
@@ -1161,7 +1167,6 @@ export default function CityBuilderPage() {
                 );
               })}
 
-              {/* 拆除 */}
               <button onClick={toggleDemolish}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] transition ${
                   state.demolishMode ? "bg-[#ff4444]/15 border-[#ff4444]/50 text-[#ff4444]" :
@@ -1173,7 +1178,6 @@ export default function CityBuilderPage() {
                 <span>拆除</span>
               </button>
 
-              {/* 暂停/加速 */}
               <button onClick={togglePause}
                 className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#333] text-[11px] text-[#ccc] hover:border-[#3ea6ff]/30 transition"
                 title="暂停 [空格]"
