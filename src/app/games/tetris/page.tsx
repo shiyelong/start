@@ -11,7 +11,9 @@ import { InputHandler } from "@/lib/game-engine/input-handler";
 import { lerp } from "@/lib/game-engine/animation-utils";
 import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
 import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
-import VirtualDPad from "@/components/VirtualDPad";
+import {
+  ArrowLeft, ArrowRight, ArrowDown, RotateCw, ChevronsDown, Archive, Blocks,
+} from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type PieceType = "I" | "O" | "T" | "S" | "Z" | "J" | "L";
@@ -570,14 +572,6 @@ export default function TetrisPage() {
     } catch { /* ignore malformed data */ }
   }, []);
 
-  // ─── Direction handler for VirtualDPad ─────────────────────────────────
-  const handleDirection = useCallback((dir: "up" | "down" | "left" | "right") => {
-    if (dir === "left") moveLeft();
-    else if (dir === "right") moveRight();
-    else if (dir === "down") softDrop();
-    else if (dir === "up") rotateCW();
-  }, [moveLeft, moveRight, softDrop, rotateCW]);
-
   // ─── Initialization ────────────────────────────────────────────────────
   useEffect(() => {
     soundRef.current = new SoundEngine(GAME_ID);
@@ -987,8 +981,8 @@ export default function TetrisPage() {
 
         {/* Title + Score */}
         <div className="flex items-center justify-between mb-3">
-          <h1 className="text-2xl font-bold text-white">
-            
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+            <Blocks className="w-6 h-6 text-purple-400" />
             <span className="text-purple-400">俄罗斯方块</span>
           </h1>
           <div className="flex gap-2">
@@ -1042,9 +1036,92 @@ export default function TetrisPage() {
           />
         </div>
 
-        {/* Virtual DPad for mobile */}
-        <div className="flex justify-center mt-3 md:hidden">
-          <VirtualDPad onDirection={handleDirection} onAction={hardDrop} />
+        {/* Mobile Touch Controls */}
+        <div className="mt-3 md:hidden select-none" style={{ touchAction: "none" }}>
+          <div className="flex items-start justify-between gap-3">
+            {/* Left side: Rotate + directional row */}
+            <div className="flex flex-col items-center gap-2">
+              {/* Rotate button centered above */}
+              <button
+                className="w-[4.5rem] h-12 rounded-xl bg-[#1a1a1a] border border-[#444] text-[#ccc] flex items-center justify-center active:bg-[#3ea6ff]/30 active:border-[#3ea6ff]/60 active:text-[#3ea6ff] transition-colors"
+                style={{ touchAction: "none" }}
+                onTouchStart={(e) => { e.preventDefault(); rotateCW(); }}
+                aria-label="旋转"
+              >
+                <RotateCw className="w-6 h-6" />
+              </button>
+              {/* ← ↓ → row */}
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  className="w-[3.5rem] h-14 rounded-xl bg-[#1a1a1a] border border-[#444] text-[#ccc] flex items-center justify-center active:bg-[#3ea6ff]/30 active:border-[#3ea6ff]/60 active:text-[#3ea6ff] transition-colors"
+                  style={{ touchAction: "none" }}
+                  onTouchStart={(e) => {
+                    e.preventDefault();
+                    moveLeft();
+                    const id = setInterval(moveLeft, 150);
+                    const stop = () => { clearInterval(id); document.removeEventListener("touchend", stop); document.removeEventListener("touchcancel", stop); };
+                    document.addEventListener("touchend", stop, { once: true });
+                    document.addEventListener("touchcancel", stop, { once: true });
+                  }}
+                  aria-label="左移"
+                >
+                  <ArrowLeft className="w-6 h-6" />
+                </button>
+                <button
+                  className="w-[3.5rem] h-14 rounded-xl bg-[#1a1a1a] border border-[#444] text-[#ccc] flex items-center justify-center active:bg-[#6bcb77]/30 active:border-[#6bcb77]/60 active:text-[#6bcb77] transition-colors"
+                  style={{ touchAction: "none" }}
+                  onTouchStart={(e) => {
+                    e.preventDefault();
+                    softDrop();
+                    const id = setInterval(softDrop, 150);
+                    const stop = () => { clearInterval(id); document.removeEventListener("touchend", stop); document.removeEventListener("touchcancel", stop); };
+                    document.addEventListener("touchend", stop, { once: true });
+                    document.addEventListener("touchcancel", stop, { once: true });
+                  }}
+                  aria-label="软降"
+                >
+                  <ArrowDown className="w-6 h-6" />
+                </button>
+                <button
+                  className="w-[3.5rem] h-14 rounded-xl bg-[#1a1a1a] border border-[#444] text-[#ccc] flex items-center justify-center active:bg-[#3ea6ff]/30 active:border-[#3ea6ff]/60 active:text-[#3ea6ff] transition-colors"
+                  style={{ touchAction: "none" }}
+                  onTouchStart={(e) => {
+                    e.preventDefault();
+                    moveRight();
+                    const id = setInterval(moveRight, 150);
+                    const stop = () => { clearInterval(id); document.removeEventListener("touchend", stop); document.removeEventListener("touchcancel", stop); };
+                    document.addEventListener("touchend", stop, { once: true });
+                    document.addEventListener("touchcancel", stop, { once: true });
+                  }}
+                  aria-label="右移"
+                >
+                  <ArrowRight className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            {/* Right side: Hard drop + Hold */}
+            <div className="flex flex-col items-center gap-2">
+              <button
+                className="w-24 h-[4.5rem] rounded-xl bg-[#f0b90b]/10 border-2 border-[#f0b90b]/40 text-[#f0b90b] flex flex-col items-center justify-center gap-0.5 active:bg-[#f0b90b]/30 active:border-[#f0b90b]/70 transition-colors font-bold"
+                style={{ touchAction: "none" }}
+                onTouchStart={(e) => { e.preventDefault(); hardDrop(); }}
+                aria-label="硬降"
+              >
+                <ChevronsDown className="w-7 h-7" />
+                <span className="text-xs">硬降</span>
+              </button>
+              <button
+                className="w-24 h-12 rounded-xl bg-[#1a1a1a] border border-[#444] text-[#aaa] flex items-center justify-center gap-1.5 active:bg-purple-500/20 active:border-purple-400/50 active:text-purple-300 transition-colors"
+                style={{ touchAction: "none" }}
+                onTouchStart={(e) => { e.preventDefault(); holdPiece(); }}
+                aria-label="暂存"
+              >
+                <Archive className="w-5 h-5" />
+                <span className="text-xs font-medium">暂存</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         {gameOver && (
