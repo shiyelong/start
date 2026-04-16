@@ -210,7 +210,7 @@ function modeLabel(mode: PlaybackMode): string {
 // Mini Player Bar
 // ---------------------------------------------------------------------------
 
-function MiniPlayerBar({ onExpand }: { onExpand: () => void }) {
+function MiniPlayerBar({ onExpand, onClose }: { onExpand: () => void; onClose: () => void }) {
   const { state, actions } = useMusicPlayer();
   const { currentTrack, isPlaying, currentTime, duration } = state;
 
@@ -219,7 +219,7 @@ function MiniPlayerBar({ onExpand }: { onExpand: () => void }) {
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0f0f0f] border-t border-white/5 z-40 flex flex-col">
+    <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0f0f0f] border-t border-white/5 z-40 flex flex-col lg:bottom-0 bottom-14">
       {/* Thin progress bar at top of mini bar */}
       <div className="w-full h-0.5 bg-white/10 flex-shrink-0">
         <div
@@ -256,23 +256,31 @@ function MiniPlayerBar({ onExpand }: { onExpand: () => void }) {
           <button
             onClick={actions.previous}
             className="p-2 text-white/70 hover:text-white transition-colors"
-            aria-label="Previous track"
+            aria-label="上一首"
           >
             <SkipBack className="w-4 h-4" />
           </button>
           <button
             onClick={actions.togglePlay}
             className="p-2 text-white hover:text-[#3ea6ff] transition-colors"
-            aria-label={isPlaying ? 'Pause' : 'Play'}
+            aria-label={isPlaying ? '暂停' : '播放'}
           >
             {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
           </button>
           <button
             onClick={actions.next}
             className="p-2 text-white/70 hover:text-white transition-colors"
-            aria-label="Next track"
+            aria-label="下一首"
           >
             <SkipForward className="w-4 h-4" />
+          </button>
+          {/* 关闭按钮 */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            className="p-2 text-white/40 hover:text-white transition-colors ml-1"
+            aria-label="关闭播放器"
+          >
+            <ChevronDown className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -535,15 +543,21 @@ function FullScreenPlayer({ onCollapse }: { onCollapse: () => void }) {
 // ---------------------------------------------------------------------------
 
 export default function MusicPlayer() {
-  const { state } = useMusicPlayer();
+  const { state, actions } = useMusicPlayer();
   const [expanded, setExpanded] = useState(false);
+  const [hidden, setHidden] = useState(false);
+
+  // 当新歌曲开始播放时自动显示
+  useEffect(() => {
+    if (state.currentTrack && state.isPlaying) setHidden(false);
+  }, [state.currentTrack, state.isPlaying]);
 
   // Don't render anything if no track in queue
   if (!state.currentTrack && state.queue.length === 0) return null;
 
   return (
     <>
-      {!expanded && <MiniPlayerBar onExpand={() => setExpanded(true)} />}
+      {!expanded && !hidden && <MiniPlayerBar onExpand={() => setExpanded(true)} onClose={() => { actions.pause(); setHidden(true); }} />}
       {expanded && <FullScreenPlayer onCollapse={() => setExpanded(false)} />}
     </>
   );
