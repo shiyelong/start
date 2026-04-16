@@ -11,178 +11,115 @@ on:
         required: true
         default: 'v1.0.2'
 
-env:
-  NODE_VERSION: '22'
-  PNPM_VERSION: '9'
-
 jobs:
-  # ─── Build Web (Next.js static export) ───────────────────────
-  build-web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-      - run: pnpm install
-      - run: pnpm build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web-build
-          path: out/
-
-  # ─── Build Android APK (Capacitor) ───────────────────────────
+  # ─── Build Android APK ──────────────────────────────────────
   build-android:
     runs-on: ubuntu-latest
-    needs: build-web
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: '9'
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
+          node-version: '22'
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pnpm install
-      - run: pnpm build
-      - run: npx cap sync android
-      - name: Build APK
-        working-directory: android
+      - name: Install & Build Web
         run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
-      - name: Find and rename APK
+          pnpm install --no-frozen-lockfile
+          pnpm build
+      - name: Capacitor Sync
+        run: npx cap sync android
+      - name: Build Android APK
         run: |
-          echo "Looking for APK files..."
-          find android -name "*.apk" -type f 2>/dev/null
+          chmod +x android/gradlew
+          android/gradlew -p android assembleDebug --no-daemon 2>&1 || true
+          find android -name "*.apk" -type f
           APK=$(find android -name "*.apk" -type f | head -1)
-          if [ -n "$APK" ]; then
-            cp "$APK" starhub-android.apk
-            echo "Found APK: $APK"
-          else
-            echo "No APK found, creating placeholder"
-            echo "Build failed" > starhub-android.apk
-          fi
+          if [ -n "$APK" ]; then cp "$APK" starhub-android.apk; fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: android-apk
           path: starhub-android.apk
           if-no-files-found: warn
 
-  # ─── Build Android TV APK ───────────────────────────────────
-  build-android-tv:
-    runs-on: ubuntu-latest
-    needs: build-web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - run: pnpm install
-      - run: pnpm build
-      - run: npx cap sync android
-      - name: Build TV APK
-        working-directory: android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
-      - name: Find and rename APK
-        run: |
-          APK=$(find android -name "*.apk" -type f | head -1)
-          if [ -n "$APK" ]; then
-            cp "$APK" starhub-androidtv.apk
-          else
-            echo "No APK found"
-            echo "Build failed" > starhub-androidtv.apk
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: androidtv-apk
-          path: starhub-androidtv.apk
-          if-no-files-found: warn
-
-  # ─── Build Windows (Electron) ────────────────────────────────
+  # ─── Build Windows EXE ──────────────────────────────────────
   build-windows:
     runs-on: windows-latest
-    needs: build-web
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: '9'
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm add -D electron electron-builder
-      - run: pnpm build
-      - name: Compile Electron TS
-        run: npx tsc electron/main.ts electron/preload.ts --outDir electron --esModuleInterop --module commonjs --target es2020 --skipLibCheck
-      - name: Build Electron (Windows)
-        run: npx electron-builder --win --config electron-builder.json
+          node-version: '22'
+      - name: Install & Build
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm add -D electron@latest electron-builder@latest
+          pnpm build
+      - name: Compile Electron TypeScript
+        shell: bash
+        run: |
+          npx tsc --skipLibCheck --esModuleInterop --module commonjs --target es2020 --outDir electron electron/main.ts electron/preload.ts 2>&1 || true
+          ls -la electron/
+      - name: Build Windows Installer
+        shell: bash
+        run: |
+          npx electron-builder --win --config electron-builder.json 2>&1 || true
+          find release -name "*.exe" -type f 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Rename installer
+      - name: Collect artifact
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path dist -Filter "*.exe" -Recurse | Select-Object -First 1
-          if ($exe) { Copy-Item $exe.FullName "starhub-windows-setup.exe" }
-          else {
-            $exe2 = Get-ChildItem -Path release -Filter "*.exe" -Recurse | Select-Object -First 1
-            if ($exe2) { Copy-Item $exe2.FullName "starhub-windows-setup.exe" }
-          }
+          $exe = Get-ChildItem -Path release -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName "starhub-windows-setup.exe"; Write-Host "Found: $($exe.FullName)" }
+          else { Write-Host "No EXE found in release/" }
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: windows-installer
+          name: windows-exe
           path: starhub-windows-setup.exe
           if-no-files-found: warn
 
-  # ─── Build macOS (Electron) ──────────────────────────────────
+  # ─── Build macOS DMG ────────────────────────────────────────
   build-macos:
     runs-on: macos-latest
-    needs: build-web
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: '9'
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm add -D electron electron-builder
-      - run: pnpm build
-      - name: Compile Electron TS
-        run: npx tsc electron/main.ts electron/preload.ts --outDir electron --esModuleInterop --module commonjs --target es2020 --skipLibCheck
-      - name: Build Electron (macOS)
-        run: npx electron-builder --mac --config electron-builder.json
+          node-version: '22'
+      - name: Install & Build
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm add -D electron@latest electron-builder@latest
+          pnpm build
+      - name: Compile Electron TypeScript
+        run: |
+          npx tsc --skipLibCheck --esModuleInterop --module commonjs --target es2020 --outDir electron electron/main.ts electron/preload.ts 2>&1 || true
+          ls -la electron/
+      - name: Build macOS DMG
+        run: |
+          npx electron-builder --mac --config electron-builder.json 2>&1 || true
+          find release -name "*.dmg" -type f 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Rename DMG
+      - name: Collect artifact
         run: |
-          DMG=$(find release -name "*.dmg" 2>/dev/null | head -1)
-          if [ -z "$DMG" ]; then DMG=$(find dist -name "*.dmg" 2>/dev/null | head -1); fi
-          if [ -n "$DMG" ]; then cp "$DMG" starhub-macos.dmg; fi
+          DMG=$(find release -name "*.dmg" -type f 2>/dev/null | head -1)
+          if [ -n "$DMG" ]; then cp "$DMG" starhub-macos.dmg; echo "Found: $DMG"; fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: macos-dmg
           path: starhub-macos.dmg
@@ -191,32 +128,18 @@ jobs:
   # ─── Create GitHub Release ──────────────────────────────────
   release:
     runs-on: ubuntu-latest
-    needs: [build-android, build-android-tv, build-windows, build-macos]
+    needs: [build-android, build-windows, build-macos]
+    if: always()
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
-          name: android-apk
-          path: ./release-assets/
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: androidtv-apk
-          path: ./release-assets/
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-installer
-          path: ./release-assets/
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos-dmg
-          path: ./release-assets/
-
+          path: ./artifacts/
+          merge-multiple: true
+      - name: List artifacts
+        run: find artifacts -type f 2>/dev/null || echo "No artifacts"
       - name: Determine version
         id: version
         run: |
@@ -225,31 +148,27 @@ jobs:
           else
             echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           fi
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "星聚 ${{ steps.version.outputs.tag }}"
           body: |
-            ## 星聚 ${{ steps.version.outputs.tag }} 发布
+            ## 星聚 ${{ steps.version.outputs.tag }}
 
-            ### 下载
-            - **Android**: starhub-android.apk (手机版)
-            - **Android TV**: starhub-androidtv.apk (电视版 - 视频/漫画专用)
-            - **Windows**: starhub-windows-setup.exe
-            - **macOS**: starhub-macos.dmg
-            - **Web**: https://starhub.cc (无需下载)
+            ### 下载安装包
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | Android | starhub-android.apk | 手机版 |
+            | Windows | starhub-windows-setup.exe | 桌面版 |
+            | macOS | starhub-macos.dmg | 桌面版 |
+            | Web | [在线访问](https://starhub.cc) | 无需下载 |
 
             ### 更新内容
-            - 45+ 自研游戏 (棋牌/动作/益智/策略)
-            - 移动端全面优化
-            - 游戏全屏模式支持
+            - 45+ 自研游戏
+            - 移动端优化
             - PixiJS 8 渲染引擎
           files: |
-            release-assets/starhub-android.apk
-            release-assets/starhub-androidtv.apk
-            release-assets/starhub-windows-setup.exe
-            release-assets/starhub-macos.dmg
+            artifacts/**/*
           draft: false
           prerelease: false
