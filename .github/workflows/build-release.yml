@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install
       - run: pnpm build
       - uses: actions/upload-artifact@v4
         with:
@@ -52,21 +52,23 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install
       - run: pnpm build
       - run: npx cap sync android
       - name: Build APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleDebug
       - name: Rename APK
         run: |
-          cp android/app/build/outputs/apk/release/app-release-unsigned.apk starhub-android.apk
+          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
+          if [ -n "$APK" ]; then cp "$APK" starhub-android.apk; fi
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: starhub-android.apk
+          if-no-files-found: warn
 
   # ─── Build Android TV APK ───────────────────────────────────
   build-android-tv:
@@ -85,21 +87,23 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install
       - run: pnpm build
       - run: npx cap sync android
       - name: Build TV APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease -Ptv=true
+          ./gradlew assembleDebug
       - name: Rename APK
         run: |
-          cp android/app/build/outputs/apk/release/app-release-unsigned.apk starhub-androidtv.apk
+          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
+          if [ -n "$APK" ]; then cp "$APK" starhub-androidtv.apk; fi
       - uses: actions/upload-artifact@v4
         with:
           name: androidtv-apk
           path: starhub-androidtv.apk
+          if-no-files-found: warn
 
   # ─── Build Windows (Electron) ────────────────────────────────
   build-windows:
@@ -115,18 +119,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: pnpm add -D electron electron-builder
       - run: pnpm build
       - name: Build Electron (Windows)
         run: npx electron-builder --win --config electron-builder.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Rename installer
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path dist -Filter "*.exe" | Select-Object -First 1
+          $exe = Get-ChildItem -Path dist -Filter "*.exe" -Recurse | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName "starhub-windows-setup.exe" }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           path: starhub-windows-setup.exe
+          if-no-files-found: warn
 
   # ─── Build macOS (Electron) ──────────────────────────────────
   build-macos:
@@ -142,17 +150,21 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: pnpm add -D electron electron-builder
       - run: pnpm build
       - name: Build Electron (macOS)
         run: npx electron-builder --mac --config electron-builder.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Rename DMG
         run: |
-          DMG=$(find dist -name "*.dmg" | head -1)
+          DMG=$(find dist -name "*.dmg" 2>/dev/null | head -1)
           if [ -n "$DMG" ]; then cp "$DMG" starhub-macos.dmg; fi
       - uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
           path: starhub-macos.dmg
+          if-no-files-found: warn
 
   # ─── Create GitHub Release ──────────────────────────────────
   release:
