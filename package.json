@@ -16,12 +16,15 @@
     "@capacitor/core": "^8.3.0",
     "@capacitor/ios": "^8.3.0",
     "@heroicons/react": "^2.2.0",
+    "@types/three": "^0.183.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",
     "next": "14.2.35",
     "nostalgist": "^0.21.0",
+    "pixi.js": "^8.18.1",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260411.1",
