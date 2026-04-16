@@ -42,3 +42,4 @@ cloudflared*.yml
 *.tsbuildinfo
 next-env.d.ts
 dist/
+server/node_modules/
