@@ -10,11 +10,18 @@ import {
 } from "lucide-react";
 import { ageGate } from "@/lib/age-gate";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "adult-casual";
 const W = 420, H = 520;
 const PRIMARY = "#3ea6ff", BG = "#0f0f0f";
+
+/** Convert "#rrggbb" to numeric 0xRRGGBB for PixiJS */
+function hexColor(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Phase = "title" | "playing" | "gameover";
@@ -173,67 +180,69 @@ function initWhack(diff: Difficulty): WhackState {
   };
 }
 
-// ─── Canvas Drawing Helpers ──────────────────────────────────────────────────
-function drawPattern(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, pattern: number, color: string) {
-  ctx.fillStyle = color;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
+// ─── PixiJS Pattern Drawing Helper ───────────────────────────────────────────
+function drawPatternPixi(g: PixiGraphics, x: number, y: number, size: number, pattern: number, color: number) {
   const cx = x + size / 2, cy = y + size / 2;
   const r = size * 0.3;
 
   switch (pattern) {
     case 0: // circle
-      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      g.circle(cx, cy, r).fill(color);
       break;
     case 1: // diamond
-      ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy); ctx.closePath(); ctx.fill();
+      g.moveTo(cx, cy - r).lineTo(cx + r, cy).lineTo(cx, cy + r).lineTo(cx - r, cy).closePath().fill(color);
       break;
     case 2: // triangle
-      ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy + r * 0.7); ctx.lineTo(cx - r, cy + r * 0.7); ctx.closePath(); ctx.fill();
+      g.moveTo(cx, cy - r).lineTo(cx + r, cy + r * 0.7).lineTo(cx - r, cy + r * 0.7).closePath().fill(color);
       break;
     case 3: // cross
-      ctx.beginPath(); ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r); ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r); ctx.stroke();
+      g.setStrokeStyle({ width: 2, color });
+      g.moveTo(cx - r, cy - r).lineTo(cx + r, cy + r).stroke();
+      g.moveTo(cx + r, cy - r).lineTo(cx - r, cy + r).stroke();
       break;
-    case 4: // star
+    case 4: { // star
+      let started = false;
       for (let i = 0; i < 5; i++) {
         const angle = (i * 72 - 90) * Math.PI / 180;
         const px = cx + r * Math.cos(angle), py = cy + r * Math.sin(angle);
-        if (i === 0) ctx.beginPath();
         const inner = (i * 72 + 36 - 90) * Math.PI / 180;
-        ctx.lineTo(px, py);
-        ctx.lineTo(cx + r * 0.4 * Math.cos(inner), cy + r * 0.4 * Math.sin(inner));
+        if (!started) { g.moveTo(px, py); started = true; } else { g.lineTo(px, py); }
+        g.lineTo(cx + r * 0.4 * Math.cos(inner), cy + r * 0.4 * Math.sin(inner));
       }
-      ctx.closePath(); ctx.fill();
+      g.closePath().fill(color);
       break;
+    }
     case 5: // square
-      ctx.fillRect(cx - r * 0.7, cy - r * 0.7, r * 1.4, r * 1.4);
+      g.rect(cx - r * 0.7, cy - r * 0.7, r * 1.4, r * 1.4).fill(color);
       break;
     case 6: // ring
-      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-      ctx.beginPath(); ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2); ctx.stroke();
+      g.setStrokeStyle({ width: 2, color });
+      g.circle(cx, cy, r).stroke();
+      g.circle(cx, cy, r * 0.5).stroke();
       break;
     case 7: // hexagon
-      ctx.beginPath();
       for (let i = 0; i < 6; i++) {
         const angle = (i * 60 - 30) * Math.PI / 180;
         const px = cx + r * Math.cos(angle), py = cy + r * Math.sin(angle);
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
       }
-      ctx.closePath(); ctx.fill();
+      g.closePath().fill(color);
       break;
   }
 }
 
-function drawRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, rad: number) {
-  ctx.beginPath(); ctx.roundRect(x, y, w, h, rad); ctx.fill();
-}
-
+// ─── State Ref Type ──────────────────────────────────────────────────────────
+type StateRefType = {
+  phase: Phase; currentGame: MiniGame; difficulty: Difficulty; muted: boolean; totalScore: number;
+  memCards: MemCard[]; memFlipped: number[]; memLocked: boolean; memMoves: number; memScore: number;
+  reaction: ReactionState; reactionScore: number;
+  whack: WhackState; whackScore: number;
+};
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function AdultCasual() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
   const frameRef = useRef(0);
   const lastRef = useRef(0);
 
@@ -260,7 +269,7 @@ export default function AdultCasual() {
   const [whackScore, setWhackScore] = useState(0);
 
   // Refs for render loop
-  const stateRef = useRef({
+  const stateRef = useRef<StateRefType>({
     phase, currentGame, difficulty, muted, totalScore,
     memCards, memFlipped, memLocked, memMoves, memScore,
     reaction, reactionScore,
@@ -400,7 +409,6 @@ export default function AdultCasual() {
     const r = s.reaction;
 
     if (r.phase === "wait") {
-      // Start the round - begin waiting for target
       const diff = s.difficulty;
       const settings = DIFF_SETTINGS[diff];
       setReaction(prev => ({
@@ -411,15 +419,13 @@ export default function AdultCasual() {
       }));
       playSound("click");
     } else if (r.phase === "ready") {
-      // Clicked too early!
       playSound("error");
       setReaction(prev => ({
         ...prev,
         phase: "wait",
-        times: [...prev.times, 9999], // penalty
+        times: [...prev.times, 9999],
       }));
     } else if (r.phase === "go") {
-      // Hit the target!
       const reactionTime = performance.now() - r.startTime;
       const newTimes = [...r.times, reactionTime];
       playSound("score");
@@ -429,7 +435,6 @@ export default function AdultCasual() {
       setReactionScore(prev => prev + pts);
 
       if (newTimes.length >= r.maxRounds) {
-        // Game over
         const validTimes = newTimes.filter(t => t < 9000);
         const avg = validTimes.length > 0 ? validTimes.reduce((a, b) => a + b, 0) / validTimes.length : 9999;
         const bonus = Math.floor(Math.max(0, (500 - avg) * 2) * mult);
@@ -494,108 +499,147 @@ export default function AdultCasual() {
     playSound("click");
   }, [playSound]);
 
-  // ─── Game Loop (Reaction timer + Whack update) ────────────────────────────
+  // ─── PixiJS Game Loop ──────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
+    let destroyed = false;
+    let app: Application | null = null;
 
-    const loop = (ts: number) => {
-      if (!lastRef.current) lastRef.current = ts;
-      const dt = Math.min((ts - lastRef.current) / 1000, 0.05);
-      lastRef.current = ts;
-      const s = stateRef.current;
-      frameRef.current++;
+    const TEXT_POOL_SIZE = 80;
 
-      // Update reaction timer
-      if (s.phase === "playing" && s.currentGame === "reaction" && s.reaction.phase === "ready") {
-        const elapsed = performance.now() - s.reaction.startTime;
-        if (elapsed >= s.reaction.waitDuration) {
-          const settings = DIFF_SETTINGS[s.difficulty];
-          const margin = 40;
-          setReaction(prev => ({
-            ...prev,
-            phase: "go",
-            startTime: performance.now(),
-            targetX: margin + Math.random() * (W - margin * 2),
-            targetY: 100 + Math.random() * (H - 200),
-            targetSize: settings.reactionTargetSize,
-          }));
+    async function initPixi() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: hexColor(BG), antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+
+      const g: PixiGraphics = new pixi.Graphics();
+      app.stage.addChild(g);
+
+      // Pre-create text pool
+      const texts: PixiText[] = [];
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({ text: "", style: { fontSize: 12, fill: 0xffffff, fontFamily: "sans-serif", fontWeight: "normal" } });
+        t.visible = false;
+        app.stage.addChild(t);
+        texts.push(t);
+      }
+      let textIdx = 0;
+
+      function nextText(str: string, x: number, y: number, opts: { size?: number; color?: number; bold?: boolean; align?: "left" | "center" | "right"; alpha?: number }): void {
+        if (textIdx >= texts.length) return;
+        const t = texts[textIdx++];
+        t.text = str;
+        t.style.fontSize = opts.size ?? 12;
+        t.style.fill = opts.color ?? 0xffffff;
+        t.style.fontWeight = opts.bold ? "bold" : "normal";
+        t.visible = true;
+        t.alpha = opts.alpha ?? 1;
+        if (opts.align === "center") {
+          t.anchor.set(0.5, 0.5);
+        } else if (opts.align === "right") {
+          t.anchor.set(1, 0);
+        } else {
+          t.anchor.set(0, 0);
         }
+        t.x = x;
+        t.y = y;
       }
 
-      // Update whack-a-mole
-      if (s.phase === "playing" && s.currentGame === "whack") {
-        setWhack(prev => {
-          const newState = { ...prev, timeLeft: prev.timeLeft - dt };
-          if (newState.timeLeft <= 0) {
-            setTotalScore(p => p + prev.score);
-            setTimeout(() => {
-              setPhase("gameover");
-              playSound("gameOver");
-            }, 100);
-            return { ...newState, timeLeft: 0 };
-          }
+      app.ticker.add(() => {
+        if (destroyed) return;
+        g.clear();
+        textIdx = 0;
+        for (const t of texts) t.visible = false;
 
-          const newGrid = prev.grid.map(cell => {
-            const c = { ...cell };
-            if (c.hit) {
-              c.hitTimer -= dt;
-              if (c.hitTimer <= 0) { c.hit = false; c.active = false; c.timer = 0; }
-            } else if (c.active) {
-              c.timer -= dt;
-              if (c.timer <= 0) {
-                c.active = false;
-                newState.misses++;
+        const s = stateRef.current;
+        frameRef.current++;
+        const f = frameRef.current;
+
+        // Update reaction timer
+        if (s.phase === "playing" && s.currentGame === "reaction" && s.reaction.phase === "ready") {
+          const elapsed = performance.now() - s.reaction.startTime;
+          if (elapsed >= s.reaction.waitDuration) {
+            const settings = DIFF_SETTINGS[s.difficulty];
+            const margin = 40;
+            setReaction(prev => ({
+              ...prev,
+              phase: "go",
+              startTime: performance.now(),
+              targetX: margin + Math.random() * (W - margin * 2),
+              targetY: 100 + Math.random() * (H - 200),
+              targetSize: settings.reactionTargetSize,
+            }));
+          }
+        }
+
+        // Update whack-a-mole
+        if (s.phase === "playing" && s.currentGame === "whack") {
+          const dt = 1 / 60; // ticker runs at ~60fps
+          setWhack(prev => {
+            const newState = { ...prev, timeLeft: prev.timeLeft - dt };
+            if (newState.timeLeft <= 0) {
+              setTotalScore(p => p + prev.score);
+              setTimeout(() => {
+                setPhase("gameover");
+                playSound("gameOver");
+              }, 100);
+              return { ...newState, timeLeft: 0 };
+            }
+
+            const newGrid = prev.grid.map(cell => {
+              const c = { ...cell };
+              if (c.hit) {
+                c.hitTimer -= dt;
+                if (c.hitTimer <= 0) { c.hit = false; c.active = false; c.timer = 0; }
+              } else if (c.active) {
+                c.timer -= dt;
+                if (c.timer <= 0) {
+                  c.active = false;
+                  newState.misses++;
+                }
+              }
+              return c;
+            });
+
+            newState.spawnTimer -= dt;
+            if (newState.spawnTimer <= 0) {
+              newState.spawnTimer = prev.spawnInterval * (0.8 + Math.random() * 0.4);
+              const inactive = newGrid.map((c, i) => (!c.active && !c.hit) ? i : -1).filter(i => i >= 0);
+              if (inactive.length > 0) {
+                const idx = inactive[Math.floor(Math.random() * inactive.length)];
+                newGrid[idx] = { active: true, timer: prev.moleDuration, hit: false, hitTimer: 0 };
               }
             }
-            return c;
+
+            return { ...newState, grid: newGrid };
           });
+        }
 
-          newState.spawnTimer -= dt;
-          if (newState.spawnTimer <= 0) {
-            newState.spawnTimer = prev.spawnInterval * (0.8 + Math.random() * 0.4);
-            const inactive = newGrid.map((c, i) => (!c.active && !c.hit) ? i : -1).filter(i => i >= 0);
-            if (inactive.length > 0) {
-              const idx = inactive[Math.floor(Math.random() * inactive.length)];
-              newGrid[idx] = { active: true, timer: prev.moleDuration, hit: false, hitTimer: 0 };
-            }
-          }
+        // ─── Render ──────────────────────────────────────────────────────
+        // Background
+        g.rect(0, 0, W, H).fill(hexColor(BG));
 
-          return { ...newState, grid: newGrid };
-        });
-      }
+        if (s.phase === "title") {
+          renderTitle(g, nextText, f);
+        } else if (s.phase === "playing") {
+          if (s.currentGame === "memory") renderMemory(g, nextText, s, f);
+          else if (s.currentGame === "reaction") renderReaction(g, nextText, s, f);
+          else if (s.currentGame === "whack") renderWhack(g, nextText, s, f);
+        } else if (s.phase === "gameover") {
+          renderGameOver(g, nextText, s, f);
+        }
+      });
+    }
 
-      // Render
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = BG;
-      ctx.fillRect(0, 0, W, H);
+    initPixi();
 
-      if (s.phase === "title") {
-        renderTitle(ctx, frameRef.current);
-      } else if (s.phase === "playing") {
-        if (s.currentGame === "memory") renderMemory(ctx, s, frameRef.current);
-        else if (s.currentGame === "reaction") renderReaction(ctx, s, frameRef.current);
-        else if (s.currentGame === "whack") renderWhack(ctx, s, frameRef.current);
-      } else if (s.phase === "gameover") {
-        renderGameOver(ctx, s, frameRef.current);
-      }
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      destroyed = true;
+      if (app) app.destroy(true);
     };
-
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
   }, [playSound]);
-
 
   // ─── Canvas Click Handler ──────────────────────────────────────────────────
   useEffect(() => {
@@ -605,13 +649,11 @@ export default function AdultCasual() {
     const handleClick = (cx: number, cy: number) => {
       const s = stateRef.current;
 
-      if (s.phase === "title") return; // handled by buttons
-
-      if (s.phase === "gameover") return; // handled by buttons
+      if (s.phase === "title") return;
+      if (s.phase === "gameover") return;
 
       if (s.phase === "playing") {
         if (s.currentGame === "memory") {
-          // Card grid: 4x4, starts at y=80
           const gridX = 20, gridY = 80;
           const cardW = (W - 60) / 4, cardH = (H - 180) / 4;
           const gap = 6;
@@ -628,7 +670,6 @@ export default function AdultCasual() {
         } else if (s.currentGame === "reaction") {
           handleReactionClick();
         } else if (s.currentGame === "whack") {
-          // 3x3 grid
           const gridSize = Math.min(W - 60, H - 160);
           const cellSize = gridSize / 3;
           const startX = (W - gridSize) / 2;
@@ -800,15 +841,13 @@ export default function AdultCasual() {
 }
 
 
-// ─── Canvas Render Functions ─────────────────────────────────────────────────
+// ─── PixiJS Render Functions ─────────────────────────────────────────────────
+type NextTextFn = (str: string, x: number, y: number, opts: { size?: number; color?: number; bold?: boolean; align?: "left" | "center" | "right"; alpha?: number }) => void;
 
-function renderTitle(ctx: CanvasRenderingContext2D, f: number) {
-  // Background gradient
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, "#0a1628");
-  grad.addColorStop(1, BG);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
+function renderTitle(g: PixiGraphics, nextText: NextTextFn, f: number) {
+  // Background gradient (approximate with two rects)
+  g.rect(0, 0, W, H / 2).fill(0x0a1628);
+  g.rect(0, H / 2, W, H / 2).fill(hexColor(BG));
 
   // Floating particles
   for (let i = 0; i < 12; i++) {
@@ -816,26 +855,14 @@ function renderTitle(ctx: CanvasRenderingContext2D, f: number) {
     const y = (H * 0.1 + Math.sin(f * 0.012 + i * 1.8) * 50 + i * 35) % H;
     const size = 3 + Math.sin(f * 0.025 + i) * 2;
     const alpha = 0.1 + 0.08 * Math.sin(f * 0.03 + i);
-    ctx.fillStyle = `rgba(62, 166, 255, ${alpha})`;
-    ctx.beginPath();
-    ctx.arc(x, y, size, 0, Math.PI * 2);
-    ctx.fill();
+    g.circle(x, y, size).fill({ color: hexColor(PRIMARY), alpha });
   }
 
   // Title
-  ctx.textAlign = "center";
   const glow = 0.7 + 0.3 * Math.sin(f * 0.04);
-  ctx.fillStyle = `rgba(62, 166, 255, ${glow})`;
-  ctx.font = "bold 36px sans-serif";
-  ctx.fillText("深夜游乐场", W / 2, H / 2 - 80);
-
-  ctx.fillStyle = "#ff4757";
-  ctx.font = "12px sans-serif";
-  ctx.fillText("NC-17 成人休闲合集", W / 2, H / 2 - 50);
-
-  ctx.fillStyle = "#aaa";
-  ctx.font = "13px sans-serif";
-  ctx.fillText("记忆翻牌 / 反应测试 / 打地鼠", W / 2, H / 2 - 25);
+  nextText("深夜游乐场", W / 2, H / 2 - 80, { size: 36, color: hexColor(PRIMARY), bold: true, align: "center", alpha: glow });
+  nextText("NC-17 成人休闲合集", W / 2, H / 2 - 50, { size: 12, color: 0xff4757, align: "center" });
+  nextText("记忆翻牌 / 反应测试 / 打地鼠", W / 2, H / 2 - 25, { size: 13, color: 0xaaaaaa, align: "center" });
 
   // Game icons preview
   const icons = [
@@ -848,50 +875,30 @@ function renderTitle(ctx: CanvasRenderingContext2D, f: number) {
     const cx = W / 2 - 110 + i * 110;
     const cy = H / 2 + 30;
     const bob = Math.sin(f * 0.03 + i * 2) * 4;
+    const col = hexColor(ic.color);
 
-    ctx.fillStyle = `${ic.color}22`;
-    ctx.beginPath();
-    ctx.arc(cx, cy + bob, 28, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = `${ic.color}66`;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+    g.circle(cx, cy + bob, 28).fill({ color: col, alpha: 0.13 });
+    g.setStrokeStyle({ width: 1.5, color: col, alpha: 0.4 });
+    g.circle(cx, cy + bob, 28).stroke();
 
-    drawPattern(ctx, cx - 12, cy + bob - 12, 24, ic.pattern, ic.color);
+    drawPatternPixi(g, cx - 12, cy + bob - 12, 24, ic.pattern, col);
 
-    ctx.fillStyle = "#888";
-    ctx.font = "10px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(ic.label, cx, cy + bob + 28);
+    nextText(ic.label, cx, cy + bob + 28, { size: 10, color: 0x888888, align: "center" });
   }
 
   // Prompt
   const promptAlpha = 0.5 + 0.5 * Math.sin(f * 0.06);
-  ctx.fillStyle = `rgba(62, 166, 255, ${promptAlpha})`;
-  ctx.font = "14px sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("选择游戏和难度开始", W / 2, H / 2 + 100);
+  nextText("选择游戏和难度开始", W / 2, H / 2 + 100, { size: 14, color: hexColor(PRIMARY), align: "center", alpha: promptAlpha });
 }
 
-function renderMemory(ctx: CanvasRenderingContext2D, s: typeof stateRefType, f: number) {
+function renderMemory(g: PixiGraphics, nextText: NextTextFn, s: StateRefType, f: number) {
   // Header bar
-  ctx.fillStyle = "#1a1a2e";
-  ctx.fillRect(0, 0, W, 65);
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#3ea6ff";
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText("记忆翻牌", 15, 24);
-  ctx.fillStyle = "#888";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`步数: ${s.memMoves}`, 15, 48);
-  ctx.textAlign = "right";
-  ctx.fillStyle = "#f0b90b";
-  ctx.font = "bold 14px sans-serif";
-  ctx.fillText(`${s.memScore} 分`, W - 15, 24);
+  g.rect(0, 0, W, 65).fill(0x1a1a2e);
+  nextText("记忆翻牌", 15, 24, { size: 16, color: hexColor(PRIMARY), bold: true });
+  nextText(`步数: ${s.memMoves}`, 15, 48, { size: 12, color: 0x888888 });
+  nextText(`${s.memScore} 分`, W - 15, 24, { size: 14, color: 0xf0b90b, bold: true, align: "right" });
   const matched = s.memCards.filter(c => c.matched).length;
-  ctx.fillStyle = "#888";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`${matched / 2} / 8 对`, W - 15, 48);
+  nextText(`${matched / 2} / 8 对`, W - 15, 48, { size: 12, color: 0x888888, align: "right" });
 
   // Card grid 4x4
   const gridX = 20, gridY = 80;
@@ -906,124 +913,74 @@ function renderMemory(ctx: CanvasRenderingContext2D, s: typeof stateRefType, f: 
       if (!card) continue;
       const x = gridX + col * (cardW + gap);
       const y = gridY + row * (cardH + gap);
+      const col_n = hexColor(card.color);
 
       if (card.matched) {
         // Matched - faded
-        ctx.fillStyle = "#1a2a1a";
-        drawRoundedRect(ctx, x, y, cardW, cardH, 8);
-        ctx.globalAlpha = 0.3;
-        drawPattern(ctx, x, y, Math.min(cardW, cardH), card.pattern, card.color);
-        ctx.globalAlpha = 1;
+        g.roundRect(x, y, cardW, cardH, 8).fill(0x1a2a1a);
+        drawPatternPixi(g, x, y, Math.min(cardW, cardH), card.pattern, col_n);
+        // Draw a semi-transparent overlay to fade it
+        g.roundRect(x, y, cardW, cardH, 8).fill({ color: 0x1a2a1a, alpha: 0.7 });
       } else if (card.flipped) {
         // Face up
-        ctx.fillStyle = "#1a1a2e";
-        drawRoundedRect(ctx, x, y, cardW, cardH, 8);
-        ctx.strokeStyle = card.color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.roundRect(x, y, cardW, cardH, 8);
-        ctx.stroke();
-        drawPattern(ctx, x, y, Math.min(cardW, cardH), card.pattern, card.color);
+        g.roundRect(x, y, cardW, cardH, 8).fill(0x1a1a2e);
+        g.setStrokeStyle({ width: 2, color: col_n });
+        g.roundRect(x, y, cardW, cardH, 8).stroke();
+        drawPatternPixi(g, x, y, Math.min(cardW, cardH), card.pattern, col_n);
       } else {
         // Face down
         const pulse = 0.8 + 0.2 * Math.sin(f * 0.03 + idx * 0.5);
-        ctx.fillStyle = `rgba(62, 166, 255, ${0.08 * pulse})`;
-        drawRoundedRect(ctx, x, y, cardW, cardH, 8);
-        ctx.strokeStyle = `rgba(62, 166, 255, ${0.3 * pulse})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.roundRect(x, y, cardW, cardH, 8);
-        ctx.stroke();
+        g.roundRect(x, y, cardW, cardH, 8).fill({ color: hexColor(PRIMARY), alpha: 0.08 * pulse });
+        g.setStrokeStyle({ width: 1, color: hexColor(PRIMARY), alpha: 0.3 * pulse });
+        g.roundRect(x, y, cardW, cardH, 8).stroke();
         // Question mark
-        ctx.fillStyle = `rgba(62, 166, 255, ${0.4 * pulse})`;
-        ctx.font = "bold 20px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("?", x + cardW / 2, y + cardH / 2 + 7);
+        nextText("?", x + cardW / 2, y + cardH / 2, { size: 20, color: hexColor(PRIMARY), bold: true, align: "center", alpha: 0.4 * pulse });
       }
     }
   }
 }
 
-function renderReaction(ctx: CanvasRenderingContext2D, s: typeof stateRefType, f: number) {
+function renderReaction(g: PixiGraphics, nextText: NextTextFn, s: StateRefType, f: number) {
   const r = s.reaction;
 
   // Header bar
-  ctx.fillStyle = "#1a1a2e";
-  ctx.fillRect(0, 0, W, 65);
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#ffa502";
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText("反应测试", 15, 24);
-  ctx.fillStyle = "#888";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`第 ${r.times.length + 1} / ${r.maxRounds} 轮`, 15, 48);
-  ctx.textAlign = "right";
-  ctx.fillStyle = "#f0b90b";
-  ctx.font = "bold 14px sans-serif";
-  ctx.fillText(`${s.reactionScore} 分`, W - 15, 24);
+  g.rect(0, 0, W, 65).fill(0x1a1a2e);
+  nextText("反应测试", 15, 24, { size: 16, color: 0xffa502, bold: true });
+  nextText(`第 ${r.times.length + 1} / ${r.maxRounds} 轮`, 15, 48, { size: 12, color: 0x888888 });
+  nextText(`${s.reactionScore} 分`, W - 15, 24, { size: 14, color: 0xf0b90b, bold: true, align: "right" });
 
   // Show last reaction time
   if (r.times.length > 0) {
     const last = r.times[r.times.length - 1];
-    ctx.fillStyle = last >= 9000 ? "#ff4757" : "#2ed573";
-    ctx.font = "12px sans-serif";
-    ctx.fillText(last >= 9000 ? "太早了!" : `${Math.floor(last)}ms`, W - 15, 48);
+    nextText(last >= 9000 ? "太早了!" : `${Math.floor(last)}ms`, W - 15, 48, {
+      size: 12, color: last >= 9000 ? 0xff4757 : 0x2ed573, align: "right"
+    });
   }
 
   if (r.phase === "wait") {
-    // Waiting to start
-    ctx.textAlign = "center";
     const alpha = 0.5 + 0.5 * Math.sin(f * 0.06);
-    ctx.fillStyle = `rgba(62, 166, 255, ${alpha})`;
-    ctx.font = "18px sans-serif";
-    ctx.fillText("点击屏幕开始", W / 2, H / 2);
-    ctx.fillStyle = "#666";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("目标出现后尽快点击", W / 2, H / 2 + 30);
+    nextText("点击屏幕开始", W / 2, H / 2, { size: 18, color: hexColor(PRIMARY), align: "center", alpha });
+    nextText("目标出现后尽快点击", W / 2, H / 2 + 30, { size: 12, color: 0x666666, align: "center" });
   } else if (r.phase === "ready") {
-    // Waiting for target to appear
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#ff4757";
-    ctx.font = "bold 22px sans-serif";
-    ctx.fillText("等待...", W / 2, H / 2);
-    ctx.fillStyle = "#666";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("目标出现前不要点击!", W / 2, H / 2 + 30);
+    nextText("等待...", W / 2, H / 2, { size: 22, color: 0xff4757, bold: true, align: "center" });
+    nextText("目标出现前不要点击!", W / 2, H / 2 + 30, { size: 12, color: 0x666666, align: "center" });
 
     // Pulsing border
     const pulse = 0.3 + 0.3 * Math.sin(f * 0.08);
-    ctx.strokeStyle = `rgba(255, 71, 87, ${pulse})`;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(10, 75, W - 20, H - 85);
+    g.setStrokeStyle({ width: 3, color: 0xff4757, alpha: pulse });
+    g.rect(10, 75, W - 20, H - 85).stroke();
   } else if (r.phase === "go") {
-    // Target visible!
-    ctx.fillStyle = "#0a2a0a";
-    ctx.fillRect(10, 75, W - 20, H - 85);
+    // Green background area
+    g.rect(10, 75, W - 20, H - 85).fill(0x0a2a0a);
 
     // Target circle with pulse
     const pulse = 1 + 0.15 * Math.sin(f * 0.15);
     const size = r.targetSize * pulse;
-    ctx.fillStyle = "#ffa502";
-    ctx.beginPath();
-    ctx.arc(r.targetX, r.targetY, size, 0, Math.PI * 2);
-    ctx.fill();
+    g.circle(r.targetX, r.targetY, size).fill(0xffa502);
+    g.circle(r.targetX, r.targetY, size * 0.5).fill(0xff6348);
+    g.circle(r.targetX, r.targetY, size * 0.15).fill(0xffffff);
 
-    // Inner ring
-    ctx.fillStyle = "#ff6348";
-    ctx.beginPath();
-    ctx.arc(r.targetX, r.targetY, size * 0.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Center dot
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.arc(r.targetX, r.targetY, size * 0.15, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#2ed573";
-    ctx.font = "bold 16px sans-serif";
-    ctx.fillText("点击!", W / 2, H - 20);
+    nextText("点击!", W / 2, H - 20, { size: 16, color: 0x2ed573, bold: true, align: "center" });
   }
 
   // Times history bar
@@ -1035,50 +992,34 @@ function renderReaction(ctx: CanvasRenderingContext2D, s: typeof stateRefType, f
       const t = r.times[i];
       const x = 20 + i * barW;
       if (t >= 9000) {
-        ctx.fillStyle = "#ff475744";
+        g.rect(x + 1, barY, barW - 2, barH).fill({ color: 0xff4757, alpha: 0.27 });
       } else {
         const ratio = Math.min(1, t / 1000);
-        const g = Math.floor(255 * (1 - ratio));
         const red = Math.floor(255 * ratio);
-        ctx.fillStyle = `rgba(${red}, ${g}, 50, 0.5)`;
+        const green = Math.floor(255 * (1 - ratio));
+        const barColor = (red << 16) | (green << 8) | 50;
+        g.rect(x + 1, barY, barW - 2, barH).fill({ color: barColor, alpha: 0.5 });
       }
-      ctx.fillRect(x + 1, barY, barW - 2, barH);
-      ctx.fillStyle = "#fff";
-      ctx.font = "8px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(t >= 9000 ? "X" : `${Math.floor(t)}`, x + barW / 2, barY + barH / 2 + 3);
+      nextText(t >= 9000 ? "X" : `${Math.floor(t)}`, x + barW / 2, barY + barH / 2, { size: 8, color: 0xffffff, align: "center" });
     }
   }
 }
 
-function renderWhack(ctx: CanvasRenderingContext2D, s: typeof stateRefType, f: number) {
+function renderWhack(g: PixiGraphics, nextText: NextTextFn, s: StateRefType, f: number) {
   const w = s.whack;
 
   // Header bar
-  ctx.fillStyle = "#1a1a2e";
-  ctx.fillRect(0, 0, W, 65);
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#2ed573";
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText("打地鼠", 15, 24);
-  ctx.fillStyle = "#888";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`得分: ${w.score}`, 15, 48);
-  ctx.textAlign = "right";
-  ctx.fillStyle = "#ff4757";
-  ctx.font = "bold 14px sans-serif";
-  ctx.fillText(`${Math.ceil(w.timeLeft)}秒`, W - 15, 24);
-  ctx.fillStyle = "#888";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`漏掉: ${w.misses}`, W - 15, 48);
+  g.rect(0, 0, W, 65).fill(0x1a1a2e);
+  nextText("打地鼠", 15, 24, { size: 16, color: 0x2ed573, bold: true });
+  nextText(`得分: ${w.score}`, 15, 48, { size: 12, color: 0x888888 });
+  nextText(`${Math.ceil(w.timeLeft)}秒`, W - 15, 24, { size: 14, color: 0xff4757, bold: true, align: "right" });
+  nextText(`漏掉: ${w.misses}`, W - 15, 48, { size: 12, color: 0x888888, align: "right" });
 
   // Timer bar
   const timerW = W - 30;
   const timerRatio = Math.max(0, w.timeLeft / DIFF_SETTINGS[s.difficulty].whackTime);
-  ctx.fillStyle = "#222";
-  ctx.fillRect(15, 68, timerW, 6);
-  ctx.fillStyle = timerRatio > 0.3 ? "#2ed573" : "#ff4757";
-  ctx.fillRect(15, 68, timerW * timerRatio, 6);
+  g.rect(15, 68, timerW, 6).fill(0x222222);
+  g.rect(15, 68, timerW * timerRatio, 6).fill(timerRatio > 0.3 ? 0x2ed573 : 0xff4757);
 
   // 3x3 grid
   const gridSize = Math.min(W - 60, H - 160);
@@ -1096,147 +1037,82 @@ function renderWhack(ctx: CanvasRenderingContext2D, s: typeof stateRefType, f: n
       const sz = cellSize - cellGap * 2;
 
       // Cell background
-      ctx.fillStyle = "#1a1a2e";
-      drawRoundedRect(ctx, x, y, sz, sz, 10);
-      ctx.strokeStyle = "#333";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(x, y, sz, sz, 10);
-      ctx.stroke();
+      g.roundRect(x, y, sz, sz, 10).fill(0x1a1a2e);
+      g.setStrokeStyle({ width: 1, color: 0x333333 });
+      g.roundRect(x, y, sz, sz, 10).stroke();
 
       if (cell.hit) {
         // Hit animation
-        ctx.fillStyle = "#2ed57344";
-        drawRoundedRect(ctx, x, y, sz, sz, 10);
-        ctx.strokeStyle = "#2ed573";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.roundRect(x, y, sz, sz, 10);
-        ctx.stroke();
+        g.roundRect(x, y, sz, sz, 10).fill({ color: 0x2ed573, alpha: 0.27 });
+        g.setStrokeStyle({ width: 2, color: 0x2ed573 });
+        g.roundRect(x, y, sz, sz, 10).stroke();
         // Checkmark
-        ctx.strokeStyle = "#2ed573";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(x + sz * 0.3, y + sz * 0.5);
-        ctx.lineTo(x + sz * 0.45, y + sz * 0.65);
-        ctx.lineTo(x + sz * 0.7, y + sz * 0.35);
-        ctx.stroke();
+        g.setStrokeStyle({ width: 3, color: 0x2ed573 });
+        g.moveTo(x + sz * 0.3, y + sz * 0.5).lineTo(x + sz * 0.45, y + sz * 0.65).lineTo(x + sz * 0.7, y + sz * 0.35).stroke();
       } else if (cell.active) {
         // Active mole
         const pulse = 0.9 + 0.1 * Math.sin(f * 0.15 + idx);
         const moleR = sz * 0.35 * pulse;
-        const cx = x + sz / 2, cy2 = y + sz / 2;
+        const cx = x + sz / 2, cy = y + sz / 2;
 
         // Mole body
-        ctx.fillStyle = "#8B4513";
-        ctx.beginPath();
-        ctx.arc(cx, cy2, moleR, 0, Math.PI * 2);
-        ctx.fill();
-
+        g.circle(cx, cy, moleR).fill(0x8B4513);
         // Mole face
-        ctx.fillStyle = "#D2691E";
-        ctx.beginPath();
-        ctx.arc(cx, cy2, moleR * 0.7, 0, Math.PI * 2);
-        ctx.fill();
-
+        g.circle(cx, cy, moleR * 0.7).fill(0xD2691E);
         // Eyes
-        ctx.fillStyle = "#111";
-        ctx.beginPath();
-        ctx.arc(cx - moleR * 0.25, cy2 - moleR * 0.15, moleR * 0.12, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(cx + moleR * 0.25, cy2 - moleR * 0.15, moleR * 0.12, 0, Math.PI * 2);
-        ctx.fill();
-
+        g.circle(cx - moleR * 0.25, cy - moleR * 0.15, moleR * 0.12).fill(0x111111);
+        g.circle(cx + moleR * 0.25, cy - moleR * 0.15, moleR * 0.12).fill(0x111111);
         // Nose
-        ctx.fillStyle = "#ff6b81";
-        ctx.beginPath();
-        ctx.arc(cx, cy2 + moleR * 0.1, moleR * 0.1, 0, Math.PI * 2);
-        ctx.fill();
+        g.circle(cx, cy + moleR * 0.1, moleR * 0.1).fill(0xff6b81);
 
-        // Timer indicator
+        // Timer indicator arc
         const timeRatio = cell.timer / s.whack.moleDuration;
-        ctx.strokeStyle = timeRatio > 0.3 ? "#ffa502" : "#ff4757";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(cx, cy2, moleR + 4, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * timeRatio);
-        ctx.stroke();
+        const arcColor = timeRatio > 0.3 ? 0xffa502 : 0xff4757;
+        g.setStrokeStyle({ width: 2, color: arcColor });
+        g.arc(cx, cy, moleR + 4, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * timeRatio).stroke();
       } else {
         // Empty hole
-        ctx.fillStyle = "#111";
-        ctx.beginPath();
-        ctx.ellipse(x + sz / 2, y + sz * 0.6, sz * 0.3, sz * 0.15, 0, 0, Math.PI * 2);
-        ctx.fill();
+        g.ellipse(x + sz / 2, y + sz * 0.6, sz * 0.3, sz * 0.15).fill(0x111111);
       }
     }
   }
 }
 
-function renderGameOver(ctx: CanvasRenderingContext2D, s: typeof stateRefType, f: number) {
+function renderGameOver(g: PixiGraphics, nextText: NextTextFn, s: StateRefType, f: number) {
   // Dark overlay
-  ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.textAlign = "center";
+  g.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.85 });
 
   // Game name
   const gameLabel = s.currentGame === "memory" ? "记忆翻牌" : s.currentGame === "reaction" ? "反应测试" : "打地鼠";
-  const gameColor = s.currentGame === "memory" ? "#3ea6ff" : s.currentGame === "reaction" ? "#ffa502" : "#2ed573";
+  const gameColor = s.currentGame === "memory" ? hexColor(PRIMARY) : s.currentGame === "reaction" ? 0xffa502 : 0x2ed573;
 
-  ctx.fillStyle = gameColor;
-  ctx.font = "bold 28px sans-serif";
-  ctx.fillText("游戏结束", W / 2, H / 2 - 80);
-
-  ctx.fillStyle = "#888";
-  ctx.font = "14px sans-serif";
-  ctx.fillText(gameLabel, W / 2, H / 2 - 50);
+  nextText("游戏结束", W / 2, H / 2 - 80, { size: 28, color: gameColor, bold: true, align: "center" });
+  nextText(gameLabel, W / 2, H / 2 - 50, { size: 14, color: 0x888888, align: "center" });
 
   // Score
   const currentScore = s.currentGame === "memory" ? s.memScore : s.currentGame === "reaction" ? s.reactionScore : s.whackScore;
-  ctx.fillStyle = "#f0b90b";
-  ctx.font = "bold 36px sans-serif";
-  ctx.fillText(`${currentScore}`, W / 2, H / 2);
-  ctx.fillStyle = "#888";
-  ctx.font = "12px sans-serif";
-  ctx.fillText("分", W / 2, H / 2 + 20);
+  nextText(`${currentScore}`, W / 2, H / 2, { size: 36, color: 0xf0b90b, bold: true, align: "center" });
+  nextText("分", W / 2, H / 2 + 20, { size: 12, color: 0x888888, align: "center" });
 
   // Stats
   if (s.currentGame === "memory") {
-    ctx.fillStyle = "#aaa";
-    ctx.font = "13px sans-serif";
-    ctx.fillText(`用了 ${s.memMoves} 步完成`, W / 2, H / 2 + 50);
+    nextText(`用了 ${s.memMoves} 步完成`, W / 2, H / 2 + 50, { size: 13, color: 0xaaaaaa, align: "center" });
   } else if (s.currentGame === "reaction") {
     const validTimes = s.reaction.times.filter(t => t < 9000);
     const avg = validTimes.length > 0 ? Math.floor(validTimes.reduce((a, b) => a + b, 0) / validTimes.length) : 0;
     const best = validTimes.length > 0 ? Math.floor(Math.min(...validTimes)) : 0;
-    ctx.fillStyle = "#aaa";
-    ctx.font = "13px sans-serif";
-    ctx.fillText(`平均反应: ${avg}ms`, W / 2, H / 2 + 45);
-    ctx.fillText(`最快: ${best}ms`, W / 2, H / 2 + 65);
+    nextText(`平均反应: ${avg}ms`, W / 2, H / 2 + 45, { size: 13, color: 0xaaaaaa, align: "center" });
+    nextText(`最快: ${best}ms`, W / 2, H / 2 + 65, { size: 13, color: 0xaaaaaa, align: "center" });
   } else if (s.currentGame === "whack") {
-    ctx.fillStyle = "#aaa";
-    ctx.font = "13px sans-serif";
-    ctx.fillText(`命中: ${s.whack.score / Math.floor(50 * DIFF_SETTINGS[s.difficulty].scoreMultiplier) || 0}`, W / 2, H / 2 + 45);
-    ctx.fillText(`漏掉: ${s.whack.misses}`, W / 2, H / 2 + 65);
+    const hitCount = Math.floor(50 * DIFF_SETTINGS[s.difficulty].scoreMultiplier);
+    nextText(`命中: ${hitCount > 0 ? s.whack.score / hitCount : 0}`, W / 2, H / 2 + 45, { size: 13, color: 0xaaaaaa, align: "center" });
+    nextText(`漏掉: ${s.whack.misses}`, W / 2, H / 2 + 65, { size: 13, color: 0xaaaaaa, align: "center" });
   }
 
   // Total score
-  ctx.fillStyle = "#666";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`总分: ${s.totalScore}`, W / 2, H / 2 + 100);
+  nextText(`总分: ${s.totalScore}`, W / 2, H / 2 + 100, { size: 12, color: 0x666666, align: "center" });
 
   // Prompt
   const alpha = 0.5 + 0.5 * Math.sin(f * 0.06);
-  ctx.fillStyle = `rgba(62, 166, 255, ${alpha})`;
-  ctx.font = "14px sans-serif";
-  ctx.fillText("点击下方按钮继续", W / 2, H / 2 + 130);
+  nextText("点击下方按钮继续", W / 2, H / 2 + 130, { size: 14, color: hexColor(PRIMARY), align: "center", alpha });
 }
-
-// Type helper for stateRef
-type StateRefType = {
-  phase: Phase; currentGame: MiniGame; difficulty: Difficulty; muted: boolean; totalScore: number;
-  memCards: MemCard[]; memFlipped: number[]; memLocked: boolean; memMoves: number; memScore: number;
-  reaction: ReactionState; reactionScore: number;
-  whack: WhackState; whackScore: number;
-};
-const stateRefType: StateRefType = {} as StateRefType;

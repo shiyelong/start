@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { ageGate } from "@/lib/age-gate";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "adult-sandbox";
@@ -100,7 +102,7 @@ const FURNITURE: FurnitureDef[] = [
   // Tables
   { id: "nightstand", name: "床头柜", category: "table", color: "#c8a87c", w: 1, h: 1, rooms: ["bedroom"], cost: 20, scoreValue: 8 },
   { id: "coffee-table", name: "茶几", category: "table", color: "#d4a76a", w: 3, h: 2, rooms: ["living"], cost: 35, scoreValue: 10 },
-  { id: "tv-stand", name: "电视柜", category: "table", color: "#555", w: 4, h: 1, rooms: ["living"], cost: 60, scoreValue: 12 },
+  { id: "tv-stand", name: "电视柜", category: "table", color: "#555555", w: 4, h: 1, rooms: ["living"], cost: 60, scoreValue: 12 },
   { id: "vanity", name: "梳妆台", category: "table", color: "#e8c8a0", w: 2, h: 1, rooms: ["bedroom", "bathroom"], cost: 45, scoreValue: 10 },
   // Lighting
   { id: "lamp-floor", name: "落地灯", category: "lighting", color: "#ffd700", w: 1, h: 1, glow: "rgba(255,215,0,0.12)", rooms: ["bedroom", "living"], cost: 25, scoreValue: 8 },
@@ -188,13 +190,11 @@ function calcRoomScore(placed: PlacedItem[], roomType: RoomType): { score: numbe
   let score = 0;
   const details: string[] = [];
 
-  // Base score from placed items
   for (const item of roomItems) {
     const def = getFurnitureDef(item.defId);
     if (def) score += def.scoreValue;
   }
 
-  // Required items check
   let requiredCount = 0;
   for (const reqId of room.required) {
     if (roomItems.some(p => p.defId === reqId)) {
@@ -208,7 +208,6 @@ function calcRoomScore(placed: PlacedItem[], roomType: RoomType): { score: numbe
     details.push("必需家具齐全 +30");
   }
 
-  // Bonus items
   let bonusCount = 0;
   for (const bonusId of room.bonusItems) {
     if (roomItems.some(p => p.defId === bonusId)) {
@@ -221,14 +220,12 @@ function calcRoomScore(placed: PlacedItem[], roomType: RoomType): { score: numbe
     details.push(`装饰加成 +${15 + bonusCount * 5}`);
   }
 
-  // Character bonus
   const chars = roomItems.filter(p => p.defId.startsWith("char-"));
   if (chars.length > 0) {
     score += chars.length * 20;
     details.push(`角色加成 +${chars.length * 20}`);
   }
 
-  // Variety bonus
   const categories = new Set(roomItems.map(p => getFurnitureDef(p.defId)?.category).filter(Boolean));
   if (categories.size >= 4) {
     score += 20;
@@ -240,13 +237,21 @@ function calcRoomScore(placed: PlacedItem[], roomType: RoomType): { score: numbe
   return { score, completion, details };
 }
 
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function AdultSandbox() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
   const frameRef = useRef(0);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiInitRef = useRef(false);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
 
   const [blocked, setBlocked] = useState(false);
   const [phase, setPhase] = useState<Phase>("title");
@@ -254,7 +259,7 @@ export default function AdultSandbox() {
   const [muted, setMuted] = useState(false);
   const [gameState, setGameState] = useState<GameState>(() => initGameState("normal"));
   const [selectedFurniture, setSelectedFurniture] = useState<string | null>(null);
-  const [dragging, setDragging] = useState<string | null>(null); // placed item id
+  const [dragging, setDragging] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const [filterCategory, setFilterCategory] = useState<FurnitureCategory | "all">("all");
@@ -311,13 +316,10 @@ export default function AdultSandbox() {
     if (s.gameState.coins < def.cost) { playSound("error"); return; }
     if (!def.rooms.includes(s.gameState.room)) { playSound("error"); return; }
 
-    // Clamp to grid
     const px = Math.max(1, Math.min(COLS - 1 - def.w, gx));
     const py = Math.max(1, Math.min(ROWS - 1 - def.h, gy));
-
     const newBounds = { x: px, y: py, w: def.w, h: def.h };
 
-    // Check overlap
     for (const item of s.gameState.placed) {
       const iDef = getFurnitureDef(item.defId);
       if (!iDef) continue;
@@ -330,9 +332,7 @@ export default function AdultSandbox() {
     const newItem: PlacedItem = {
       id: `item-${s.gameState.nextItemId}`,
       defId: s.selectedFurniture,
-      x: px,
-      y: py,
-      rotation: 0,
+      x: px, y: py, rotation: 0,
     };
 
     setGameState(prev => ({
@@ -351,11 +351,7 @@ export default function AdultSandbox() {
       if (!item) return prev;
       const def = getFurnitureDef(item.defId);
       const refund = def ? Math.floor(def.cost * 0.7) : 0;
-      return {
-        ...prev,
-        placed: prev.placed.filter(p => p.id !== itemId),
-        coins: prev.coins + refund,
-      };
+      return { ...prev, placed: prev.placed.filter(p => p.id !== itemId), coins: prev.coins + refund };
     });
     playSound("click");
   }, [playSound]);
@@ -364,9 +360,7 @@ export default function AdultSandbox() {
   const rotateItem = useCallback((itemId: string) => {
     setGameState(prev => ({
       ...prev,
-      placed: prev.placed.map(p =>
-        p.id === itemId ? { ...p, rotation: (p.rotation + 90) % 360 } : p
-      ),
+      placed: prev.placed.map(p => p.id === itemId ? { ...p, rotation: (p.rotation + 90) % 360 } : p),
     }));
     playSound("move");
   }, [playSound]);
@@ -426,39 +420,303 @@ export default function AdultSandbox() {
     playSound("click");
   }, [playSound]);
 
-  // ─── Canvas Render ─────────────────────────────────────────────────────────
+  // ─── PixiJS Render ─────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
+    let destroyed = false;
 
-    const render = () => {
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      const s = stateRef.current;
-      frameRef.current++;
-      const f = frameRef.current;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0f0f0f, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      if (s.phase === "title") {
-        renderTitle(ctx, f);
-      } else if (s.phase === "playing") {
-        renderRoom(ctx, s.gameState, s.hoveredItem, s.dragging, f);
-      } else if (s.phase === "result") {
-        renderResult(ctx, s.gameState, s.resultData, f);
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
+
+      // Pre-create text pool
+      const TEXT_POOL_SIZE = 80;
+      const texts = pixiTextsRef.current;
+      texts.clear();
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({ fontSize: 12, fill: "#ffffff", fontFamily: "sans-serif" }) });
+        t.visible = false;
+        app.stage.addChild(t);
+        texts.set(`t${i}`, t);
       }
 
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(render);
-    };
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: {
+        fill?: string; fontSize?: number; fontWeight?: string;
+        ax?: number; ay?: number; alpha?: number;
+      }) => {
+        if (textIdx >= TEXT_POOL_SIZE) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        const st = t.style as import("pixi.js").TextStyle;
+        st.fontSize = opts?.fontSize ?? 12;
+        st.fill = opts?.fill ?? "#ffffff";
+        st.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        st.fontFamily = "sans-serif";
+        t.visible = true;
+      };
 
-    rafRef.current = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(rafRef.current);
+      app.ticker.add(() => {
+        if (destroyed) return;
+        frameRef.current++;
+        const f = frameRef.current;
+        const s = stateRef.current;
+
+        g.clear();
+        textIdx = 0;
+        texts.forEach(t => { t.visible = false; });
+
+        if (s.phase === "title") {
+          renderTitlePixi(g, showText, f);
+        } else if (s.phase === "playing") {
+          renderRoomPixi(g, showText, s.gameState, s.hoveredItem, s.dragging, f);
+        } else if (s.phase === "result") {
+          renderResultPixi(g, showText, s.gameState, s.resultData, f);
+        }
+      });
+
+      // ─── Title Render ──────────────────────────────────────────────────
+      function renderTitlePixi(g: PixiGraphics, showText: (t: string, x: number, y: number, o?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => void, f: number) {
+        // Background gradient approximation
+        g.rect(0, 0, W, H / 2).fill({ color: 0x1a0a20 });
+        g.rect(0, H / 2, W, H / 2).fill({ color: hexToNum(BG) });
+
+        // Floating petals
+        for (let i = 0; i < 12; i++) {
+          const x = (W * 0.05 + i * W * 0.08 + Math.sin(f * 0.015 + i * 1.2) * 30) % W;
+          const y = (f * 0.3 + i * 60) % (H + 40) - 20;
+          const size = 4 + Math.sin(f * 0.02 + i) * 2;
+          const alpha = 0.1 + 0.08 * Math.sin(f * 0.03 + i);
+          g.ellipse(x, y, size, size * 0.5).fill({ color: 0xff6b9d, alpha });
+        }
+
+        // Title
+        const glow = 0.7 + 0.3 * Math.sin(f * 0.04);
+        showText("秘密花园", W / 2, H / 2 - 100 - 14, { fill: ACCENT, fontSize: 38, fontWeight: "bold", ax: 0.5, alpha: glow });
+        showText("NC-17 成人沙盒建造", W / 2, H / 2 - 70 - 10, { fill: "#ff4757", fontSize: 12, ax: 0.5 });
+        showText("4种房间 / 20+家具 / 3位角色 / 自由建造", W / 2, H / 2 - 45 - 10, { fill: "#aaaaaa", fontSize: 13, ax: 0.5 });
+
+        // Room previews
+        for (let i = 0; i < 4; i++) {
+          const room = ROOMS[i];
+          const rx = W / 2 - 150 + i * 80;
+          const ry = H / 2 + 10;
+          const bob = Math.sin(f * 0.025 + i * 1.5) * 4;
+
+          g.roundRect(rx - 25, ry + bob - 20, 50, 50, 8).fill({ color: hexToNum(room.color), alpha: 0.09 });
+          g.roundRect(rx - 25, ry + bob - 20, 50, 50, 8).stroke({ color: hexToNum(room.color), width: 1, alpha: 0.27 });
+          showText(room.name, rx, ry + bob + 5 - 7, { fill: room.color, fontSize: 14, fontWeight: "bold", ax: 0.5 });
+        }
+
+        // Features
+        showText("拖拽放置 / 旋转物品 / 拍照保存 / 评分系统", W / 2, H / 2 + 80 - 6, { fill: "#666666", fontSize: 11, ax: 0.5 });
+
+        // Prompt
+        const pa = 0.5 + 0.5 * Math.sin(f * 0.06);
+        showText("选择难度开始建造", W / 2, H / 2 + 120 - 7, { fill: PRIMARY, fontSize: 14, ax: 0.5, alpha: pa });
+      }
+
+      // ─── Room Render ───────────────────────────────────────────────────
+      function renderRoomPixi(g: PixiGraphics, showText: (t: string, x: number, y: number, o?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => void, gs: GameState, hoveredId: string | null, draggingId: string | null, f: number) {
+        const room = getRoomDef(gs.room);
+
+        // Floor
+        g.rect(0, 0, W, H).fill({ color: hexToNum(room.floorColor) });
+
+        // Grid lines
+        for (let c = 0; c <= COLS; c++) {
+          g.rect(c * GRID, 0, 0.5, H).fill({ color: 0xffffff, alpha: 0.03 });
+        }
+        for (let r = 0; r <= ROWS; r++) {
+          g.rect(0, r * GRID, W, 0.5).fill({ color: 0xffffff, alpha: 0.03 });
+        }
+
+        // Walls
+        const wc = hexToNum(room.wallColor);
+        g.rect(0, 0, W, GRID).fill({ color: wc });
+        g.rect(0, H - GRID, W, GRID).fill({ color: wc });
+        g.rect(0, 0, GRID, H).fill({ color: wc });
+        g.rect(W - GRID, 0, GRID, H).fill({ color: wc });
+
+        // Wall brick texture
+        for (let i = 0; i < COLS; i++) {
+          g.rect(i * GRID, 0, GRID, GRID).stroke({ color: 0xffffff, width: 1, alpha: 0.05 });
+          g.rect(i * GRID, H - GRID, GRID, GRID).stroke({ color: 0xffffff, width: 1, alpha: 0.05 });
+        }
+
+        // Room label
+        showText(room.name, W / 2, GRID - 5 - 8, { fill: room.color, fontSize: 10, fontWeight: "bold", ax: 0.5, alpha: 0.25 });
+
+        // Glow effects (under items)
+        for (const item of gs.placed) {
+          const def = getFurnitureDef(item.defId);
+          if (!def || !def.glow) continue;
+          const b = getItemBounds(item, def);
+          const cx = (b.x + b.w / 2) * GRID;
+          const cy = (b.y + b.h / 2) * GRID;
+          const radius = Math.max(b.w, b.h) * GRID * 1.5;
+          const pulse = 1 + 0.1 * Math.sin(f * 0.04);
+          g.circle(cx, cy, radius * pulse).fill({ color: hexToNum(def.color), alpha: 0.06 });
+        }
+
+        // Placed items
+        for (const item of gs.placed) {
+          const def = getFurnitureDef(item.defId);
+          if (!def) continue;
+          const b = getItemBounds(item, def);
+          const px = b.x * GRID;
+          const py = b.y * GRID;
+          const pw = b.w * GRID;
+          const ph = b.h * GRID;
+          const isHovered = item.id === hoveredId;
+          const isDragging = item.id === draggingId;
+
+          // Shadow
+          g.roundRect(px + 2, py + 2, pw, ph, 3).fill({ color: 0x000000, alpha: 0.3 });
+
+          // Item body
+          g.roundRect(px, py, pw, ph, 3).fill({ color: hexToNum(def.color), alpha: isDragging ? 0.8 : 1 });
+
+          // Inner detail
+          g.roundRect(px + 2, py + 2, pw - 4, ph - 4, 2).fill({ color: 0x000000, alpha: 0.2 });
+
+          // Character special rendering
+          if (def.category === "character") {
+            const ccx = px + pw / 2;
+            const bob = Math.sin(f * 0.04) * 2;
+            const headR = Math.min(pw, ph) * 0.2;
+            // Head
+            g.circle(ccx, py + headR + 4 + bob, headR).fill({ color: 0xffd5c2 });
+            // Hair
+            g.circle(ccx, py + headR + 2 + bob, headR + 1).fill({ color: hexToNum(def.color) });
+            // Body
+            g.roundRect(ccx - pw * 0.3, py + headR * 2 + 6 + bob, pw * 0.6, ph - headR * 2 - 10, 4).fill({ color: hexToNum(def.color), alpha: 0.8 });
+            // Name
+            showText(def.name.split(" ")[0], ccx, py + ph - 3 - 5, { fill: "#ffffff", fontSize: 9, fontWeight: "bold", ax: 0.5 });
+          } else {
+            // Furniture label
+            const fs = Math.min(10, pw / def.name.length * 1.2);
+            showText(def.name, px + pw / 2, py + ph / 2 + 4 - fs * 0.4, { fill: "#ffffffb3", fontSize: fs, ax: 0.5 });
+          }
+
+          // Rotation indicator
+          if (item.rotation !== 0) {
+            showText(`${item.rotation}`, px + pw - 2, py, { fill: "#ffffff4d", fontSize: 8, ax: 1 });
+          }
+
+          // Hover highlight
+          if (isHovered && !isDragging) {
+            g.roundRect(px - 1, py - 1, pw + 2, ph + 2, 4).stroke({ color: hexToNum(PRIMARY), width: 2 });
+            // Tooltip
+            const tooltipW = Math.max(80, def.name.length * 12 + 20);
+            g.roundRect(px, py - 22, tooltipW, 18, 4).fill({ color: 0x000000, alpha: 0.85 });
+            showText(`${def.name} (${def.scoreValue}分)`, px + 4, py - 22, { fill: "#ffffff", fontSize: 10 });
+          }
+
+          // Dragging outline
+          if (isDragging) {
+            g.roundRect(px - 1, py - 1, pw + 2, ph + 2, 4).stroke({ color: 0xffffff, width: 2, alpha: 0.7 });
+          }
+        }
+
+        // HUD overlay
+        g.roundRect(4, H - GRID + 2, 140, GRID - 4, 4).fill({ color: 0x000000, alpha: 0.6 });
+        showText(`G ${gs.coins}`, 10, H - 6 - 8, { fill: "#f0b90b", fontSize: 10, fontWeight: "bold" });
+        showText(`| ${gs.placed.length} 物品`, 65, H - 6 - 8, { fill: "#888888", fontSize: 10 });
+      }
+
+      // ─── Result Render ─────────────────────────────────────────────────
+      function renderResultPixi(g: PixiGraphics, showText: (t: string, x: number, y: number, o?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => void, gs: GameState, result: { score: number; completion: number; details: string[] }, f: number) {
+        const room = getRoomDef(gs.room);
+
+        // Background
+        g.rect(0, 0, W, H / 2).fill({ color: hexToNum(room.floorColor) });
+        g.rect(0, H / 2, W, H / 2).fill({ color: hexToNum(BG) });
+
+        // Particles for high completion
+        if (result.completion >= 80) {
+          for (let i = 0; i < 20; i++) {
+            const px = (i * 31 + f * 0.4) % W;
+            const py = (i * 29 + f * 0.2) % H;
+            const size = 2 + Math.sin(f * 0.03 + i) * 1.5;
+            const alpha = (15 + Math.sin(f * 0.04 + i) * 10) / 255;
+            g.circle(px, py, size).fill({ color: hexToNum(room.color), alpha });
+          }
+        }
+
+        // Title
+        showText(`${room.name}评分`, W / 2, 70 - 14, { fill: room.color, fontSize: 28, fontWeight: "bold", ax: 0.5 });
+
+        // Completion circle (background ring)
+        const circleX = W / 2, circleY = 160, circleR = 55;
+        g.circle(circleX, circleY, circleR + 4).fill({ color: 0x222222 });
+        g.circle(circleX, circleY, circleR - 4).fill({ color: hexToNum(BG) });
+
+        // Completion arc (filled ring)
+        const compColor = result.completion >= 80 ? "#2ed573" : result.completion >= 50 ? "#ffa502" : "#ff4757";
+        if (result.completion > 0) {
+          const startAngle = -Math.PI / 2;
+          const endAngle = startAngle + (Math.PI * 2 * result.completion / 100);
+          g.arc(circleX, circleY, circleR, startAngle, endAngle).lineTo(circleX, circleY).fill({ color: hexToNum(compColor), alpha: 0.3 });
+        }
+
+        showText(`${result.completion}%`, circleX, circleY - 12, { fill: compColor, fontSize: 24, fontWeight: "bold", ax: 0.5 });
+        showText("完成度", circleX, circleY + 12, { fill: "#888888", fontSize: 11, ax: 0.5 });
+
+        // Score
+        showText(`${result.score} 分`, W / 2, 260 - 10, { fill: "#f0b90b", fontSize: 20, fontWeight: "bold", ax: 0.5 });
+
+        // Rating
+        const rating = result.completion >= 90 ? "S" : result.completion >= 80 ? "A" : result.completion >= 60 ? "B" : result.completion >= 40 ? "C" : "D";
+        const ratingColor = rating === "S" ? "#ffd700" : rating === "A" ? "#2ed573" : rating === "B" ? "#3ea6ff" : rating === "C" ? "#ffa502" : "#ff4757";
+        showText(rating, W / 2, 310 - 18, { fill: ratingColor, fontSize: 36, fontWeight: "bold", ax: 0.5 });
+        showText("评级", W / 2, 330 - 6, { fill: "#666666", fontSize: 11, ax: 0.5 });
+
+        // Details card
+        const cardY = 350;
+        g.roundRect(40, cardY, W - 80, 100, 8).fill({ color: 0x1a1a1a });
+        g.roundRect(40, cardY, W - 80, 100, 8).stroke({ color: hexToNum(room.color), width: 1, alpha: 0.2 });
+
+        showText("评分详情", W / 2, cardY + 18 - 6, { fill: "#aaaaaa", fontSize: 11, fontWeight: "bold", ax: 0.5 });
+
+        if (result.details.length === 0) {
+          showText("继续添加家具来提高评分", W / 2, cardY + 45 - 5, { fill: "#888888", fontSize: 10, ax: 0.5 });
+        } else {
+          for (let i = 0; i < Math.min(4, result.details.length); i++) {
+            showText(result.details[i], W / 2, cardY + 38 + i * 16 - 5, { fill: "#888888", fontSize: 10, ax: 0.5 });
+          }
+        }
+
+        showText(`累计总分: ${gs.score}`, W / 2, cardY + 92 - 5, { fill: "#555555", fontSize: 10, ax: 0.5 });
+      }
+    }
+
+    initPixi();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
+    };
   }, []);
 
   // ─── Canvas Interaction ────────────────────────────────────────────────────
@@ -490,14 +748,12 @@ export default function AdultSandbox() {
       if (s.phase !== "playing") return;
       const { gx, gy } = getGridPos(e.clientX, e.clientY);
 
-      // Right click = rotate
       if (e.button === 2) {
         const item = findItemAt(gx, gy);
         if (item) rotateItem(item.id);
         return;
       }
 
-      // Check if clicking existing item
       const item = findItemAt(gx, gy);
       if (item) {
         setDragging(item.id);
@@ -505,7 +761,6 @@ export default function AdultSandbox() {
         return;
       }
 
-      // Place new furniture
       if (s.selectedFurniture) {
         placeFurniture(gx, gy);
       }
@@ -521,9 +776,7 @@ export default function AdultSandbox() {
         const newY = Math.max(1, Math.min(ROWS - 2, gy - s.dragOffset.y));
         setGameState(prev => ({
           ...prev,
-          placed: prev.placed.map(p =>
-            p.id === s.dragging ? { ...p, x: newX, y: newY } : p
-          ),
+          placed: prev.placed.map(p => p.id === s.dragging ? { ...p, x: newX, y: newY } : p),
         }));
       } else {
         const item = findItemAt(gx, gy);
@@ -540,7 +793,6 @@ export default function AdultSandbox() {
 
     const onContextMenu = (e: Event) => e.preventDefault();
 
-    // Touch support
     const onTouchStart = (e: TouchEvent) => {
       e.preventDefault();
       const s = stateRef.current;
@@ -564,9 +816,7 @@ export default function AdultSandbox() {
       const newY = Math.max(1, Math.min(ROWS - 2, gy - s.dragOffset.y));
       setGameState(prev => ({
         ...prev,
-        placed: prev.placed.map(p =>
-          p.id === s.dragging ? { ...p, x: newX, y: newY } : p
-        ),
+        placed: prev.placed.map(p => p.id === s.dragging ? { ...p, x: newX, y: newY } : p),
       }));
     };
 
@@ -577,7 +827,6 @@ export default function AdultSandbox() {
       }
     };
 
-    // Double click = remove
     const onDblClick = (e: MouseEvent) => {
       const s = stateRef.current;
       if (s.phase !== "playing") return;
@@ -626,7 +875,6 @@ export default function AdultSandbox() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [rotateItem, removeItem]);
-
 
   // ─── Blocked ───────────────────────────────────────────────────────────────
   if (blocked) {
@@ -829,377 +1077,4 @@ export default function AdultSandbox() {
       </div>
     </div>
   );
-}
-
-
-// ─── Canvas Render Functions ─────────────────────────────────────────────────
-
-function renderTitle(ctx: CanvasRenderingContext2D, f: number) {
-  // Background
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, "#1a0a20");
-  grad.addColorStop(1, BG);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
-
-  // Floating petals
-  for (let i = 0; i < 12; i++) {
-    const x = (W * 0.05 + i * W * 0.08 + Math.sin(f * 0.015 + i * 1.2) * 30) % W;
-    const y = (f * 0.3 + i * 60) % (H + 40) - 20;
-    const size = 4 + Math.sin(f * 0.02 + i) * 2;
-    const alpha = 0.1 + 0.08 * Math.sin(f * 0.03 + i);
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(f * 0.01 + i);
-    ctx.fillStyle = `rgba(255, 107, 157, ${alpha})`;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, size, size * 0.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  // Title
-  ctx.textAlign = "center";
-  const glow = 0.7 + 0.3 * Math.sin(f * 0.04);
-  ctx.fillStyle = `rgba(255, 107, 157, ${glow})`;
-  ctx.font = "bold 38px sans-serif";
-  ctx.fillText("秘密花园", W / 2, H / 2 - 100);
-
-  ctx.fillStyle = "#ff4757";
-  ctx.font = "12px sans-serif";
-  ctx.fillText("NC-17 成人沙盒建造", W / 2, H / 2 - 70);
-
-  ctx.fillStyle = "#aaa";
-  ctx.font = "13px sans-serif";
-  ctx.fillText("4种房间 / 20+家具 / 3位角色 / 自由建造", W / 2, H / 2 - 45);
-
-  // Room previews
-  for (let i = 0; i < 4; i++) {
-    const room = ROOMS[i];
-    const rx = W / 2 - 150 + i * 80;
-    const ry = H / 2 + 10;
-    const bob = Math.sin(f * 0.025 + i * 1.5) * 4;
-
-    ctx.fillStyle = `${room.color}18`;
-    roundRect(ctx, rx - 25, ry + bob - 20, 50, 50, 8);
-    ctx.fill();
-    ctx.strokeStyle = `${room.color}44`;
-    ctx.lineWidth = 1;
-    roundRect(ctx, rx - 25, ry + bob - 20, 50, 50, 8);
-    ctx.stroke();
-
-    ctx.fillStyle = room.color;
-    ctx.font = "bold 14px sans-serif";
-    ctx.fillText(room.name, rx, ry + bob + 5);
-  }
-
-  // Features
-  ctx.fillStyle = "#666";
-  ctx.font = "11px sans-serif";
-  ctx.fillText("拖拽放置 / 旋转物品 / 拍照保存 / 评分系统", W / 2, H / 2 + 80);
-
-  // Prompt
-  const pa = 0.5 + 0.5 * Math.sin(f * 0.06);
-  ctx.fillStyle = `rgba(62, 166, 255, ${pa})`;
-  ctx.font = "14px sans-serif";
-  ctx.fillText("选择难度开始建造", W / 2, H / 2 + 120);
-}
-
-function renderRoom(ctx: CanvasRenderingContext2D, gs: GameState, hoveredId: string | null, draggingId: string | null, f: number) {
-  const room = getRoomDef(gs.room);
-
-  // Floor
-  ctx.fillStyle = room.floorColor;
-  ctx.fillRect(0, 0, W, H);
-
-  // Grid
-  ctx.strokeStyle = "rgba(255,255,255,0.03)";
-  ctx.lineWidth = 0.5;
-  for (let c = 0; c <= COLS; c++) {
-    ctx.beginPath();
-    ctx.moveTo(c * GRID, 0);
-    ctx.lineTo(c * GRID, H);
-    ctx.stroke();
-  }
-  for (let r = 0; r <= ROWS; r++) {
-    ctx.beginPath();
-    ctx.moveTo(0, r * GRID);
-    ctx.lineTo(W, r * GRID);
-    ctx.stroke();
-  }
-
-  // Walls (border)
-  ctx.fillStyle = room.wallColor;
-  // Top wall
-  ctx.fillRect(0, 0, W, GRID);
-  // Bottom wall
-  ctx.fillRect(0, H - GRID, W, GRID);
-  // Left wall
-  ctx.fillRect(0, 0, GRID, H);
-  // Right wall
-  ctx.fillRect(W - GRID, 0, GRID, H);
-
-  // Wall texture
-  ctx.strokeStyle = "rgba(255,255,255,0.05)";
-  ctx.lineWidth = 1;
-  for (let i = 0; i < COLS; i++) {
-    // Top wall bricks
-    ctx.strokeRect(i * GRID, 0, GRID, GRID);
-    // Bottom wall bricks
-    ctx.strokeRect(i * GRID, H - GRID, GRID, GRID);
-  }
-
-  // Room label
-  ctx.textAlign = "center";
-  ctx.fillStyle = `${room.color}40`;
-  ctx.font = "bold 10px sans-serif";
-  ctx.fillText(room.name, W / 2, GRID - 5);
-
-  // Render glow effects first (under items)
-  for (const item of gs.placed) {
-    const def = getFurnitureDef(item.defId);
-    if (!def || !def.glow) continue;
-    const b = getItemBounds(item, def);
-    const cx = (b.x + b.w / 2) * GRID;
-    const cy = (b.y + b.h / 2) * GRID;
-    const radius = Math.max(b.w, b.h) * GRID * 2;
-    const pulse = 1 + 0.1 * Math.sin(f * 0.04);
-    const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * pulse);
-    grd.addColorStop(0, def.glow);
-    grd.addColorStop(1, "transparent");
-    ctx.fillStyle = grd;
-    ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
-  }
-
-  // Render placed items
-  for (const item of gs.placed) {
-    const def = getFurnitureDef(item.defId);
-    if (!def) continue;
-    const b = getItemBounds(item, def);
-    const px = b.x * GRID;
-    const py = b.y * GRID;
-    const pw = b.w * GRID;
-    const ph = b.h * GRID;
-
-    const isHovered = item.id === hoveredId;
-    const isDragging = item.id === draggingId;
-
-    // Shadow
-    ctx.fillStyle = "rgba(0,0,0,0.3)";
-    roundRect(ctx, px + 2, py + 2, pw, ph, 3);
-    ctx.fill();
-
-    // Item body
-    ctx.fillStyle = isDragging ? def.color + "cc" : def.color;
-    roundRect(ctx, px, py, pw, ph, 3);
-    ctx.fill();
-
-    // Inner detail
-    ctx.fillStyle = "rgba(0,0,0,0.2)";
-    roundRect(ctx, px + 2, py + 2, pw - 4, ph - 4, 2);
-    ctx.fill();
-
-    // Character special rendering
-    if (def.category === "character") {
-      renderCharacter(ctx, def, px, py, pw, ph, f);
-    } else {
-      // Furniture icon/label
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.font = `${Math.min(10, pw / def.name.length * 1.2)}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillText(def.name, px + pw / 2, py + ph / 2 + 4);
-    }
-
-    // Rotation indicator
-    if (item.rotation !== 0) {
-      ctx.fillStyle = "rgba(255,255,255,0.3)";
-      ctx.font = "8px sans-serif";
-      ctx.textAlign = "right";
-      ctx.fillText(`${item.rotation}`, px + pw - 2, py + 8);
-    }
-
-    // Hover highlight
-    if (isHovered && !isDragging) {
-      ctx.strokeStyle = PRIMARY;
-      ctx.lineWidth = 2;
-      roundRect(ctx, px - 1, py - 1, pw + 2, ph + 2, 4);
-      ctx.stroke();
-
-      // Tooltip
-      ctx.fillStyle = "rgba(0,0,0,0.85)";
-      const tooltipW = Math.max(80, def.name.length * 12 + 20);
-      roundRect(ctx, px, py - 22, tooltipW, 18, 4);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "10px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(`${def.name} (${def.scoreValue}分)`, px + 4, py - 9);
-    }
-
-    // Dragging outline
-    if (isDragging) {
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 4]);
-      roundRect(ctx, px - 1, py - 1, pw + 2, ph + 2, 4);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }
-
-  // HUD overlay
-  ctx.textAlign = "left";
-  ctx.fillStyle = "rgba(0,0,0,0.6)";
-  roundRect(ctx, 4, H - GRID + 2, 140, GRID - 4, 4);
-  ctx.fill();
-  ctx.fillStyle = "#f0b90b";
-  ctx.font = "bold 10px sans-serif";
-  ctx.fillText(`G ${gs.coins}`, 10, H - 6);
-  ctx.fillStyle = "#888";
-  ctx.font = "10px sans-serif";
-  ctx.fillText(`| ${gs.placed.length} 物品`, 65, H - 6);
-}
-
-function renderCharacter(ctx: CanvasRenderingContext2D, def: FurnitureDef, px: number, py: number, pw: number, ph: number, f: number) {
-  const cx = px + pw / 2;
-  const bob = Math.sin(f * 0.04) * 2;
-
-  // Head
-  const headR = Math.min(pw, ph) * 0.2;
-  ctx.fillStyle = "#ffd5c2";
-  ctx.beginPath();
-  ctx.arc(cx, py + headR + 4 + bob, headR, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Hair
-  ctx.fillStyle = def.color;
-  ctx.beginPath();
-  ctx.arc(cx, py + headR + 2 + bob, headR + 1, Math.PI, Math.PI * 2);
-  ctx.fill();
-
-  // Body
-  ctx.fillStyle = def.color + "cc";
-  roundRect(ctx, cx - pw * 0.3, py + headR * 2 + 6 + bob, pw * 0.6, ph - headR * 2 - 10, 4);
-  ctx.fill();
-
-  // Name
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 9px sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(def.name.split(" ")[0], cx, py + ph - 3);
-}
-
-function renderResult(ctx: CanvasRenderingContext2D, gs: GameState, result: { score: number; completion: number; details: string[] }, f: number) {
-  const room = getRoomDef(gs.room);
-
-  // Background
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, room.floorColor);
-  grad.addColorStop(1, BG);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
-
-  // Particles
-  if (result.completion >= 80) {
-    for (let i = 0; i < 20; i++) {
-      const px = (i * 31 + f * 0.4) % W;
-      const py = (i * 29 + f * 0.2) % H;
-      const size = 2 + Math.sin(f * 0.03 + i) * 1.5;
-      ctx.fillStyle = `${room.color}${Math.floor(15 + Math.sin(f * 0.04 + i) * 10).toString(16).padStart(2, "0")}`;
-      ctx.beginPath();
-      ctx.arc(px, py, size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  ctx.textAlign = "center";
-
-  // Title
-  ctx.fillStyle = room.color;
-  ctx.font = "bold 28px sans-serif";
-  ctx.fillText(`${room.name}评分`, W / 2, 70);
-
-  // Completion circle
-  const circleX = W / 2, circleY = 160, circleR = 55;
-  ctx.strokeStyle = "#222";
-  ctx.lineWidth = 8;
-  ctx.beginPath();
-  ctx.arc(circleX, circleY, circleR, 0, Math.PI * 2);
-  ctx.stroke();
-
-  const compColor = result.completion >= 80 ? "#2ed573" : result.completion >= 50 ? "#ffa502" : "#ff4757";
-  ctx.strokeStyle = compColor;
-  ctx.lineWidth = 8;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.arc(circleX, circleY, circleR, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * result.completion / 100));
-  ctx.stroke();
-  ctx.lineCap = "butt";
-
-  ctx.fillStyle = compColor;
-  ctx.font = "bold 24px sans-serif";
-  ctx.fillText(`${result.completion}%`, circleX, circleY + 8);
-  ctx.fillStyle = "#888";
-  ctx.font = "11px sans-serif";
-  ctx.fillText("完成度", circleX, circleY + 25);
-
-  // Score
-  ctx.fillStyle = "#f0b90b";
-  ctx.font = "bold 20px sans-serif";
-  ctx.fillText(`${result.score} 分`, W / 2, 260);
-
-  // Rating
-  const rating = result.completion >= 90 ? "S" : result.completion >= 80 ? "A" : result.completion >= 60 ? "B" : result.completion >= 40 ? "C" : "D";
-  const ratingColor = rating === "S" ? "#ffd700" : rating === "A" ? "#2ed573" : rating === "B" ? "#3ea6ff" : rating === "C" ? "#ffa502" : "#ff4757";
-  ctx.fillStyle = ratingColor;
-  ctx.font = "bold 36px sans-serif";
-  ctx.fillText(rating, W / 2, 310);
-  ctx.fillStyle = "#666";
-  ctx.font = "11px sans-serif";
-  ctx.fillText("评级", W / 2, 330);
-
-  // Details card
-  const cardY = 350;
-  ctx.fillStyle = "#1a1a1a";
-  roundRect(ctx, 40, cardY, W - 80, 100, 8);
-  ctx.fill();
-  ctx.strokeStyle = `${room.color}33`;
-  ctx.lineWidth = 1;
-  roundRect(ctx, 40, cardY, W - 80, 100, 8);
-  ctx.stroke();
-
-  ctx.fillStyle = "#aaa";
-  ctx.font = "bold 11px sans-serif";
-  ctx.fillText("评分详情", W / 2, cardY + 18);
-
-  ctx.font = "10px sans-serif";
-  ctx.fillStyle = "#888";
-  if (result.details.length === 0) {
-    ctx.fillText("继续添加家具来提高评分", W / 2, cardY + 45);
-  } else {
-    for (let i = 0; i < Math.min(4, result.details.length); i++) {
-      ctx.fillText(result.details[i], W / 2, cardY + 38 + i * 16);
-    }
-  }
-
-  // Total score
-  ctx.fillStyle = "#555";
-  ctx.font = "10px sans-serif";
-  ctx.fillText(`累计总分: ${gs.score}`, W / 2, cardY + 92);
-}
-
-// ─── Utility Drawing Functions ───────────────────────────────────────────────
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
 }

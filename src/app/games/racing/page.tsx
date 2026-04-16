@@ -10,6 +10,8 @@ import {
   Gauge, Flag, Volume2, VolumeX, ChevronUp, ChevronDown,
   ChevronRight
 } from "lucide-react";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 /* ========== 常量 ========== */
 const GAME_ID = "racing";
@@ -239,6 +241,11 @@ function angleDiff(a: number, b: number) {
   return d;
 }
 
+function colorToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
 function closestTrackIdx(track: TrackDef, px: number, py: number): { idx: number; dist: number } {
   let bestDist = Infinity, bestIdx = 0;
   const pts = track.points;
@@ -304,13 +311,11 @@ function updateRacer(
   const pts = track.points;
   const n = pts.length;
 
-  // 检查是否在赛道上
   const closest = closestTrackIdx(track, racer.x, racer.y);
   const onTrack = closest.dist < track.width / 2 + 5;
   const inBoost = isInZone(track, closest.idx, "boost");
   const inSlow = isInZone(track, closest.idx, "slow");
 
-  // 速度系数
   let speedMul = 1.0;
   if (!onTrack) speedMul = 0.45;
   else if (inSlow) speedMul = 0.65;
@@ -319,7 +324,6 @@ function updateRacer(
   const grip = onTrack ? car.grip : car.grip * 0.5;
   const maxSpeed = car.topSpeed * speedMul * (racer.isAI ? diff.aiSpeedMul : 1.0);
 
-  // 加速/刹车
   if (brakeInput) {
     racer.speed -= car.brake * DT;
     if (racer.speed < -car.topSpeed * 0.3) racer.speed = -car.topSpeed * 0.3;
@@ -327,31 +331,22 @@ function updateRacer(
     racer.speed += car.accel * accelInput * DT;
     if (racer.speed > maxSpeed) racer.speed = lerp(racer.speed, maxSpeed, 0.05);
   } else {
-    // 自然减速
     racer.speed *= 0.985;
   }
 
-  // 转向
   const turnFactor = car.turnRate * (1 - Math.abs(racer.speed) / (car.topSpeed * 1.5) * 0.4);
   racer.angle += turnInput * turnFactor * DT;
-
-  // 抓地力（侧向摩擦）
   racer.speed *= lerp(1, grip, 0.1);
 
-  // 移动
   racer.x += Math.cos(racer.angle) * racer.speed * DT;
   racer.y += Math.sin(racer.angle) * racer.speed * DT;
-
-  // 边界限制
   racer.x = Math.max(5, Math.min(W - 5, racer.x));
   racer.y = Math.max(5, Math.min(H - 5, racer.y));
 
-  // 更新赛道进度
   const newClosest = closestTrackIdx(track, racer.x, racer.y);
   const oldIdx = racer.trackIdx;
   const newIdx = newClosest.idx;
 
-  // 检测圈数（跨越起点线）
   const crossForward = oldIdx > n * 0.75 && newIdx < n * 0.25;
   const crossBackward = oldIdx < n * 0.25 && newIdx > n * 0.75;
 
@@ -393,7 +388,6 @@ function updateAI(racer: RacerState, track: TrackDef, diff: DiffDef, raceTime: n
     turnInput = Math.sign(diff2) * Math.min(1, Math.abs(diff2) * 2);
   }
 
-  // AI 加速逻辑：弯道减速
   let accelInput = 1.0;
   const curveLookAhead = Math.min(10, n - 1);
   let totalCurve = 0;
@@ -408,7 +402,6 @@ function updateAI(racer: RacerState, track: TrackDef, diff: DiffDef, raceTime: n
   if (totalCurve > 0.8) accelInput = 0.5;
   else if (totalCurve > 0.4) accelInput = 0.7;
 
-  // 随机性（低技能AI更不稳定）
   const jitter = (1 - diff.aiSkill) * 0.15;
   turnInput += (Math.random() - 0.5) * jitter;
 
@@ -417,75 +410,70 @@ function updateAI(racer: RacerState, track: TrackDef, diff: DiffDef, raceTime: n
   updateRacer(racer, track, diff, accelInput, turnInput, brakeInput, raceTime);
 }
 
-/* ========== 绘制函数 ========== */
-function drawGame(ctx: CanvasRenderingContext2D, gs: GameState, track: TrackDef) {
+/* ========== PixiJS 绘制函数 ========== */
+function drawGamePixi(g: PixiGraphics, texts: Map<string, PixiText>, gs: GameState, track: TrackDef) {
   const pts = track.points;
   const n = pts.length;
+  g.clear();
+  texts.forEach(t => { t.visible = false; });
+
+  let textIdx = 0;
+  const showText = (text: string, x: number, y: number, ax = 0, ay = 0, opts?: { fill?: number; fontSize?: number; fontWeight?: string }) => {
+    const t = texts.get(`pool_${textIdx}`);
+    if (!t) return;
+    t.text = text;
+    t.x = x;
+    t.y = y;
+    t.anchor.set(ax, ay);
+    t.alpha = 1;
+    t.visible = true;
+    if (opts?.fill !== undefined) t.style.fill = opts.fill;
+    if (opts?.fontSize !== undefined) t.style.fontSize = opts.fontSize;
+    if (opts?.fontWeight !== undefined) (t.style as { fontWeight: string }).fontWeight = opts.fontWeight;
+    textIdx++;
+  };
 
   // 背景
-  ctx.fillStyle = track.bgColor;
-  ctx.fillRect(0, 0, W, H);
+  g.rect(0, 0, W, H).fill({ color: colorToNum(track.bgColor) });
 
   // 赛道草地纹理
-  ctx.strokeStyle = "#1a3a1a";
-  ctx.lineWidth = 1;
   for (let i = 0; i < 40; i++) {
     const x = (i * 37 + gs.frame * 0.1) % W;
     const y = (i * 53 + gs.frame * 0.05) % H;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + 3, y - 5);
-    ctx.stroke();
+    g.moveTo(x, y).lineTo(x + 3, y - 5).stroke({ color: 0x1a3a1a, width: 1 });
   }
 
-  // 赛道路面
-  ctx.lineWidth = track.width;
-  ctx.strokeStyle = track.roadColor;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i <= n; i++) {
-    const p = pts[i % n];
-    ctx.lineTo(p.x, p.y);
+  // 赛道路面 — draw as thick line segments
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    g.moveTo(p1.x, p1.y).lineTo(p2.x, p2.y).stroke({ color: colorToNum(track.roadColor), width: track.width, cap: "round", join: "round" });
   }
-  ctx.closePath();
-  ctx.stroke();
 
   // 赛道边线
-  ctx.lineWidth = track.width + 6;
-  ctx.strokeStyle = track.edgeColor;
-  ctx.globalAlpha = 0.25;
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i <= n; i++) ctx.lineTo(pts[i % n].x, pts[i % n].y);
-  ctx.closePath();
-  ctx.stroke();
-  ctx.globalAlpha = 1;
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    g.moveTo(p1.x, p1.y).lineTo(p2.x, p2.y).stroke({ color: colorToNum(track.edgeColor), width: track.width + 6, alpha: 0.25, cap: "round", join: "round" });
+  }
 
-  // 赛道中线（虚线）
-  ctx.setLineDash([8, 12]);
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "#ffffff30";
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i <= n; i++) ctx.lineTo(pts[i % n].x, pts[i % n].y);
-  ctx.closePath();
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // 赛道中线（虚线模拟）
+  for (let i = 0; i < n; i++) {
+    if (i % 3 === 0) {
+      const p1 = pts[i];
+      const p2 = pts[(i + 1) % n];
+      g.moveTo(p1.x, p1.y).lineTo(p2.x, p2.y).stroke({ color: 0xffffff, width: 1, alpha: 0.19 });
+    }
+  }
 
   // 加速带/减速带
+  const zoneAlpha = 0.3 + Math.sin(gs.frame * 0.1) * 0.1;
   for (const zone of track.zones) {
-    const color = zone.type === "boost" ? "#3ea6ff" : "#ff4444";
-    ctx.globalAlpha = 0.3 + Math.sin(gs.frame * 0.1) * 0.1;
+    const zColor = zone.type === "boost" ? 0x3ea6ff : 0xff4444;
     for (let i = zone.start; i <= zone.end && i < n; i++) {
       const p = pts[i % n];
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, track.width / 3, 0, TWO_PI);
-      ctx.fill();
+      g.circle(p.x, p.y, track.width / 3).fill({ color: zColor, alpha: zoneAlpha });
     }
-    ctx.globalAlpha = 1;
   }
 
   // 起点/终点线
@@ -493,132 +481,119 @@ function drawGame(ctx: CanvasRenderingContext2D, gs: GameState, track: TrackDef)
   const sp2 = pts[1];
   const sa = Math.atan2(sp2.y - sp.y, sp2.x - sp.x) + Math.PI / 2;
   const hw = track.width / 2;
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(sp.x + Math.cos(sa) * hw, sp.y + Math.sin(sa) * hw);
-  ctx.lineTo(sp.x - Math.cos(sa) * hw, sp.y - Math.sin(sa) * hw);
-  ctx.stroke();
+  g.moveTo(sp.x + Math.cos(sa) * hw, sp.y + Math.sin(sa) * hw)
+    .lineTo(sp.x - Math.cos(sa) * hw, sp.y - Math.sin(sa) * hw)
+    .stroke({ color: 0xffffff, width: 4 });
+
   // 棋盘格
   const checkSize = 6;
   for (let ci = -3; ci <= 3; ci++) {
     for (let cj = 0; cj < 2; cj++) {
       const cx = sp.x + Math.cos(sa) * ci * checkSize + Math.cos(sa + Math.PI / 2) * cj * checkSize;
       const cy = sp.y + Math.sin(sa) * ci * checkSize + Math.sin(sa + Math.PI / 2) * cj * checkSize;
-      ctx.fillStyle = (ci + cj) % 2 === 0 ? "#fff" : "#000";
-      ctx.fillRect(cx - checkSize / 2, cy - checkSize / 2, checkSize, checkSize);
+      const cFill = (ci + cj) % 2 === 0 ? 0xffffff : 0x000000;
+      g.rect(cx - checkSize / 2, cy - checkSize / 2, checkSize, checkSize).fill({ color: cFill });
     }
   }
 
   // 粒子
   for (const p of gs.particles) {
-    ctx.globalAlpha = p.life / p.maxLife;
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, TWO_PI);
-    ctx.fill();
+    g.circle(p.x, p.y, p.size * (p.life / p.maxLife)).fill({ color: colorToNum(p.color), alpha: p.life / p.maxLife });
   }
-  ctx.globalAlpha = 1;
 
   // 赛车
   for (const racer of gs.racers) {
-    drawCar(ctx, racer, gs.frame);
+    drawCarPixi(g, racer, gs.frame, showText);
   }
 
   // 倒计时
   if (gs.countdown > 0) {
     const num = Math.ceil(gs.countdown / 60);
-    ctx.fillStyle = "#00000080";
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = num > 0 ? "#f0b90b" : "#2ba640";
-    ctx.font = "bold 72px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(num > 0 ? String(num) : "GO!", W / 2, H / 2);
+    g.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.5 });
+    const cdFill = num > 0 ? 0xf0b90b : 0x2ba640;
+    showText(num > 0 ? String(num) : "GO!", W / 2, H / 2, 0.5, 0.5, { fill: cdFill, fontSize: 72, fontWeight: "bold" });
   }
 
   // HUD
   if (gs.raceStarted) {
-    drawHUD(ctx, gs);
+    drawHUDPixi(g, gs, track, showText);
+  }
+
+  // 偏离赛道提示
+  if (gs.raceStarted) {
+    const player = gs.racers[0];
+    if (player && player.speed > 0) {
+      const closest = closestTrackIdx(track, player.x, player.y);
+      if (closest.dist > track.width / 2 + 5) {
+        showText("偏离赛道!", W - 10, 48, 1, 0, { fill: 0xff4444, fontSize: 11, fontWeight: "bold" });
+      }
+    }
   }
 }
 
-function drawCar(ctx: CanvasRenderingContext2D, racer: RacerState, frame: number) {
-  ctx.save();
-  ctx.translate(racer.x, racer.y);
-  ctx.rotate(racer.angle);
+function drawCarPixi(
+  g: PixiGraphics, racer: RacerState, frame: number,
+  showText: (text: string, x: number, y: number, ax?: number, ay?: number, opts?: { fill?: number; fontSize?: number; fontWeight?: string }) => void
+) {
+  const cw = 20, ch = 10;
+  const cos = Math.cos(racer.angle), sin = Math.sin(racer.angle);
+
+  // Helper to rotate a local point
+  const rx = (lx: number, ly: number) => racer.x + lx * cos - ly * sin;
+  const ry = (lx: number, ly: number) => racer.y + lx * sin + ly * cos;
 
   // 车身
-  const cw = 20, ch = 10;
-  ctx.fillStyle = racer.color;
-  ctx.beginPath();
-  ctx.moveTo(cw / 2 + 4, 0);
-  ctx.lineTo(-cw / 2, -ch / 2);
-  ctx.lineTo(-cw / 2 - 2, 0);
-  ctx.lineTo(-cw / 2, ch / 2);
-  ctx.closePath();
-  ctx.fill();
+  const rc = colorToNum(racer.color);
+  g.moveTo(rx(cw / 2 + 4, 0), ry(cw / 2 + 4, 0))
+    .lineTo(rx(-cw / 2, -ch / 2), ry(-cw / 2, -ch / 2))
+    .lineTo(rx(-cw / 2 - 2, 0), ry(-cw / 2 - 2, 0))
+    .lineTo(rx(-cw / 2, ch / 2), ry(-cw / 2, ch / 2))
+    .closePath().fill({ color: rc });
 
   // 车身高光
-  ctx.fillStyle = "#ffffff30";
-  ctx.beginPath();
-  ctx.moveTo(cw / 2 + 2, 0);
-  ctx.lineTo(0, -ch / 4);
-  ctx.lineTo(-cw / 4, 0);
-  ctx.lineTo(0, ch / 4);
-  ctx.closePath();
-  ctx.fill();
+  g.moveTo(rx(cw / 2 + 2, 0), ry(cw / 2 + 2, 0))
+    .lineTo(rx(0, -ch / 4), ry(0, -ch / 4))
+    .lineTo(rx(-cw / 4, 0), ry(-cw / 4, 0))
+    .lineTo(rx(0, ch / 4), ry(0, ch / 4))
+    .closePath().fill({ color: 0xffffff, alpha: 0.19 });
 
   // 尾灯
   if (racer.speed < 0 || Math.abs(racer.speed) < 5) {
-    ctx.fillStyle = "#ff0000";
-    ctx.fillRect(-cw / 2 - 3, -ch / 3, 3, 2);
-    ctx.fillRect(-cw / 2 - 3, ch / 3 - 2, 3, 2);
+    g.rect(rx(-cw / 2 - 3, -ch / 3) - 1.5, ry(-cw / 2 - 3, -ch / 3) - 1, 3, 2).fill({ color: 0xff0000 });
+    g.rect(rx(-cw / 2 - 3, ch / 3 - 2) - 1.5, ry(-cw / 2 - 3, ch / 3 - 2) - 1, 3, 2).fill({ color: 0xff0000 });
   }
 
   // 排气粒子效果（加速时）
   if (racer.speed > 50) {
-    ctx.globalAlpha = 0.4 + Math.sin(frame * 0.3) * 0.2;
-    ctx.fillStyle = "#ff880080";
-    ctx.beginPath();
-    ctx.arc(-cw / 2 - 4, 0, 2 + Math.random() * 2, 0, TWO_PI);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+    const ea = 0.4 + Math.sin(frame * 0.3) * 0.2;
+    const ex = rx(-cw / 2 - 4, 0);
+    const ey = ry(-cw / 2 - 4, 0);
+    g.circle(ex, ey, 2 + Math.random() * 2).fill({ color: 0xff8800, alpha: ea * 0.5 });
   }
 
-  ctx.restore();
-
   // 名字标签
-  ctx.fillStyle = racer.color;
-  ctx.font = "bold 9px sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(racer.name, racer.x, racer.y - 14);
+  showText(racer.name, racer.x, racer.y - 14, 0.5, 1, { fill: rc, fontSize: 9, fontWeight: "bold" });
 }
 
-function drawHUD(ctx: CanvasRenderingContext2D, gs: GameState) {
+function drawHUDPixi(
+  g: PixiGraphics, gs: GameState, track: TrackDef,
+  showText: (text: string, x: number, y: number, ax?: number, ay?: number, opts?: { fill?: number; fontSize?: number; fontWeight?: string }) => void
+) {
   const player = gs.racers[0];
   if (!player) return;
 
   // 半透明背景
-  ctx.fillStyle = "#00000080";
-  ctx.fillRect(0, 0, W, 52);
+  g.rect(0, 0, W, 52).fill({ color: 0x000000, alpha: 0.5 });
 
   // 圈数
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 14px sans-serif";
-  ctx.textAlign = "left";
   const lapText = player.finished ? `${TOTAL_LAPS}/${TOTAL_LAPS}` : `${Math.min(player.lap + 1, TOTAL_LAPS)}/${TOTAL_LAPS}`;
-  ctx.fillText(`圈: ${lapText}`, 10, 18);
+  showText(`圈: ${lapText}`, 10, 10, 0, 0, { fill: 0xffffff, fontSize: 14, fontWeight: "bold" });
 
   // 时间
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#3ea6ff";
-  ctx.fillText(formatTime(gs.raceTime), W / 2, 18);
+  showText(formatTime(gs.raceTime), W / 2, 10, 0.5, 0, { fill: 0x3ea6ff, fontSize: 14, fontWeight: "bold" });
 
   // 速度
-  ctx.textAlign = "right";
-  ctx.fillStyle = "#f0b90b";
-  ctx.fillText(`${Math.abs(Math.round(player.speed))} km/h`, W - 10, 18);
+  showText(`${Math.abs(Math.round(player.speed))} km/h`, W - 10, 10, 1, 0, { fill: 0xf0b90b, fontSize: 14, fontWeight: "bold" });
 
   // 排名
   const sorted = [...gs.racers].sort((a, b) => {
@@ -628,62 +603,35 @@ function drawHUD(ctx: CanvasRenderingContext2D, gs: GameState) {
     return b.lapProgress - a.lapProgress;
   });
   const rank = sorted.findIndex(r => !r.isAI) + 1;
-  ctx.textAlign = "left";
-  ctx.fillStyle = rank === 1 ? "#f0b90b" : "#fff";
-  ctx.fillText(`P${rank}`, 10, 38);
+  showText(`P${rank}`, 10, 30, 0, 0, { fill: rank === 1 ? 0xf0b90b : 0xffffff, fontSize: 14, fontWeight: "bold" });
 
   // 最快圈
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#aaa";
-  ctx.font = "11px sans-serif";
-  ctx.fillText(`最快圈: ${formatTime(player.bestLap)}`, W / 2, 38);
+  showText(`最快圈: ${formatTime(player.bestLap)}`, W / 2, 30, 0.5, 0, { fill: 0xaaaaaa, fontSize: 11 });
 
   // 小地图
-  drawMinimap(ctx, gs);
+  drawMinimapPixi(g, gs);
 }
 
-function drawMinimap(ctx: CanvasRenderingContext2D, gs: GameState) {
+function drawMinimapPixi(g: PixiGraphics, gs: GameState) {
   const mx = W - 90, my = H - 90, ms = 80;
-  ctx.fillStyle = "#00000060";
-  ctx.fillRect(mx, my, ms, ms);
-  ctx.strokeStyle = "#333";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(mx, my, ms, ms);
+  g.rect(mx, my, ms, ms).fill({ color: 0x000000, alpha: 0.38 });
+  g.rect(mx, my, ms, ms).stroke({ color: 0x333333, width: 1 });
 
   const scale = ms / W * 0.9;
   const ox = mx + ms / 2;
   const oy = my + ms / 2;
 
   for (const r of gs.racers) {
-    ctx.fillStyle = r.color;
-    ctx.beginPath();
-    ctx.arc(ox + (r.x - W / 2) * scale, oy + (r.y - H / 2) * scale, r.isAI ? 2 : 3, 0, TWO_PI);
-    ctx.fill();
-  }
-}
-
-/* ========== 完整绘制（含赛道参数） ========== */
-function drawGameFull(ctx: CanvasRenderingContext2D, gs: GameState, track: TrackDef) {
-  drawGame(ctx, gs, track);
-
-  // 偏离赛道提示（覆盖在HUD上）
-  if (gs.raceStarted) {
-    const player = gs.racers[0];
-    if (player && player.speed > 0) {
-      const closest = closestTrackIdx(track, player.x, player.y);
-      if (closest.dist > track.width / 2 + 5) {
-        ctx.fillStyle = "#ff4444";
-        ctx.font = "bold 11px sans-serif";
-        ctx.textAlign = "right";
-        ctx.fillText("偏离赛道!", W - 10, 48);
-      }
-    }
+    g.circle(ox + (r.x - W / 2) * scale, oy + (r.y - H / 2) * scale, r.isAI ? 2 : 3).fill({ color: colorToNum(r.color) });
   }
 }
 
 /* ========== 主组件 ========== */
 export default function RacingPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
   const [screen, setScreen] = useState<"title" | "playing" | "result">("title");
   const [selectedCar, setSelectedCar] = useState<CarId>("balanced");
   const [selectedTrack, setSelectedTrack] = useState<TrackId>("oval");
@@ -708,10 +656,8 @@ export default function RacingPage() {
     const n = track.points.length;
     const racers: RacerState[] = [];
 
-    // 玩家
     racers.push(initRacer(track, car, car.name, car.color, false, 0));
 
-    // AI 对手
     const aiCars = CARS.filter(c => c.id !== carId);
     for (let i = 0; i < 2; i++) {
       const aiCar = { ...aiCars[i % aiCars.length] };
@@ -722,7 +668,7 @@ export default function RacingPage() {
 
     return {
       racers, particles: [],
-      countdown: 180, // 3 seconds at 60fps
+      countdown: 180,
       raceStarted: false, raceTime: 0, allFinished: false,
       keys: new Set(), touchControls: { up: false, down: false, left: false, right: false },
       frame: 0,
@@ -784,8 +730,7 @@ export default function RacingPage() {
   useEffect(() => {
     if (screen !== "playing" || !canvasRef.current) return;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d")!;
-    let raf: number;
+    let destroyed = false;
     let lastCountdownSound = 4;
 
     const gs = gsRef.current!;
@@ -825,7 +770,6 @@ export default function RacingPage() {
       for (let i = 0; i < touches.length; i++) {
         const tx = (touches[i].clientX - rect.left) / rect.width;
         const ty = (touches[i].clientY - rect.top) / rect.height;
-        // 左半屏 = 转向，右半屏 = 加速/刹车
         if (tx < 0.5) {
           if (tx < 0.25) gs.touchControls.left = true;
           else gs.touchControls.right = true;
@@ -842,141 +786,170 @@ export default function RacingPage() {
     canvas.addEventListener("touchmove", handleTouchMove, { passive: false });
     canvas.addEventListener("touchend", handleTouchEnd, { passive: false });
 
-    function gameLoop() {
-      gs.frame++;
+    async function initAndRun() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: colorToNum(track.bgColor), antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      // 倒计时
-      if (gs.countdown > 0) {
-        gs.countdown--;
-        const num = Math.ceil(gs.countdown / 60);
-        if (num < lastCountdownSound) {
-          sound?.playCountdown(num === 0);
-          lastCountdownSound = num;
-        }
-        if (gs.countdown <= 0) {
-          gs.raceStarted = true;
-          for (const r of gs.racers) r.lapStartTime = 0;
-        }
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
+
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
+
+      // Pre-create text pool (70 objects)
+      for (let i = 0; i < 70; i++) {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: 11,
+          fill: "#ffffff",
+          fontWeight: "normal",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(`pool_${i}`, t);
       }
 
-      if (gs.raceStarted && !gs.allFinished) {
-        gs.raceTime += 1000 / 60;
+      app.ticker.add(() => {
+        if (destroyed) return;
+        gs.frame++;
 
-        // 玩家输入
-        const player = gs.racers[0];
-        if (!player.finished) {
-          let accel = 0, turn = 0, brake = false;
-          if (gs.keys.has("arrowup") || gs.keys.has("w") || gs.touchControls.up) accel = 1;
-          if (gs.keys.has("arrowdown") || gs.keys.has("s") || gs.touchControls.down) brake = true;
-          if (gs.keys.has("arrowleft") || gs.keys.has("a") || gs.touchControls.left) turn = -1;
-          if (gs.keys.has("arrowright") || gs.keys.has("d") || gs.touchControls.right) turn = 1;
-
-          const prevLap = player.lap;
-          updateRacer(player, track, diff, accel, turn, brake, gs.raceTime);
-
-          // 检测完赛
-          if (player.finished && !player.isAI) {
-            sound?.playFinish();
+        // 倒计时
+        if (gs.countdown > 0) {
+          gs.countdown--;
+          const num = Math.ceil(gs.countdown / 60);
+          if (num < lastCountdownSound) {
+            sound?.playCountdown(num === 0);
+            lastCountdownSound = num;
           }
-          // 检测新圈
-          if (player.lap > prevLap && !player.finished) {
-            sound?.playBoost();
-          }
-
-          // 排气粒子
-          if (player.speed > 30 && gs.frame % 3 === 0) {
-            const bx = player.x - Math.cos(player.angle) * 12;
-            const by = player.y - Math.sin(player.angle) * 12;
-            spawnParticles(gs.particles, bx, by, "#ff880060", 1);
-          }
-
-          sound?.updateEngine(player.speed, player.carDef.topSpeed);
-        }
-
-        // AI 更新
-        for (let i = 1; i < gs.racers.length; i++) {
-          const ai = gs.racers[i];
-          if (!ai.finished) {
-            updateAI(ai, track, diff, gs.raceTime);
-            // AI 排气粒子
-            if (ai.speed > 30 && gs.frame % 5 === 0) {
-              const bx = ai.x - Math.cos(ai.angle) * 12;
-              const by = ai.y - Math.sin(ai.angle) * 12;
-              spawnParticles(gs.particles, bx, by, ai.color + "40", 1);
-            }
+          if (gs.countdown <= 0) {
+            gs.raceStarted = true;
+            for (const r of gs.racers) r.lapStartTime = 0;
           }
         }
 
-        // 碰撞检测（赛车之间）
-        for (let i = 0; i < gs.racers.length; i++) {
-          for (let j = i + 1; j < gs.racers.length; j++) {
-            const a = gs.racers[i], b = gs.racers[j];
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const d = Math.sqrt(dx * dx + dy * dy);
-            if (d < 18 && d > 0) {
-              const nx = dx / d, ny = dy / d;
-              const overlap = 18 - d;
-              a.x -= nx * overlap * 0.5;
-              a.y -= ny * overlap * 0.5;
-              b.x += nx * overlap * 0.5;
-              b.y += ny * overlap * 0.5;
-              // 速度交换
-              const relSpeed = (a.speed - b.speed) * 0.3;
-              a.speed -= relSpeed;
-              b.speed += relSpeed;
-              if (i === 0 || j === 0) sound?.playCollision();
-              spawnParticles(gs.particles, (a.x + b.x) / 2, (a.y + b.y) / 2, "#fff", 3);
-            }
-          }
-        }
+        if (gs.raceStarted && !gs.allFinished) {
+          gs.raceTime += 1000 / 60;
 
-        // 检查是否全部完赛
-        if (gs.racers.every(r => r.finished)) {
-          gs.allFinished = true;
-          sound?.silence();
-
-          // 计算排名
-          const sorted = [...gs.racers].sort((a, b) => a.finishTime - b.finishTime);
-          const playerRank = sorted.findIndex(r => !r.isAI) + 1;
+          // 玩家输入
           const player = gs.racers[0];
-          const rankings = sorted.map(r => ({
-            name: r.name, color: r.color,
-            time: r.finishTime, bestLap: r.bestLap,
-          }));
+          if (!player.finished) {
+            let accel = 0, turn = 0, brake = false;
+            if (gs.keys.has("arrowup") || gs.keys.has("w") || gs.touchControls.up) accel = 1;
+            if (gs.keys.has("arrowdown") || gs.keys.has("s") || gs.touchControls.down) brake = true;
+            if (gs.keys.has("arrowleft") || gs.keys.has("a") || gs.touchControls.left) turn = -1;
+            if (gs.keys.has("arrowright") || gs.keys.has("d") || gs.touchControls.right) turn = 1;
 
-          setResultData({
-            rank: playerRank,
-            totalTime: player.totalTime,
-            bestLap: player.bestLap,
-            lapTimes: player.lapTimes,
-            rankings,
-          });
+            const prevLap = player.lap;
+            updateRacer(player, track, diff, accel, turn, brake, gs.raceTime);
 
-          // 分数 = 基于排名和时间
-          const score = Math.max(0, Math.round(100000 / (player.totalTime / 1000) * (4 - playerRank)));
-          submitScore(score);
+            if (player.finished && !player.isAI) {
+              sound?.playFinish();
+            }
+            if (player.lap > prevLap && !player.finished) {
+              sound?.playBoost();
+            }
 
-          setTimeout(() => setScreen("result"), 1500);
+            // 排气粒子
+            if (player.speed > 30 && gs.frame % 3 === 0) {
+              const bx = player.x - Math.cos(player.angle) * 12;
+              const by = player.y - Math.sin(player.angle) * 12;
+              spawnParticles(gs.particles, bx, by, "#ff880060", 1);
+            }
+
+            sound?.updateEngine(player.speed, player.carDef.topSpeed);
+          }
+
+          // AI 更新
+          for (let i = 1; i < gs.racers.length; i++) {
+            const ai = gs.racers[i];
+            if (!ai.finished) {
+              updateAI(ai, track, diff, gs.raceTime);
+              if (ai.speed > 30 && gs.frame % 5 === 0) {
+                const bx = ai.x - Math.cos(ai.angle) * 12;
+                const by = ai.y - Math.sin(ai.angle) * 12;
+                spawnParticles(gs.particles, bx, by, ai.color + "40", 1);
+              }
+            }
+          }
+
+          // 碰撞检测（赛车之间）
+          for (let i = 0; i < gs.racers.length; i++) {
+            for (let j = i + 1; j < gs.racers.length; j++) {
+              const a = gs.racers[i], b = gs.racers[j];
+              const dx = b.x - a.x, dy = b.y - a.y;
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (d < 18 && d > 0) {
+                const nx = dx / d, ny = dy / d;
+                const overlap = 18 - d;
+                a.x -= nx * overlap * 0.5;
+                a.y -= ny * overlap * 0.5;
+                b.x += nx * overlap * 0.5;
+                b.y += ny * overlap * 0.5;
+                const relSpeed = (a.speed - b.speed) * 0.3;
+                a.speed -= relSpeed;
+                b.speed += relSpeed;
+                if (i === 0 || j === 0) sound?.playCollision();
+                spawnParticles(gs.particles, (a.x + b.x) / 2, (a.y + b.y) / 2, "#fff", 3);
+              }
+            }
+          }
+
+          // 检查是否全部完赛
+          if (gs.racers.every(r => r.finished)) {
+            gs.allFinished = true;
+            sound?.silence();
+
+            const sorted = [...gs.racers].sort((a, b) => a.finishTime - b.finishTime);
+            const playerRank = sorted.findIndex(r => !r.isAI) + 1;
+            const player2 = gs.racers[0];
+            const rankings = sorted.map(r => ({
+              name: r.name, color: r.color,
+              time: r.finishTime, bestLap: r.bestLap,
+            }));
+
+            setResultData({
+              rank: playerRank,
+              totalTime: player2.totalTime,
+              bestLap: player2.bestLap,
+              lapTimes: player2.lapTimes,
+              rankings,
+            });
+
+            const score = Math.max(0, Math.round(100000 / (player2.totalTime / 1000) * (4 - playerRank)));
+            submitScore(score);
+
+            setTimeout(() => setScreen("result"), 1500);
+          }
         }
-      }
 
-      // 更新粒子
-      gs.particles = gs.particles.filter(p => {
-        p.x += p.vx; p.y += p.vy; p.life--;
-        p.vx *= 0.95; p.vy *= 0.95;
-        return p.life > 0;
+        // 更新粒子
+        gs.particles = gs.particles.filter(p => {
+          p.x += p.vx; p.y += p.vy; p.life--;
+          p.vx *= 0.95; p.vy *= 0.95;
+          return p.life > 0;
+        });
+
+        // 绘制
+        drawGamePixi(gfx, texts, gs, track);
       });
-
-      // 绘制
-      drawGameFull(ctx, gs, track);
-
-      raf = requestAnimationFrame(gameLoop);
     }
 
-    raf = requestAnimationFrame(gameLoop);
+    initAndRun();
 
     return () => {
-      cancelAnimationFrame(raf);
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+        pixiGfxRef.current = null;
+        pixiTextsRef.current.clear();
+      }
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       canvas.removeEventListener("touchstart", handleTouchStart);

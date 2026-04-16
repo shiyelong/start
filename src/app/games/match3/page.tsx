@@ -8,9 +8,10 @@ import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
 import { ParticleSystem } from "@/lib/game-engine/particle-system";
 import { InputHandler } from "@/lib/game-engine/input-handler";
-import { easeOutQuad, easeOutBounce, lerp, updateShake, applyShake, updateScorePopups, renderScorePopups } from "@/lib/game-engine/animation-utils";
+import { easeOutQuad, easeOutBounce, lerp, updateShake, updateScorePopups } from "@/lib/game-engine/animation-utils";
 import type { ScorePopup, ShakeState } from "@/lib/game-engine/animation-utils";
-import { resizeCanvas, drawGradientBackground, drawText, drawGlow, drawRoundedRect } from "@/lib/game-engine/render-utils";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Types ───────────────────────────────────────────────
 interface GemAnim {
@@ -72,6 +73,12 @@ const GEM_COLORS = [
   { fill: "#ec4899", glow: "#f9a8d4", name: "粉" },   // pink
 ];
 
+// ─── Hex → PixiJS number ─────────────────────────────────
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
 // ─── Game Logic (Pure Functions) ─────────────────────────
 function randomGem(): number {
   return Math.floor(Math.random() * NUM_GEM_TYPES);
@@ -102,7 +109,6 @@ function findMatches(board: number[][]): [number, number][] {
     for (let c = 0; c < COLS - 2; c++) {
       const g = board[r][c];
       if (g >= 0 && g === board[r][c + 1] && g === board[r][c + 2]) {
-        // Extend match as far as possible
         let end = c + 2;
         while (end + 1 < COLS && board[r][end + 1] === g) end++;
         for (let i = c; i <= end; i++) matched.add(`${r},${i}`);
@@ -140,7 +146,6 @@ function applyGravity(board: number[][]): GemAnim[] {
         writeRow--;
       }
     }
-    // Fill empty cells at top with new gems
     for (let r = writeRow; r >= 0; r--) {
       board[r][c] = randomGem();
       anims.push({ fromRow: r - (writeRow - r + 1), fromCol: c, toRow: r, toCol: c, progress: 0, type: "spawn" });
@@ -150,10 +155,8 @@ function applyGravity(board: number[][]): GemAnim[] {
 }
 
 function hasValidMoves(board: number[][]): boolean {
-  // Check if any swap creates a match
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
-      // Try swap right
       if (c + 1 < COLS) {
         [board[r][c], board[r][c + 1]] = [board[r][c + 1], board[r][c]];
         if (findMatches(board).length > 0) {
@@ -162,7 +165,6 @@ function hasValidMoves(board: number[][]): boolean {
         }
         [board[r][c], board[r][c + 1]] = [board[r][c + 1], board[r][c]];
       }
-      // Try swap down
       if (r + 1 < ROWS) {
         [board[r][c], board[r + 1][c]] = [board[r + 1][c], board[r][c]];
         if (findMatches(board).length > 0) {
@@ -191,8 +193,7 @@ function initGameState(): GameState {
   };
 }
 
-
-// ─── Renderer ────────────────────────────────────────────
+// ─── Layout helpers ──────────────────────────────────────
 function getGridLayout(w: number, h: number) {
   const padding = 16;
   const availW = w - padding * 2;
@@ -211,235 +212,6 @@ function getCellCenter(gridX: number, gridY: number, cellSize: number, gap: numb
     y: gridY + row * (cellSize + gap) + cellSize / 2,
   };
 }
-
-function drawGem(
-  ctx: CanvasRenderingContext2D,
-  x: number, y: number,
-  size: number,
-  gemType: number,
-  alpha: number = 1,
-  scale: number = 1,
-  glowIntensity: number = 0,
-) {
-  if (gemType < 0 || gemType >= GEM_COLORS.length) return;
-  const gem = GEM_COLORS[gemType];
-  const r = size * 0.42 * scale;
-
-  ctx.save();
-  ctx.globalAlpha = alpha;
-
-  // Glow effect
-  if (glowIntensity > 0) {
-    drawGlow(ctx, x, y, r * 1.8, gem.glow, glowIntensity);
-  }
-
-  // Gem body - rounded square with gradient
-  const halfSize = r;
-  const cornerR = r * 0.3;
-  drawRoundedRect(ctx, x - halfSize, y - halfSize, halfSize * 2, halfSize * 2, cornerR);
-  const grad = ctx.createLinearGradient(x - halfSize, y - halfSize, x + halfSize, y + halfSize);
-  grad.addColorStop(0, gem.glow);
-  grad.addColorStop(0.4, gem.fill);
-  grad.addColorStop(1, gem.fill);
-  ctx.fillStyle = grad;
-  ctx.fill();
-
-  // Inner highlight
-  const highlightR = r * 0.55;
-  const hGrad = ctx.createRadialGradient(x - r * 0.2, y - r * 0.2, 0, x, y, highlightR);
-  hGrad.addColorStop(0, "rgba(255,255,255,0.35)");
-  hGrad.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = hGrad;
-  ctx.beginPath();
-  ctx.arc(x, y, highlightR, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.restore();
-}
-
-function renderGame(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  game: GameState,
-  anim: AnimState,
-  particles: ParticleSystem,
-): void {
-  ctx.save();
-  applyShake(ctx, anim.shake);
-  drawGradientBackground(ctx, w, h, anim.bgHue, 55);
-
-  const cx = w / 2;
-  const { cellSize, gap, gridX, gridY, gridW, gridH } = getGridLayout(w, h);
-
-  if (game.over) {
-    // ─── Game Over Screen ────────────────────────────
-    // Draw board dimmed in background
-    renderBoard(ctx, game, anim, cellSize, gap, gridX, gridY, 0.3);
-
-    const cardW = w * 0.85;
-    const cardH = h * 0.48;
-    const cardX = (w - cardW) / 2;
-    const cardY = h * 0.18;
-
-    drawGlow(ctx, cx, cardY + cardH * 0.3, w * 0.3, "#f0b90b", 0.15 * anim.resultFadeIn);
-
-    drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 16);
-    ctx.fillStyle = "rgba(26,26,26,0.92)";
-    ctx.fill();
-    ctx.strokeStyle = "#333";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    const fi = anim.resultFadeIn;
-    ctx.globalAlpha = fi;
-
-    drawText(ctx, "游戏结束！", cx, cardY + 36, cardW * 0.8, "#ec4899", 24);
-    drawText(ctx, `${game.score}`, cx, cardY + 80, cardW * 0.8, "#f0b90b", 42);
-    drawText(ctx, "分", cx, cardY + 108, cardW * 0.5, "#888", 14);
-
-    const statsY = cardY + 135;
-    drawText(ctx, `消除: ${game.totalCleared}`, cx - w * 0.15, statsY, cardW * 0.35, "#22c55e", 15);
-    drawText(ctx, `最高连击: ${game.maxCombo}`, cx + w * 0.15, statsY, cardW * 0.4, "#f0b90b", 15);
-
-    // Restart button
-    const btnW = w * 0.5;
-    const btnH2 = 48;
-    const btnX2 = cx - btnW / 2;
-    const btnY2 = cardY + cardH - 65;
-    drawRoundedRect(ctx, btnX2, btnY2, btnW, btnH2, 12);
-    ctx.fillStyle = "#ec4899";
-    ctx.fill();
-    drawText(ctx, "再来一局", cx, btnY2 + btnH2 / 2, btnW * 0.8, "#fff", 18);
-
-    ctx.globalAlpha = 1;
-    particles.render(ctx);
-    renderScorePopups(ctx, anim.scorePopups);
-    ctx.restore();
-    return;
-  }
-
-  // ─── HUD: Score, Moves, Combo ──────────────────────
-  const hudY = 12;
-  drawText(ctx, `⭐ ${game.score}`, w * 0.2, hudY + 10, w * 0.3, "#f0b90b", 16);
-  drawText(ctx, `? ${game.moves}步`, cx, hudY + 10, w * 0.3, "#3ea6ff", 16);
-  if (game.combo > 1) {
-    const comboPulse = 1 + Math.sin(anim.time * 5) * 0.08;
-    ctx.save();
-    ctx.translate(w * 0.8, hudY + 10);
-    ctx.scale(comboPulse, comboPulse);
-    drawText(ctx, ` x${game.combo}`, 0, 0, w * 0.25, "#ff6b6b", 16);
-    ctx.restore();
-  }
-
-  // Moves bar
-  const barY = hudY + 26;
-  const barW = w - 32;
-  const barX = 16;
-  const barH = 6;
-  const movesFrac = Math.max(0, game.moves / game.maxMoves);
-  const movesColor = movesFrac > 0.5 ? "#22c55e" : movesFrac > 0.2 ? "#eab308" : "#ef4444";
-  drawRoundedRect(ctx, barX, barY, barW, barH, 3);
-  ctx.fillStyle = "rgba(255,255,255,0.08)";
-  ctx.fill();
-  if (movesFrac > 0) {
-    drawRoundedRect(ctx, barX, barY, barW * movesFrac, barH, 3);
-    ctx.fillStyle = movesColor;
-    ctx.fill();
-  }
-
-  // ─── Grid Background ──────────────────────────────
-  drawRoundedRect(ctx, gridX - 6, gridY - 6, gridW + 12, gridH + 12, 12);
-  ctx.fillStyle = "rgba(26,26,26,0.6)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // ─── Board ─────────────────────────────────────────
-  renderBoard(ctx, game, anim, cellSize, gap, gridX, gridY, 1);
-
-  // ─── Particles & Popups ────────────────────────────
-  particles.render(ctx);
-  renderScorePopups(ctx, anim.scorePopups);
-
-  // ─── Hint text ─────────────────────────────────────
-  const hintY = gridY + gridH + 24;
-  drawText(ctx, "点击两个相邻宝石交换 · 三个相同消除得分", cx, hintY, w * 0.9, "#555", 11);
-
-  ctx.restore();
-}
-
-function renderBoard(
-  ctx: CanvasRenderingContext2D,
-  game: GameState,
-  anim: AnimState,
-  cellSize: number,
-  gap: number,
-  gridX: number,
-  gridY: number,
-  boardAlpha: number,
-) {
-  ctx.save();
-  ctx.globalAlpha = boardAlpha;
-
-  // Build a set of animating gem positions for lookup
-  const animatingTo = new Set<string>();
-  const animatingFrom = new Set<string>();
-  for (const a of anim.gemAnims) {
-    animatingTo.add(`${a.toRow},${a.toCol}`);
-    animatingFrom.add(`${a.fromRow},${a.fromCol}`);
-  }
-
-  // Build clearing set
-  const clearingSet = new Set<string>();
-  for (const [r, c] of anim.clearingGems) {
-    clearingSet.add(`${r},${c}`);
-  }
-
-  // Draw static gems (not animating)
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      const key = `${r},${c}`;
-      if (animatingTo.has(key)) continue;
-      if (clearingSet.has(key)) continue;
-      const gemType = game.board[r][c];
-      if (gemType < 0) continue;
-
-      const { x, y } = getCellCenter(gridX, gridY, cellSize, gap, r, c);
-      const isSelected = game.selected && game.selected[0] === r && game.selected[1] === c;
-      const glowI = isSelected ? 0.4 + Math.sin(anim.selectedPulse * 4) * 0.15 : 0;
-      const scale = isSelected ? 1.08 + Math.sin(anim.selectedPulse * 4) * 0.04 : 1;
-      drawGem(ctx, x, y, cellSize, gemType, 1, scale, glowI);
-    }
-  }
-
-  // Draw animating gems
-  for (const a of anim.gemAnims) {
-    const gemType = game.board[a.toRow][a.toCol];
-    if (gemType < 0) continue;
-    const from = getCellCenter(gridX, gridY, cellSize, gap, a.fromRow, a.fromCol);
-    const to = getCellCenter(gridX, gridY, cellSize, gap, a.toRow, a.toCol);
-    const t = a.type === "fall" || a.type === "spawn" ? easeOutBounce(a.progress) : easeOutQuad(a.progress);
-    const x = lerp(from.x, to.x, t);
-    const y = lerp(from.y, to.y, t);
-    const scale = a.type === "spawn" ? lerp(0.3, 1, t) : 1;
-    drawGem(ctx, x, y, cellSize, gemType, 1, scale, 0);
-  }
-
-  // Draw clearing gems (shrinking + fading)
-  for (const [r, c] of anim.clearingGems) {
-    const gemType = game.board[r][c];
-    if (gemType < 0) continue;
-    const { x, y } = getCellCenter(gridX, gridY, cellSize, gap, r, c);
-    const alpha = anim.clearAlpha;
-    const scale = anim.clearAlpha;
-    drawGem(ctx, x, y, cellSize, gemType, alpha, scale, alpha * 0.5);
-  }
-
-  ctx.restore();
-}
-
 
 // ─── Component ───────────────────────────────────────────
 export default function Match3Page() {
@@ -463,11 +235,15 @@ export default function Match3Page() {
   const soundRef = useRef<SoundEngine>(null!);
   const particlesRef = useRef<ParticleSystem>(null!);
   const inputRef = useRef<InputHandler>(null!);
-  const rafRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(0);
   const scoreSubmittedRef = useRef(false);
   const pausedRef = useRef(false);
   const sizeRef = useRef({ w: 0, h: 0 });
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
+  const frameRef = useRef(0);
+  const lastTimeRef = useRef(0);
 
   // React UI state
   const [score, setScore] = useState(0);
@@ -511,30 +287,24 @@ export default function Match3Page() {
 
     const matches = findMatches(game.board);
     if (matches.length === 0) {
-      // Chain ended
       game.combo = 0;
       game.phase = "idle";
-      // Check if game is over
       if (game.moves <= 0 || !hasValidMoves(game.board)) {
         endGame();
       }
       return;
     }
 
-    // Increment combo
     game.combo++;
     if (game.combo > game.maxCombo) game.maxCombo = game.combo;
 
-    // Calculate score
     const pts = matches.length * BASE_SCORE * game.combo;
     game.score += pts;
     game.totalCleared += matches.length;
 
-    // Sound effects
     soundRef.current?.playScore(pts);
     if (game.combo > 1) soundRef.current?.playCombo(game.combo);
 
-    // Particles + score popup for each cleared gem
     for (const [r, c] of matches) {
       const { x, y } = getCellCenter(gridX, gridY, cellSize, gap, r, c);
       const gemType = game.board[r][c];
@@ -543,7 +313,6 @@ export default function Match3Page() {
       }
     }
 
-    // Score popup at center of cleared area
     const avgR = matches.reduce((s, m) => s + m[0], 0) / matches.length;
     const avgC = matches.reduce((s, m) => s + m[1], 0) / matches.length;
     const popupPos = getCellCenter(gridX, gridY, cellSize, gap, avgR, avgC);
@@ -555,12 +324,10 @@ export default function Match3Page() {
       combo: game.combo,
     });
 
-    // Shake on big combos
     if (game.combo >= 2) {
       anim.shake = { time: 0.2, intensity: 3 + game.combo };
     }
 
-    // Start clear animation
     game.phase = "clearing";
     anim.clearingGems = matches;
     anim.clearAlpha = 1;
@@ -571,31 +338,26 @@ export default function Match3Page() {
     setCombo(game.combo);
   }, [endGame]);
 
-  // After clear animation: remove gems, apply gravity, animate falls
+  // After clear animation
   const afterClear = useCallback(() => {
     const game = gameRef.current;
     const anim = animRef.current;
-
-    // Remove cleared gems
     for (const [r, c] of anim.clearingGems) {
       game.board[r][c] = -1;
     }
     anim.clearingGems = [];
-
-    // Apply gravity
     const fallAnims = applyGravity(game.board);
     if (fallAnims.length > 0) {
       game.phase = "falling";
       anim.gemAnims = fallAnims;
       anim.animTimer = 0;
     } else {
-      // No falls needed, check for new matches
       game.phase = "checking";
       processChain();
     }
   }, [processChain]);
 
-  // After fall animation: check for new matches
+  // After fall animation
   const afterFall = useCallback(() => {
     const anim = animRef.current;
     const game = gameRef.current;
@@ -611,14 +373,11 @@ export default function Match3Page() {
     if (game.phase !== "idle" || game.over) return;
     if (game.moves <= 0) return;
 
-    // Perform swap
     [game.board[r1][c1], game.board[r2][c2]] = [game.board[r2][c2], game.board[r1][c1]];
 
     const matches = findMatches(game.board);
     if (matches.length === 0) {
-      // Swap back - invalid move
       [game.board[r1][c1], game.board[r2][c2]] = [game.board[r2][c2], game.board[r1][c1]];
-      // Animate swap and swap-back
       game.phase = "swapping";
       anim.swapBack = true;
       anim.swapGems = [[r1, c1], [r2, c2]];
@@ -631,7 +390,6 @@ export default function Match3Page() {
       return;
     }
 
-    // Valid swap
     game.moves--;
     game.selected = null;
     game.phase = "swapping";
@@ -651,15 +409,12 @@ export default function Match3Page() {
     const game = gameRef.current;
     const anim = animRef.current;
     anim.gemAnims = [];
-
     if (anim.swapBack) {
-      // Invalid swap - return to idle
       game.phase = "idle";
       anim.swapBack = false;
       anim.swapGems = null;
       return;
     }
-
     anim.swapGems = null;
     game.phase = "checking";
     game.combo = 0;
@@ -672,7 +427,6 @@ export default function Match3Page() {
     const { w, h } = sizeRef.current;
 
     if (game.over) {
-      // Restart button
       const cx = w / 2;
       const cardH = h * 0.48;
       const cardY = h * 0.18;
@@ -681,7 +435,6 @@ export default function Match3Page() {
       const btnX2 = cx - btnW / 2;
       const btnY2 = cardY + cardH - 65;
       if (x >= btnX2 && x <= btnX2 + btnW && y >= btnY2 && y <= btnY2 + btnH2) {
-        // Restart
         gameRef.current = initGameState();
         animRef.current.resultFadeIn = 0;
         animRef.current.targetBgHue = 330;
@@ -700,8 +453,6 @@ export default function Match3Page() {
     if (game.phase !== "idle") return;
 
     const { cellSize, gap, gridX, gridY } = getGridLayout(w, h);
-
-    // Determine which cell was tapped
     const col = Math.floor((x - gridX) / (cellSize + gap));
     const row = Math.floor((y - gridY) / (cellSize + gap));
     if (row < 0 || row >= ROWS || col < 0 || col >= COLS) {
@@ -709,7 +460,6 @@ export default function Match3Page() {
       return;
     }
 
-    // Check if tap is within cell bounds (not in gap)
     const cellX = gridX + col * (cellSize + gap);
     const cellY = gridY + row * (cellSize + gap);
     if (x < cellX || x > cellX + cellSize || y < cellY || y > cellY + cellSize) {
@@ -725,19 +475,15 @@ export default function Match3Page() {
 
     const [sr, sc] = game.selected;
     if (sr === row && sc === col) {
-      // Deselect
       game.selected = null;
       return;
     }
 
-    // Check adjacency
     if (Math.abs(sr - row) + Math.abs(sc - col) !== 1) {
-      // Not adjacent - select new gem
       game.selected = [row, col];
       return;
     }
 
-    // Try swap
     game.selected = null;
     trySwap(sr, sc, row, col);
   }, [trySwap]);
@@ -765,25 +511,20 @@ export default function Match3Page() {
     particlesRef.current = new ParticleSystem(400);
   }, []);
 
-  // Setup canvas, input, and game loop
+  // ─── PixiJS Setup & Render Loop ────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const parent = canvas.parentElement;
     if (!parent) return;
+    let destroyed = false;
 
-    const doResize = () => {
-      const { width } = resizeCanvas(canvas, parent);
-      const h = Math.max(width * 1.2, 480);
-      const dpr = window.devicePixelRatio || 1;
-      canvas.height = h * dpr;
-      canvas.style.height = `${h}px`;
-      const ctx = canvas.getContext("2d");
-      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      sizeRef.current = { w: width, h };
-    };
-    doResize();
-    window.addEventListener("resize", doResize);
+    // Compute initial size
+    const pw = Math.max(1, parent.clientWidth);
+    const ph = Math.max(pw * 1.2, 480);
+    canvas.style.width = `${pw}px`;
+    canvas.style.height = `${ph}px`;
+    sizeRef.current = { w: pw, h: ph };
 
     // Input handler
     const input = new InputHandler(canvas);
@@ -791,7 +532,6 @@ export default function Match3Page() {
     input.preventDefaults();
     inputRef.current = input;
 
-    // Mouse click support
     const onMouseDown = (e: MouseEvent) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
@@ -799,69 +539,282 @@ export default function Match3Page() {
     };
     canvas.addEventListener("mousedown", onMouseDown);
 
-    // Game loop
-    const loop = (timestamp: number) => {
-      if (!lastTimeRef.current) lastTimeRef.current = timestamp;
-      const dt = Math.min(timestamp - lastTimeRef.current, 50) / 1000;
-      lastTimeRef.current = timestamp;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
 
-      if (pausedRef.current) {
-        rafRef.current = requestAnimationFrame(loop);
-        return;
-      }
+      const pixi = await loadPixi();
+      if (destroyed) return;
 
-      const anim = animRef.current;
-      const game = gameRef.current;
-      anim.time += dt;
-      anim.selectedPulse += dt;
+      const app = await createPixiApp({
+        canvas: canvas!,
+        width: pw,
+        height: ph,
+        backgroundColor: 0x0f0f0f,
+        antialias: true,
+      });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      // Smooth transitions
-      anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, dt * 3);
-      updateShake(anim.shake, dt);
-      particlesRef.current?.update(dt);
-      updateScorePopups(anim.scorePopups, dt);
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
 
-      if (game.over) {
-        anim.resultFadeIn = Math.min(1, anim.resultFadeIn + dt * 4);
-      }
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-      // Phase-based animation updates
-      if (game.phase === "swapping") {
-        anim.animTimer += dt;
-        const progress = Math.min(1, anim.animTimer / SWAP_DURATION);
-        for (const a of anim.gemAnims) a.progress = progress;
-        if (progress >= 1) afterSwap();
-      } else if (game.phase === "clearing") {
-        anim.animTimer += dt;
-        anim.clearAlpha = Math.max(0, 1 - anim.animTimer / CLEAR_DURATION);
-        if (anim.animTimer >= CLEAR_DURATION) afterClear();
-      } else if (game.phase === "falling") {
-        anim.animTimer += dt;
-        const progress = Math.min(1, anim.animTimer / FALL_DURATION);
-        for (const a of anim.gemAnims) a.progress = progress;
-        if (progress >= 1) afterFall();
-      }
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
 
-      // Render
-      const { w, h } = sizeRef.current;
-      const ctx = canvas.getContext("2d");
-      if (ctx && w > 0 && h > 0) {
-        const dpr = window.devicePixelRatio || 1;
-        ctx.save();
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        renderGame(ctx, w, h, game, anim, particlesRef.current);
-        ctx.restore();
-      }
+      // Pre-create text pool (70 objects)
+      for (let i = 0; i < 70; i++) makeText(`t${i}`, { fontSize: 12 });
 
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: {
+        fill?: string; fontSize?: number; fontWeight?: string;
+        ax?: number; ay?: number; alpha?: number;
+      }) => {
+        if (textIdx >= 70) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0.5, opts?.ay ?? 0.5);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "bold") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      const cn = hexToNum;
+
+      // ─── Draw gem helper (PixiJS) ──────────────────────
+      const drawGemPixi = (
+        gfx: PixiGraphics,
+        x: number, y: number,
+        size: number,
+        gemType: number,
+        alpha: number = 1,
+        scale: number = 1,
+        glowIntensity: number = 0,
+      ) => {
+        if (gemType < 0 || gemType >= GEM_COLORS.length) return;
+        const gem = GEM_COLORS[gemType];
+        const r = size * 0.42 * scale;
+        const halfSize = r;
+        const cornerR = r * 0.3;
+
+        // Glow
+        if (glowIntensity > 0) {
+          gfx.circle(x, y, r * 1.8).fill({ color: cn(gem.glow), alpha: glowIntensity * 0.5 });
+        }
+
+        // Gem body - rounded rect
+        gfx.roundRect(x - halfSize, y - halfSize, halfSize * 2, halfSize * 2, cornerR)
+          .fill({ color: cn(gem.fill), alpha });
+
+        // Lighter top-left highlight
+        gfx.roundRect(x - halfSize + 2, y - halfSize + 2, halfSize * 1.2, halfSize * 1.2, cornerR * 0.8)
+          .fill({ color: cn(gem.glow), alpha: alpha * 0.35 });
+
+        // Inner highlight circle
+        gfx.circle(x - r * 0.2, y - r * 0.2, r * 0.35)
+          .fill({ color: 0xffffff, alpha: alpha * 0.3 });
+      };
+
+      // ─── Render particles via PixiJS Graphics ─────────
+      const renderParticlesPixi = (gfx: PixiGraphics) => {
+        const ps = particlesRef.current;
+        if (!ps) return;
+        // Access internal particles array
+        const particles = (ps as unknown as { particles: Array<{ x: number; y: number; size: number; color: string; alpha: number; life: number }> }).particles;
+        if (!particles) return;
+        for (const p of particles) {
+          if (p.life <= 0) continue;
+          gfx.circle(p.x, p.y, p.size).fill({ color: cn(p.color), alpha: p.alpha });
+        }
+      };
+
+      // ─── Render score popups via PixiJS Text ──────────
+      const renderPopupsPixi = (popups: ScorePopup[]) => {
+        for (const p of popups) {
+          if (p.life <= 0) continue;
+          const progress = 1 - p.life;
+          const floatY = p.y - progress * 40;
+          const alpha = Math.max(0, Math.min(1, p.life));
+          let text = `+${p.value}`;
+          if (p.combo > 1) text += ` x${p.combo}`;
+          showText(text, p.x, floatY, { fill: "#ffd93d", fontSize: 18, fontWeight: "bold", alpha });
+        }
+      };
+
+      // ─── Main ticker ──────────────────────────────────
+      app.ticker.add(() => {
+        if (destroyed) return;
+        frameRef.current++;
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const now = performance.now();
+        if (!lastTimeRef.current) lastTimeRef.current = now;
+        const dt = Math.min(now - lastTimeRef.current, 50) / 1000;
+        lastTimeRef.current = now;
+
+        if (pausedRef.current) return;
+
+        const anim = animRef.current;
+        const game = gameRef.current;
+        anim.time += dt;
+        anim.selectedPulse += dt;
+
+        // Smooth transitions
+        anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, dt * 3);
+        updateShake(anim.shake, dt);
+        particlesRef.current?.update(dt);
+        updateScorePopups(anim.scorePopups, dt);
+
+        if (game.over) {
+          anim.resultFadeIn = Math.min(1, anim.resultFadeIn + dt * 4);
+        }
+
+        // Phase-based animation updates
+        if (game.phase === "swapping") {
+          anim.animTimer += dt;
+          const progress = Math.min(1, anim.animTimer / SWAP_DURATION);
+          for (const a of anim.gemAnims) a.progress = progress;
+          if (progress >= 1) afterSwap();
+        } else if (game.phase === "clearing") {
+          anim.animTimer += dt;
+          anim.clearAlpha = Math.max(0, 1 - anim.animTimer / CLEAR_DURATION);
+          if (anim.animTimer >= CLEAR_DURATION) afterClear();
+        } else if (game.phase === "falling") {
+          anim.animTimer += dt;
+          const progress = Math.min(1, anim.animTimer / FALL_DURATION);
+          for (const a of anim.gemAnims) a.progress = progress;
+          if (progress >= 1) afterFall();
+        }
+
+        // ─── Render ──────────────────────────────────────
+        const { w, h } = sizeRef.current;
+        if (w <= 0 || h <= 0) return;
+
+        // Apply shake offset
+        const shakeOx = anim.shake.time > 0 ? (Math.random() * 2 - 1) * anim.shake.intensity * (anim.shake.time) : 0;
+        const shakeOy = anim.shake.time > 0 ? (Math.random() * 2 - 1) * anim.shake.intensity * (anim.shake.time) : 0;
+        g.x = shakeOx;
+        g.y = shakeOy;
+
+        const cx = w / 2;
+        const { cellSize, gap, gridX, gridY, gridW, gridH } = getGridLayout(w, h);
+
+        // Background gradient (two rects to approximate)
+        const hue = anim.bgHue;
+        const bgTop = hslToNum(hue, 55, 12);
+        const bgBot = hslToNum(hue, 55, 6);
+        g.rect(0, 0, w, h / 2).fill({ color: bgTop });
+        g.rect(0, h / 2, w, h / 2).fill({ color: bgBot });
+
+        if (game.over) {
+          // ─── Game Over Screen ──────────────────────────
+          renderBoardPixi(g, game, anim, cellSize, gap, gridX, gridY, 0.3, drawGemPixi);
+
+          const cardW = w * 0.85;
+          const cardH = h * 0.48;
+          const cardX = (w - cardW) / 2;
+          const cardY = h * 0.18;
+
+          // Glow behind card
+          g.circle(cx, cardY + cardH * 0.3, w * 0.3).fill({ color: cn("#f0b90b"), alpha: 0.15 * anim.resultFadeIn });
+
+          // Card background
+          g.roundRect(cardX, cardY, cardW, cardH, 16).fill({ color: 0x1a1a1a, alpha: 0.92 });
+          g.roundRect(cardX, cardY, cardW, cardH, 16).stroke({ color: 0x333333, width: 1 });
+
+          const fi = anim.resultFadeIn;
+          showText("游戏结束！", cx, cardY + 36, { fill: "#ec4899", fontSize: 24, fontWeight: "bold", alpha: fi });
+          showText(`${game.score}`, cx, cardY + 80, { fill: "#f0b90b", fontSize: 42, fontWeight: "bold", alpha: fi });
+          showText("分", cx, cardY + 108, { fill: "#888888", fontSize: 14, alpha: fi });
+
+          const statsY = cardY + 135;
+          showText(`消除: ${game.totalCleared}`, cx - w * 0.15, statsY, { fill: "#22c55e", fontSize: 15, alpha: fi });
+          showText(`最高连击: ${game.maxCombo}`, cx + w * 0.15, statsY, { fill: "#f0b90b", fontSize: 15, alpha: fi });
+
+          // Restart button
+          const btnW = w * 0.5;
+          const btnH2 = 48;
+          const btnX2 = cx - btnW / 2;
+          const btnY2 = cardY + cardH - 65;
+          g.roundRect(btnX2, btnY2, btnW, btnH2, 12).fill({ color: cn("#ec4899") });
+          showText("再来一局", cx, btnY2 + btnH2 / 2, { fill: "#ffffff", fontSize: 18, fontWeight: "bold" });
+
+          renderParticlesPixi(g);
+          renderPopupsPixi(anim.scorePopups);
+          return;
+        }
+
+        // ─── HUD: Score, Moves, Combo ────────────────────
+        const hudY = 12;
+        showText(`${game.score}`, w * 0.2, hudY + 10, { fill: "#f0b90b", fontSize: 16, fontWeight: "bold" });
+        showText(`${game.moves}步`, cx, hudY + 10, { fill: "#3ea6ff", fontSize: 16, fontWeight: "bold" });
+        if (game.combo > 1) {
+          showText(`x${game.combo}`, w * 0.8, hudY + 10, { fill: "#ff6b6b", fontSize: 16, fontWeight: "bold" });
+        }
+
+        // Moves bar
+        const barY = hudY + 26;
+        const barW2 = w - 32;
+        const barX = 16;
+        const barH = 6;
+        const movesFrac = Math.max(0, game.moves / game.maxMoves);
+        const movesColor = movesFrac > 0.5 ? "#22c55e" : movesFrac > 0.2 ? "#eab308" : "#ef4444";
+        g.roundRect(barX, barY, barW2, barH, 3).fill({ color: 0xffffff, alpha: 0.08 });
+        if (movesFrac > 0) {
+          g.roundRect(barX, barY, barW2 * movesFrac, barH, 3).fill({ color: cn(movesColor) });
+        }
+
+        // ─── Grid Background ─────────────────────────────
+        g.roundRect(gridX - 6, gridY - 6, gridW + 12, gridH + 12, 12).fill({ color: 0x1a1a1a, alpha: 0.6 });
+        g.roundRect(gridX - 6, gridY - 6, gridW + 12, gridH + 12, 12).stroke({ color: 0xffffff, width: 1, alpha: 0.06 });
+
+        // ─── Board ───────────────────────────────────────
+        renderBoardPixi(g, game, anim, cellSize, gap, gridX, gridY, 1, drawGemPixi);
+
+        // ─── Particles & Popups ──────────────────────────
+        renderParticlesPixi(g);
+        renderPopupsPixi(anim.scorePopups);
+
+        // ─── Hint text ───────────────────────────────────
+        const hintY = gridY + gridH + 24;
+        showText("点击两个相邻宝石交换 · 三个相同消除得分", cx, hintY, { fill: "#555555", fontSize: 11 });
+      });
+    }
+
+    initPixi();
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("resize", doResize);
+      destroyed = true;
       canvas.removeEventListener("mousedown", onMouseDown);
       input.dispose();
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
   }, [handleTap, afterSwap, afterClear, afterFall]);
 
@@ -882,7 +835,10 @@ export default function Match3Page() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      cancelAnimationFrame(rafRef.current);
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
       soundRef.current?.dispose();
       inputRef.current?.dispose();
       particlesRef.current?.clear();
@@ -948,7 +904,6 @@ export default function Match3Page() {
         {/* Title + Stats */}
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-2xl font-bold text-white">
-            
             <span className="text-[#ec4899]">宝石消消乐</span>
           </h1>
           <div className="flex gap-2">
@@ -1011,4 +966,78 @@ export default function Match3Page() {
       </main>
     </>
   );
+}
+
+// ─── Board rendering helper (PixiJS) ─────────────────────
+function renderBoardPixi(
+  g: PixiGraphics,
+  game: GameState,
+  anim: AnimState,
+  cellSize: number,
+  gap: number,
+  gridX: number,
+  gridY: number,
+  boardAlpha: number,
+  drawGemPixi: (gfx: PixiGraphics, x: number, y: number, size: number, gemType: number, alpha?: number, scale?: number, glowIntensity?: number) => void,
+) {
+  const animatingTo = new Set<string>();
+  for (const a of anim.gemAnims) {
+    animatingTo.add(`${a.toRow},${a.toCol}`);
+  }
+
+  const clearingSet = new Set<string>();
+  for (const [r, c] of anim.clearingGems) {
+    clearingSet.add(`${r},${c}`);
+  }
+
+  // Draw static gems
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const key = `${r},${c}`;
+      if (animatingTo.has(key)) continue;
+      if (clearingSet.has(key)) continue;
+      const gemType = game.board[r][c];
+      if (gemType < 0) continue;
+
+      const { x, y } = getCellCenter(gridX, gridY, cellSize, gap, r, c);
+      const isSelected = game.selected && game.selected[0] === r && game.selected[1] === c;
+      const glowI = isSelected ? 0.4 + Math.sin(anim.selectedPulse * 4) * 0.15 : 0;
+      const scale = isSelected ? 1.08 + Math.sin(anim.selectedPulse * 4) * 0.04 : 1;
+      drawGemPixi(g, x, y, cellSize, gemType, boardAlpha, scale, glowI);
+    }
+  }
+
+  // Draw animating gems
+  for (const a of anim.gemAnims) {
+    const gemType = game.board[a.toRow][a.toCol];
+    if (gemType < 0) continue;
+    const from = getCellCenter(gridX, gridY, cellSize, gap, a.fromRow, a.fromCol);
+    const to = getCellCenter(gridX, gridY, cellSize, gap, a.toRow, a.toCol);
+    const t = a.type === "fall" || a.type === "spawn" ? easeOutBounce(a.progress) : easeOutQuad(a.progress);
+    const x = lerp(from.x, to.x, t);
+    const y = lerp(from.y, to.y, t);
+    const scale = a.type === "spawn" ? lerp(0.3, 1, t) : 1;
+    drawGemPixi(g, x, y, cellSize, gemType, boardAlpha, scale, 0);
+  }
+
+  // Draw clearing gems (shrinking + fading)
+  for (const [r, c] of anim.clearingGems) {
+    const gemType = game.board[r][c];
+    if (gemType < 0) continue;
+    const { x, y } = getCellCenter(gridX, gridY, cellSize, gap, r, c);
+    const alpha = anim.clearAlpha * boardAlpha;
+    const scale = anim.clearAlpha;
+    drawGemPixi(g, x, y, cellSize, gemType, alpha, scale, alpha * 0.5);
+  }
+}
+
+// ─── HSL to PixiJS number ────────────────────────────────
+function hslToNum(h: number, s: number, l: number): number {
+  const a = s / 100 * Math.min(l / 100, 1 - l / 100);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l / 100 - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color);
+  };
+  return (f(0) << 16) | (f(8) << 8) | f(4);
 }

@@ -5,6 +5,8 @@ import Link from "next/link";
 import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import { fetchWithAuth } from "@/lib/auth";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 import {
   ArrowLeft, ArrowUp, ArrowDown, ArrowLeftIcon, ArrowRightIcon,
   RotateCcw, Play, Trophy, Clock, Infinity, Star, ChevronLeft,
@@ -62,7 +64,7 @@ interface GameState {
   moveCount: number;
   mergeCount: number;
   startTime: number;
-  timeLeft: number; // for timed mode (ms)
+  timeLeft: number;
   mode: GameMode;
   difficulty: Difficulty;
   dailySeed: number;
@@ -109,7 +111,7 @@ const ANIM_SLIDE_DURATION = 120;
 const ANIM_MERGE_DURATION = 150;
 const ANIM_SPAWN_DURATION = 200;
 const TILE_RADIUS = 8;
-const TIMED_DURATION = 180_000; // 3 minutes
+const TIMED_DURATION = 180_000;
 
 const DIFFICULTY_CONFIG: Record<Difficulty, { size: number; label: string }> = {
   easy: { size: 5, label: "简单 5×5" },
@@ -147,6 +149,9 @@ function getTileGradient(value: number): [string, string] {
 function getTileTextColor(value: number): string {
   return TILE_TEXT_COLORS[value] || "#ffffff";
 }
+function hexToPixi(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
+}
 function hueForHighest(value: number): number {
   if (value <= 4) return 220;
   if (value <= 16) return 200;
@@ -155,6 +160,30 @@ function hueForHighest(value: number): number {
   if (value <= 1024) return 30;
   if (value <= 2048) return 45;
   return 320;
+}
+
+// ─── Easing Functions ────────────────────────────────────────────────────────
+function easeOutQuad(t: number): number { return t * (2 - t); }
+function easeOutBack(t: number): number {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+function easeOutElastic(t: number): number {
+  if (t === 0 || t === 1) return t;
+  return Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * (2 * Math.PI / 3)) + 1;
+}
+function lerp(a: number, b: number, t: number): number { return a + (b - a) * t; }
+
+// ─── HSL to hex helper ───────────────────────────────────────────────────────
+function hslToHex(h: number, s: number, l: number): number {
+  s /= 100; l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color);
+  };
+  return (f(0) << 16) | (f(8) << 8) | f(4);
 }
 
 // ─── Seeded Random (for daily challenge) ─────────────────────────────────────
@@ -453,231 +482,6 @@ function initGameState(
   return state;
 }
 
-// ─── Canvas Renderer ─────────────────────────────────────────────────────────
-function drawRoundedRect(
-  ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number
-) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-function easeOutQuad(t: number): number { return t * (2 - t); }
-function easeOutBack(t: number): number {
-  const c1 = 1.70158, c3 = c1 + 1;
-  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-}
-function easeOutElastic(t: number): number {
-  if (t === 0 || t === 1) return t;
-  return Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * (2 * Math.PI / 3)) + 1;
-}
-function lerp(a: number, b: number, t: number): number { return a + (b - a) * t; }
-
-function renderGame(
-  ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement,
-  gameState: GameState, animState: AnimState, dpr: number
-) {
-  const w = canvas.width / dpr;
-  const h = canvas.height / dpr;
-  ctx.save();
-  ctx.scale(dpr, dpr);
-
-  if (animState.shakeTime > 0) {
-    const intensity = animState.shakeIntensity * (animState.shakeTime / 500);
-    ctx.translate((Math.random() - 0.5) * intensity, (Math.random() - 0.5) * intensity);
-  }
-
-  const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
-  const hue = animState.bgHue;
-  bgGrad.addColorStop(0, `hsl(${hue}, 8%, 7%)`);
-  bgGrad.addColorStop(1, `hsl(${hue}, 12%, 5%)`);
-  ctx.fillStyle = bgGrad;
-  ctx.fillRect(0, 0, w, h);
-
-  const { boardSize } = gameState;
-  const boardPadding = 12;
-  const maxBoardWidth = Math.min(w - 24, 420);
-  const boardWidth = maxBoardWidth;
-  const cellGap = boardSize <= 3 ? 10 : boardSize <= 4 ? 8 : 6;
-  const cellSize = (boardWidth - boardPadding * 2 - cellGap * (boardSize - 1)) / boardSize;
-  const boardHeight = boardPadding * 2 + cellSize * boardSize + cellGap * (boardSize - 1);
-  const boardX = (w - boardWidth) / 2;
-  const boardY = 12;
-
-  // Board background
-  drawRoundedRect(ctx, boardX, boardY, boardWidth, boardHeight, 12);
-  ctx.fillStyle = "#1a1a1a";
-  ctx.fill();
-  ctx.strokeStyle = "#333";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Empty cells
-  for (let r = 0; r < boardSize; r++) {
-    for (let c = 0; c < boardSize; c++) {
-      const cx = boardX + boardPadding + c * (cellSize + cellGap);
-      const cy = boardY + boardPadding + r * (cellSize + cellGap);
-      drawRoundedRect(ctx, cx, cy, cellSize, cellSize, TILE_RADIUS);
-      ctx.fillStyle = "#2a2a2a";
-      ctx.fill();
-    }
-  }
-
-  const cellPos = (row: number, col: number) => ({
-    x: boardX + boardPadding + col * (cellSize + cellGap),
-    y: boardY + boardPadding + row * (cellSize + cellGap),
-  });
-
-  const slideT = animState.isSliding
-    ? easeOutQuad(Math.min(animState.slideProgress / ANIM_SLIDE_DURATION, 1)) : 1;
-  const mergeT = animState.isMerging
-    ? Math.min(animState.mergeProgress / ANIM_MERGE_DURATION, 1) : 1;
-  const spawnT = animState.isSpawning
-    ? easeOutBack(Math.min(animState.spawnProgress / ANIM_SPAWN_DURATION, 1)) : 1;
-
-  const sortedTiles = [...gameState.tiles].sort((a, b) => {
-    if (a.isNew !== b.isNew) return a.isNew ? 1 : -1;
-    if (a.mergedFrom !== b.mergedFrom) return a.mergedFrom ? 1 : -1;
-    return 0;
-  });
-
-  for (const tile of sortedTiles) {
-    const prev = cellPos(tile.prevRow, tile.prevCol);
-    const curr = cellPos(tile.row, tile.col);
-    let tx: number, ty: number;
-    if (tile.isNew) { tx = curr.x; ty = curr.y; }
-    else { tx = lerp(prev.x, curr.x, slideT); ty = lerp(prev.y, curr.y, slideT); }
-
-    ctx.save();
-    let scale = 1;
-    if (tile.isNew && animState.isSpawning) scale = spawnT;
-    if (tile.mergedFrom && animState.isMerging) {
-      const popT = easeOutElastic(mergeT);
-      scale = 1 + 0.15 * (1 - Math.abs(popT * 2 - 1));
-    }
-
-    const centerX = tx + cellSize / 2;
-    const centerY = ty + cellSize / 2;
-    ctx.translate(centerX, centerY);
-    ctx.scale(scale, scale);
-    ctx.translate(-centerX, -centerY);
-
-    if (tile.value >= 128) {
-      const glowIntensity = Math.min((Math.log2(tile.value) - 6) * 4, 25);
-      const pulse = 1 + Math.sin(animState.time * 3) * 0.15;
-      ctx.shadowColor = getTileGradient(tile.value)[0];
-      ctx.shadowBlur = glowIntensity * pulse;
-    }
-
-    const [c1, c2] = getTileGradient(tile.value);
-    const grad = ctx.createLinearGradient(tx, ty, tx, ty + cellSize);
-    grad.addColorStop(0, c1); grad.addColorStop(1, c2);
-    drawRoundedRect(ctx, tx, ty, cellSize, cellSize, TILE_RADIUS);
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    if (tile.value >= 512) {
-      const pulseAlpha = 0.3 + Math.sin(animState.time * 4) * 0.2;
-      ctx.strokeStyle = `rgba(255, 255, 255, ${pulseAlpha})`;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
-
-    const text = String(tile.value);
-    const fontSize = cellSize * (text.length <= 2 ? 0.42 : text.length <= 3 ? 0.34 : 0.26);
-    ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillStyle = getTileTextColor(tile.value);
-    ctx.fillText(text, tx + cellSize / 2, ty + cellSize / 2 + 1);
-    ctx.restore();
-  }
-
-  // Particles
-  for (const p of animState.particles) {
-    const alpha = p.life / p.maxLife;
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-
-  // Score popups
-  for (const sp of animState.scorePopups) {
-    const alpha = sp.life;
-    const yOff = (1 - sp.life) * 40;
-    ctx.globalAlpha = alpha;
-    ctx.font = `bold ${sp.combo > 1 ? 18 : 14}px -apple-system, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillStyle = sp.combo > 1 ? "#ff6090" : "#3ea6ff";
-    const label = sp.combo > 1 ? `+${sp.value} x${sp.combo}` : `+${sp.value}`;
-    ctx.fillText(label, sp.x, sp.y - yOff);
-  }
-  ctx.globalAlpha = 1;
-
-  // Swipe visual
-  if (animState.swipeStart && animState.swipeCurrent) {
-    const dx = animState.swipeCurrent.x - animState.swipeStart.x;
-    const dy = animState.swipeCurrent.y - animState.swipeStart.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist > 15) {
-      ctx.globalAlpha = Math.min(dist / 100, 0.4);
-      ctx.strokeStyle = "#3ea6ff"; ctx.lineWidth = 3; ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(animState.swipeStart.x, animState.swipeStart.y);
-      ctx.lineTo(animState.swipeCurrent.x, animState.swipeCurrent.y);
-      ctx.stroke();
-      const angle = Math.atan2(dy, dx);
-      const headLen = 12;
-      ctx.beginPath();
-      ctx.moveTo(animState.swipeCurrent.x, animState.swipeCurrent.y);
-      ctx.lineTo(animState.swipeCurrent.x - headLen * Math.cos(angle - 0.4), animState.swipeCurrent.y - headLen * Math.sin(angle - 0.4));
-      ctx.moveTo(animState.swipeCurrent.x, animState.swipeCurrent.y);
-      ctx.lineTo(animState.swipeCurrent.x - headLen * Math.cos(angle + 0.4), animState.swipeCurrent.y - headLen * Math.sin(angle + 0.4));
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  // Game over overlay on canvas
-  if (gameState.over && !gameState.won) {
-    ctx.fillStyle = "rgba(15, 15, 15, 0.7)";
-    ctx.fillRect(boardX, boardY, boardWidth, boardHeight);
-    ctx.font = `bold 28px -apple-system, sans-serif`;
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillStyle = "#ff4444";
-    ctx.fillText("游戏结束", boardX + boardWidth / 2, boardY + boardHeight / 2 - 14);
-    ctx.font = `16px -apple-system, sans-serif`;
-    ctx.fillStyle = "#aaa";
-    ctx.fillText(`得分: ${gameState.score}`, boardX + boardWidth / 2, boardY + boardHeight / 2 + 18);
-  }
-
-  if (gameState.won && gameState.mode === "classic") {
-    ctx.fillStyle = "rgba(15, 15, 15, 0.6)";
-    ctx.fillRect(boardX, boardY, boardWidth, boardHeight);
-    ctx.font = `bold 28px -apple-system, sans-serif`;
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillStyle = "#f0b800";
-    ctx.fillText("2048!", boardX + boardWidth / 2, boardY + boardHeight / 2 - 14);
-    ctx.font = `16px -apple-system, sans-serif`;
-    ctx.fillStyle = "#aaa";
-    ctx.fillText(`得分: ${gameState.score}`, boardX + boardWidth / 2, boardY + boardHeight / 2 + 18);
-  }
-
-  ctx.restore();
-}
-
 // ─── Title Screen Component ──────────────────────────────────────────────────
 function TitleScreen({ onStart }: {
   onStart: (mode: GameMode, difficulty: Difficulty, daily: boolean) => void;
@@ -687,13 +491,11 @@ function TitleScreen({ onStart }: {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] gap-6 animate-in fade-in duration-500">
-      {/* Game Title */}
       <div className="text-center">
         <h2 className="text-5xl font-black text-[#3ea6ff] mb-2 tracking-tight">2048</h2>
         <p className="text-sm text-[#8a8a8a]">升级版 · 多模式挑战</p>
       </div>
 
-      {/* Mode Selection */}
       <div className="w-full max-w-xs">
         <p className="text-xs text-[#8a8a8a] mb-2 text-center">选择模式</p>
         <div className="flex gap-2">
@@ -717,7 +519,6 @@ function TitleScreen({ onStart }: {
         <p className="text-[10px] text-[#666] text-center mt-1">{MODE_CONFIG[mode].desc}</p>
       </div>
 
-      {/* Difficulty Selection */}
       <div className="w-full max-w-xs">
         <p className="text-xs text-[#8a8a8a] mb-2 text-center">选择难度</p>
         <div className="flex gap-2">
@@ -737,7 +538,6 @@ function TitleScreen({ onStart }: {
         </div>
       </div>
 
-      {/* Start Buttons */}
       <div className="flex flex-col gap-2 w-full max-w-xs">
         <button
           onClick={() => onStart(mode, difficulty, false)}
@@ -755,7 +555,6 @@ function TitleScreen({ onStart }: {
         </button>
       </div>
 
-      {/* Controls hint */}
       <p className="text-[10px] text-[#555] text-center">
         方向键 / 滑动操作 · 合并相同数字
       </p>
@@ -788,7 +587,6 @@ function ResultScreen({ game, onRestart, onTitle }: {
         )}
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-2 gap-3 w-full max-w-xs">
         <div className="text-center p-3 rounded-xl bg-[#1a1a1a] border border-[#333]">
           <div className="text-[10px] text-[#8a8a8a]">最终得分</div>
@@ -897,8 +695,8 @@ export default function Game2048() {
     bgHue: 220, targetBgHue: 220, time: 0,
   });
   const soundRef = useRef<SoundEngine>(null!);
-  const rafRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(0);
+  const appRef = useRef<Application | null>(null);
+  const destroyedRef = useRef(false);
   const inputLockedRef = useRef(false);
   const scoreSubmittedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -941,7 +739,6 @@ export default function Game2048() {
     } catch { return 0; }
   }, []);
 
-  // Submit score to API
   const submitScore = useCallback(async (finalScore: number) => {
     if (scoreSubmittedRef.current || finalScore === 0) return;
     scoreSubmittedRef.current = true;
@@ -978,7 +775,6 @@ export default function Game2048() {
       animRef.current.shakeIntensity = 8;
     }
 
-    // Save to leaderboard
     const now = new Date();
     const dateStr = `${now.getMonth() + 1}/${now.getDate()}`;
     addToLocalLeaderboard({
@@ -990,14 +786,11 @@ export default function Game2048() {
     setGameOver(true);
     setGameWon(won);
 
-    // Clear timer
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
 
-    // Show result screen after a short delay
     setTimeout(() => setScreen("result"), 1200);
   }, [submitScore]);
 
-  // Initialize game
   const initGame = useCallback((mode: GameMode, difficulty: Difficulty, daily: boolean) => {
     const boardSize = DIFFICULTY_CONFIG[difficulty].size;
     const bestVal = loadBest(mode, difficulty);
@@ -1023,17 +816,16 @@ export default function Game2048() {
     setScreen("playing");
     forceUpdate(n => n + 1);
 
-    // Timer for timed mode
     if (timerRef.current) clearInterval(timerRef.current);
     if (mode === "timed") {
       timerRef.current = setInterval(() => {
-        const game = gameRef.current;
-        if (!game || game.over) return;
-        game.timeLeft -= 100;
-        setTimeLeft(game.timeLeft);
-        if (game.timeLeft <= 0) {
-          game.timeLeft = 0;
-          endGame(game, false);
+        const g = gameRef.current;
+        if (!g || g.over) return;
+        g.timeLeft -= 100;
+        setTimeLeft(g.timeLeft);
+        if (g.timeLeft <= 0) {
+          g.timeLeft = 0;
+          endGame(g, false);
         }
       }, 100);
     }
@@ -1071,8 +863,7 @@ export default function Game2048() {
 
       const canvas = canvasRef.current;
       if (canvas) {
-        const dpr = window.devicePixelRatio || 1;
-        const cw = canvas.width / dpr;
+        const cw = canvas.clientWidth;
         const boardWidth = Math.min(cw - 24, 420);
         const boardPadding = 12;
         const cellGap = game.boardSize <= 3 ? 10 : game.boardSize <= 4 ? 8 : 6;
@@ -1113,11 +904,9 @@ export default function Game2048() {
       addRandomTile(game, rng);
       anim.isSpawning = true; anim.spawnProgress = 0;
 
-      // Check win condition (classic mode only)
       if (game.mode === "classic" && game.highestTile >= 2048 && !game.won) {
         endGame(game, true);
       } else if (!canMove(game)) {
-        // In endless mode, game over when no moves
         endGame(game, false);
       }
 
@@ -1183,7 +972,6 @@ export default function Game2048() {
     forceUpdate(n => n + 1);
   }, []);
 
-  // Toggle mute
   const toggleMute = useCallback(() => {
     setMuted(m => {
       const next = !m;
@@ -1192,16 +980,21 @@ export default function Game2048() {
     });
   }, []);
 
-  // ─── Animation Loop ──────────────────────────────────────────────────────
+  // ─── PixiJS Render Loop ────────────────────────────────────────────────────
   useEffect(() => {
     if (screen !== "playing") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+
+    let app: Application | null = null;
+    let g: PixiGraphics | null = null;
+    const textPool: PixiText[] = [];
+    let textPoolIdx = 0;
+    let destroyed = false;
+    let lastTime = 0;
 
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
+      if (destroyed || !app) return;
       const parent = canvas.parentElement;
       if (!parent) return;
       const w = parent.clientWidth;
@@ -1211,60 +1004,297 @@ export default function Game2048() {
       const cellSize = (maxBoardWidth - 24 - cellGap * (bs - 1)) / bs;
       const boardHeight = 24 + cellSize * bs + cellGap * (bs - 1);
       const h = boardHeight + 24;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
+      app.renderer.resize(w, h);
       canvas.style.width = `${w}px`;
       canvas.style.height = `${h}px`;
     };
 
-    resize();
-    window.addEventListener("resize", resize);
+    const init = async () => {
+      const pixi = await loadPixi();
+      if (destroyed) return;
 
-    const loop = (timestamp: number) => {
-      if (!lastTimeRef.current) lastTimeRef.current = timestamp;
-      const dt = Math.min(timestamp - lastTimeRef.current, 50);
-      lastTimeRef.current = timestamp;
+      app = await createPixiApp({
+        canvas,
+        width: canvas.parentElement?.clientWidth || 400,
+        height: 400,
+        backgroundColor: 0x0f0f0f,
+        antialias: true,
+      });
+      if (destroyed) { app.destroy(true); return; }
+      appRef.current = app;
 
-      const anim = animRef.current;
-      anim.time += dt / 1000;
+      g = new pixi.Graphics();
+      app.stage.addChild(g);
 
-      if (anim.isSliding) {
-        anim.slideProgress += dt;
-        if (anim.slideProgress >= ANIM_SLIDE_DURATION) anim.isSliding = false;
+      // Pre-create text pool (70 texts)
+      const TEXT_POOL_SIZE = 70;
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({
+          text: "",
+          style: new pixi.TextStyle({
+            fontSize: 16,
+            fill: "#ffffff",
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            fontWeight: "bold",
+            align: "center",
+          }),
+        });
+        t.anchor.set(0.5, 0.5);
+        t.visible = false;
+        app.stage.addChild(t);
+        textPool.push(t);
       }
-      if (anim.isMerging) {
-        anim.mergeProgress += dt;
-        if (anim.mergeProgress >= ANIM_MERGE_DURATION) anim.isMerging = false;
-      }
-      if (anim.isSpawning) {
-        anim.spawnProgress += dt;
-        if (anim.spawnProgress >= ANIM_SPAWN_DURATION) anim.isSpawning = false;
-      }
-      if (anim.shakeTime > 0) anim.shakeTime = Math.max(0, anim.shakeTime - dt);
-      anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.02);
 
-      for (const p of anim.particles) {
-        p.x += p.vx * (dt / 1000);
-        p.y += p.vy * (dt / 1000);
-        p.vy += 120 * (dt / 1000);
-        p.life -= dt / 1000 * 1.5;
-      }
-      anim.particles = anim.particles.filter(p => p.life > 0);
+      resize();
+      window.addEventListener("resize", resize);
 
-      for (const sp of anim.scorePopups) sp.life -= dt / 1000 * 0.8;
-      anim.scorePopups = anim.scorePopups.filter(sp => sp.life > 0);
+      const resetTextPool = () => {
+        textPoolIdx = 0;
+        for (const t of textPool) t.visible = false;
+      };
 
-      const dpr = window.devicePixelRatio || 1;
-      if (gameRef.current) renderGame(ctx, canvas, gameRef.current, anim, dpr);
+      const acquireText = (
+        text: string, x: number, y: number,
+        fontSize: number, fill: string,
+        alpha: number = 1, fontWeight: string = "bold"
+      ): void => {
+        if (textPoolIdx >= textPool.length) return;
+        const t = textPool[textPoolIdx++];
+        t.text = text;
+        t.style.fontSize = fontSize;
+        t.style.fill = fill;
+        t.style.fontWeight = fontWeight as "bold" | "normal";
+        t.x = x;
+        t.y = y;
+        t.alpha = alpha;
+        t.scale.set(1);
+        t.visible = true;
+      };
 
-      rafRef.current = requestAnimationFrame(loop);
+      app.ticker.add((ticker) => {
+        if (destroyed || !g || !gameRef.current) return;
+        const now = performance.now();
+        const dt = lastTime ? Math.min(now - lastTime, 50) : 16;
+        lastTime = now;
+
+        const anim = animRef.current;
+        const gameState = gameRef.current;
+        anim.time += dt / 1000;
+
+        // Update animation state
+        if (anim.isSliding) {
+          anim.slideProgress += dt;
+          if (anim.slideProgress >= ANIM_SLIDE_DURATION) anim.isSliding = false;
+        }
+        if (anim.isMerging) {
+          anim.mergeProgress += dt;
+          if (anim.mergeProgress >= ANIM_MERGE_DURATION) anim.isMerging = false;
+        }
+        if (anim.isSpawning) {
+          anim.spawnProgress += dt;
+          if (anim.spawnProgress >= ANIM_SPAWN_DURATION) anim.isSpawning = false;
+        }
+        if (anim.shakeTime > 0) anim.shakeTime = Math.max(0, anim.shakeTime - dt);
+        anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.02);
+
+        // Update particles
+        for (const p of anim.particles) {
+          p.x += p.vx * (dt / 1000);
+          p.y += p.vy * (dt / 1000);
+          p.vy += 120 * (dt / 1000);
+          p.life -= dt / 1000 * 1.5;
+        }
+        anim.particles = anim.particles.filter(p => p.life > 0);
+
+        // Update score popups
+        for (const sp of anim.scorePopups) sp.life -= dt / 1000 * 0.8;
+        anim.scorePopups = anim.scorePopups.filter(sp => sp.life > 0);
+
+        // ─── Draw ────────────────────────────────────────────────────
+        g.clear();
+        resetTextPool();
+
+        const w = app!.renderer.width / (app!.renderer.resolution || 1);
+        const h = app!.renderer.height / (app!.renderer.resolution || 1);
+
+        // Shake offset
+        let shakeX = 0, shakeY = 0;
+        if (anim.shakeTime > 0) {
+          const intensity = anim.shakeIntensity * (anim.shakeTime / 500);
+          shakeX = (Math.random() - 0.5) * intensity;
+          shakeY = (Math.random() - 0.5) * intensity;
+        }
+        g.x = shakeX;
+        g.y = shakeY;
+
+        // Background
+        const bgColor1 = hslToHex(anim.bgHue, 8, 7);
+        const bgColor2 = hslToHex(anim.bgHue, 12, 5);
+        g.rect(0, 0, w, h / 2).fill({ color: bgColor1 });
+        g.rect(0, h / 2, w, h / 2).fill({ color: bgColor2 });
+
+        const { boardSize } = gameState;
+        const boardPadding = 12;
+        const maxBoardWidth = Math.min(w - 24, 420);
+        const boardWidth = maxBoardWidth;
+        const cellGap = boardSize <= 3 ? 10 : boardSize <= 4 ? 8 : 6;
+        const cellSize = (boardWidth - boardPadding * 2 - cellGap * (boardSize - 1)) / boardSize;
+        const boardHeight = boardPadding * 2 + cellSize * boardSize + cellGap * (boardSize - 1);
+        const boardX = (w - boardWidth) / 2;
+        const boardY = 12;
+
+        // Board background
+        g.roundRect(boardX, boardY, boardWidth, boardHeight, 12).fill({ color: 0x1a1a1a });
+        g.roundRect(boardX, boardY, boardWidth, boardHeight, 12).stroke({ color: 0x333333, width: 1 });
+
+        // Empty cells
+        for (let r = 0; r < boardSize; r++) {
+          for (let c = 0; c < boardSize; c++) {
+            const cx = boardX + boardPadding + c * (cellSize + cellGap);
+            const cy = boardY + boardPadding + r * (cellSize + cellGap);
+            g.roundRect(cx, cy, cellSize, cellSize, TILE_RADIUS).fill({ color: 0x2a2a2a });
+          }
+        }
+
+        const cellPos = (row: number, col: number) => ({
+          x: boardX + boardPadding + col * (cellSize + cellGap),
+          y: boardY + boardPadding + row * (cellSize + cellGap),
+        });
+
+        const slideT = anim.isSliding
+          ? easeOutQuad(Math.min(anim.slideProgress / ANIM_SLIDE_DURATION, 1)) : 1;
+        const mergeT = anim.isMerging
+          ? Math.min(anim.mergeProgress / ANIM_MERGE_DURATION, 1) : 1;
+        const spawnT = anim.isSpawning
+          ? easeOutBack(Math.min(anim.spawnProgress / ANIM_SPAWN_DURATION, 1)) : 1;
+
+        const sortedTiles = [...gameState.tiles].sort((a, b) => {
+          if (a.isNew !== b.isNew) return a.isNew ? 1 : -1;
+          if (a.mergedFrom !== b.mergedFrom) return a.mergedFrom ? 1 : -1;
+          return 0;
+        });
+
+        for (const tile of sortedTiles) {
+          const prev = cellPos(tile.prevRow, tile.prevCol);
+          const curr = cellPos(tile.row, tile.col);
+          let tx: number, ty: number;
+          if (tile.isNew) { tx = curr.x; ty = curr.y; }
+          else { tx = lerp(prev.x, curr.x, slideT); ty = lerp(prev.y, curr.y, slideT); }
+
+          let scale = 1;
+          if (tile.isNew && anim.isSpawning) scale = spawnT;
+          if (tile.mergedFrom && anim.isMerging) {
+            const popT = easeOutElastic(mergeT);
+            scale = 1 + 0.15 * (1 - Math.abs(popT * 2 - 1));
+          }
+
+          const centerX = tx + cellSize / 2;
+          const centerY = ty + cellSize / 2;
+          const scaledSize = cellSize * scale;
+          const sx = centerX - scaledSize / 2;
+          const sy = centerY - scaledSize / 2;
+
+          // Tile gradient (use primary color)
+          const [c1] = getTileGradient(tile.value);
+          const tileColor = hexToPixi(c1);
+
+          // Glow for high-value tiles
+          if (tile.value >= 128) {
+            const glowIntensity = Math.min((Math.log2(tile.value) - 6) * 4, 25);
+            const pulse = 1 + Math.sin(anim.time * 3) * 0.15;
+            const glowAlpha = Math.min(glowIntensity * pulse * 0.02, 0.4);
+            const glowPad = glowIntensity * pulse * 0.5;
+            g.roundRect(sx - glowPad, sy - glowPad, scaledSize + glowPad * 2, scaledSize + glowPad * 2, TILE_RADIUS + 2)
+              .fill({ color: tileColor, alpha: glowAlpha });
+          }
+
+          g.roundRect(sx, sy, scaledSize, scaledSize, TILE_RADIUS).fill({ color: tileColor });
+
+          // Pulse border for 512+
+          if (tile.value >= 512) {
+            const pulseAlpha = 0.3 + Math.sin(anim.time * 4) * 0.2;
+            g.roundRect(sx, sy, scaledSize, scaledSize, TILE_RADIUS)
+              .stroke({ color: 0xffffff, width: 2, alpha: pulseAlpha });
+          }
+
+          // Tile text
+          const text = String(tile.value);
+          const fontSize = scaledSize * (text.length <= 2 ? 0.42 : text.length <= 3 ? 0.34 : 0.26);
+          acquireText(text, centerX + shakeX, centerY + shakeY + 1, fontSize, getTileTextColor(tile.value));
+        }
+
+        // Particles
+        for (const p of anim.particles) {
+          const alpha = p.life / p.maxLife;
+          const pColor = hexToPixi(p.color);
+          g.circle(p.x, p.y, p.size * alpha).fill({ color: pColor, alpha });
+        }
+
+        // Score popups
+        for (const sp of anim.scorePopups) {
+          const alpha = sp.life;
+          const yOff = (1 - sp.life) * 40;
+          const label = sp.combo > 1 ? `+${sp.value} x${sp.combo}` : `+${sp.value}`;
+          const popFontSize = sp.combo > 1 ? 18 : 14;
+          const popColor = sp.combo > 1 ? "#ff6090" : "#3ea6ff";
+          acquireText(label, sp.x + shakeX, sp.y - yOff + shakeY, popFontSize, popColor, alpha);
+        }
+
+        // Swipe visual
+        if (anim.swipeStart && anim.swipeCurrent) {
+          const dx = anim.swipeCurrent.x - anim.swipeStart.x;
+          const dy = anim.swipeCurrent.y - anim.swipeStart.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > 15) {
+            const swipeAlpha = Math.min(dist / 100, 0.4);
+            g.moveTo(anim.swipeStart.x, anim.swipeStart.y)
+              .lineTo(anim.swipeCurrent.x, anim.swipeCurrent.y)
+              .stroke({ color: 0x3ea6ff, width: 3, alpha: swipeAlpha });
+            const angle = Math.atan2(dy, dx);
+            const headLen = 12;
+            g.moveTo(anim.swipeCurrent.x, anim.swipeCurrent.y)
+              .lineTo(
+                anim.swipeCurrent.x - headLen * Math.cos(angle - 0.4),
+                anim.swipeCurrent.y - headLen * Math.sin(angle - 0.4)
+              )
+              .stroke({ color: 0x3ea6ff, width: 3, alpha: swipeAlpha });
+            g.moveTo(anim.swipeCurrent.x, anim.swipeCurrent.y)
+              .lineTo(
+                anim.swipeCurrent.x - headLen * Math.cos(angle + 0.4),
+                anim.swipeCurrent.y - headLen * Math.sin(angle + 0.4)
+              )
+              .stroke({ color: 0x3ea6ff, width: 3, alpha: swipeAlpha });
+          }
+        }
+
+        // Game over overlay
+        if (gameState.over && !gameState.won) {
+          g.roundRect(boardX, boardY, boardWidth, boardHeight, 12)
+            .fill({ color: 0x0f0f0f, alpha: 0.7 });
+          acquireText("游戏结束", boardX + boardWidth / 2 + shakeX, boardY + boardHeight / 2 - 14 + shakeY, 28, "#ff4444");
+          acquireText(`得分: ${gameState.score}`, boardX + boardWidth / 2 + shakeX, boardY + boardHeight / 2 + 18 + shakeY, 16, "#aaaaaa", 1, "normal");
+        }
+
+        // Win overlay
+        if (gameState.won && gameState.mode === "classic") {
+          g.roundRect(boardX, boardY, boardWidth, boardHeight, 12)
+            .fill({ color: 0x0f0f0f, alpha: 0.6 });
+          acquireText("2048!", boardX + boardWidth / 2 + shakeX, boardY + boardHeight / 2 - 14 + shakeY, 28, "#f0b800");
+          acquireText(`得分: ${gameState.score}`, boardX + boardWidth / 2 + shakeX, boardY + boardHeight / 2 + 18 + shakeY, 16, "#aaaaaa", 1, "normal");
+        }
+      });
     };
 
-    rafRef.current = requestAnimationFrame(loop);
+    init();
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
+      destroyed = true;
+      destroyedRef.current = true;
       window.removeEventListener("resize", resize);
+      if (appRef.current) {
+        appRef.current.destroy(true);
+        appRef.current = null;
+      }
     };
   }, [screen]);
 

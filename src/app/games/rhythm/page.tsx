@@ -6,6 +6,8 @@ import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 import {
   ChevronLeft, RotateCcw, Music, Volume2, VolumeX,
   Play, Star, Zap, Award, Target,
@@ -16,7 +18,8 @@ const GAME_ID = "rhythm";
 const LANES = 4;
 const LANE_KEYS = ["d", "f", "j", "k"];
 const LANE_COLORS = ["#ff4757", "#3ea6ff", "#2ed573", "#ffa502"];
-const LANE_GLOW = ["rgba(255,71,87,0.3)", "rgba(62,166,255,0.3)", "rgba(46,213,115,0.3)", "rgba(255,165,2,0.3)"];
+const LANE_COLOR_NUMS = [0xff4757, 0x3ea6ff, 0x2ed573, 0xffa502];
+const LANE_GLOW_NUMS = [0xff4757, 0x3ea6ff, 0x2ed573, 0xffa502];
 
 // Judgment windows (pixels from hit line)
 const PERFECT_WINDOW = 18;
@@ -86,6 +89,12 @@ interface GameState {
   noteSpeed: number;
   nextNoteIndex: number;
   melodyIndex: number;
+}
+
+// ─── Color helper ────────────────────────────────────────
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return parseInt(hex, 16);
 }
 
 // ─── Song Definitions ────────────────────────────────────
@@ -247,7 +256,6 @@ export default function RhythmGame() {
     songTime: -2, songStarted: false, songEnded: false,
     noteSpeed: 400, nextNoteIndex: 0, melodyIndex: 0,
   });
-  const rafRef = useRef(0);
   const lastRef = useRef(0);
   const scoreSubmittedRef = useRef(false);
   const sizeRef = useRef({ w: 400, h: 600 });
@@ -411,302 +419,303 @@ export default function RhythmGame() {
   }, []);
 
 
-  // ─── Game Loop ─────────────────────────────────────────
+  // ─── Game Loop (PixiJS) ────────────────────────────────
   useEffect(() => {
     if (phase !== "playing") return;
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
     if (!canvas || !wrap) return;
+    let destroyed = false;
+    let app: Application | null = null;
 
     const song = SONGS[selectedSong];
     const pattern = song.patterns[difficulty];
 
-    // Resize canvas
+    // Resize helper
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
       const pw = Math.min(wrap.clientWidth, 480);
       const ph = Math.round(pw * 1.5);
-      canvas.width = pw * dpr;
-      canvas.height = ph * dpr;
-      canvas.style.width = `${pw}px`;
-      canvas.style.height = `${ph}px`;
       sizeRef.current = { w: pw, h: ph };
+      if (app) {
+        app.renderer.resize(pw, ph);
+      }
     };
-    resize();
-    window.addEventListener("resize", resize);
 
-    const ctx = canvas.getContext("2d")!;
+    (async () => {
+      const pixi = await loadPixi();
+      if (destroyed) return;
 
-    const loop = (ts: number) => {
-      if (!lastRef.current) lastRef.current = ts;
-      const dt = Math.min((ts - lastRef.current) / 1000, 0.05);
-      lastRef.current = ts;
-      const g = gameRef.current;
-      const { w, h } = sizeRef.current;
-      const dpr = window.devicePixelRatio || 1;
-      const laneW = w / LANES;
-      const hitY = h * 0.85;
-      const noteH = Math.max(14, h * 0.028);
+      const pw = Math.min(wrap.clientWidth, 480);
+      const ph = Math.round(pw * 1.5);
+      sizeRef.current = { w: pw, h: ph };
 
-      // Update song time
-      g.songTime += dt;
+      app = await createPixiApp({ canvas: canvas!, width: pw, height: ph, backgroundColor: 0x0a0a12, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
 
-      // Spawn notes based on song time
-      while (g.nextNoteIndex < pattern.length) {
-        const nd = pattern[g.nextNoteIndex];
-        // Notes appear from top, need to arrive at hitY at nd.time
-        const travelTime = (hitY + noteH) / g.noteSpeed;
-        const spawnTime = nd.time - travelTime;
-        if (g.songTime >= spawnTime) {
-          g.notes.push({
-            lane: nd.lane,
-            y: -noteH,
-            time: nd.time,
-            hit: false,
-            missed: false,
-            fadeTimer: 0,
-          });
-          g.nextNoteIndex++;
-        } else {
-          break;
-        }
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+
+      // Pre-create text pool
+      const TEXT_POOL_SIZE = 70;
+      const texts: PixiText[] = [];
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({ text: "", style: { fontSize: 14, fill: 0xffffff, fontFamily: "sans-serif" } });
+        t.visible = false;
+        app.stage.addChild(t);
+        texts.push(t);
+      }
+      let textIdx = 0;
+
+      function nextText(str: string, x: number, y: number, opts: {
+        fontSize?: number; fill?: number | string; fontWeight?: string;
+        anchorX?: number; anchorY?: number; alpha?: number;
+      } = {}): void {
+        if (textIdx >= TEXT_POOL_SIZE) return;
+        const t = texts[textIdx++];
+        t.text = str;
+        t.visible = true;
+        t.alpha = opts.alpha ?? 1;
+        const fillVal = typeof opts.fill === "string" ? hexToNum(opts.fill) : (opts.fill ?? 0xffffff);
+        t.style.fontSize = opts.fontSize ?? 14;
+        t.style.fill = fillVal;
+        t.style.fontWeight = (opts.fontWeight ?? "normal") as "normal" | "bold";
+        t.style.fontFamily = "sans-serif";
+        t.anchor.set(opts.anchorX ?? 0, opts.anchorY ?? 0);
+        t.x = x;
+        t.y = y;
       }
 
-      // Play melody notes
-      while (g.melodyIndex < song.melody.length && g.songTime >= song.melody[g.melodyIndex].time) {
-        const m = song.melody[g.melodyIndex];
-        soundRef.current?.playNote(m.note, m.octave, m.duration);
-        g.melodyIndex++;
-      }
+      window.addEventListener("resize", resize);
 
-      // Update notes
-      for (const n of g.notes) {
-        if (!n.hit && !n.missed) {
-          n.y += g.noteSpeed * dt;
-          // Miss detection
-          if (n.y > hitY + OK_WINDOW + 10) {
-            n.missed = true;
-            n.fadeTimer = 0.3;
-            g.miss++;
-            g.combo = 0;
-            setCombo(0);
-            g.judgmentPopup = {
-              text: "失误",
-              color: "#ff4757",
-              y: hitY - 40,
-              alpha: 1,
-              scale: 1.2,
-            };
-            playHitSound("miss");
+      app.ticker.add(() => {
+        if (destroyed) return;
+        const now = performance.now();
+        if (!lastRef.current) lastRef.current = now;
+        const dt = Math.min((now - lastRef.current) / 1000, 0.05);
+        lastRef.current = now;
+        const gs = gameRef.current;
+        const { w, h } = sizeRef.current;
+        const laneW = w / LANES;
+        const hitY = h * 0.85;
+        const noteH = Math.max(14, h * 0.028);
+
+        // ─── UPDATE ──────────────────────────────────────
+        gs.songTime += dt;
+
+        // Spawn notes based on song time
+        while (gs.nextNoteIndex < pattern.length) {
+          const nd = pattern[gs.nextNoteIndex];
+          const travelTime = (hitY + noteH) / gs.noteSpeed;
+          const spawnTime = nd.time - travelTime;
+          if (gs.songTime >= spawnTime) {
+            gs.notes.push({
+              lane: nd.lane, y: -noteH, time: nd.time,
+              hit: false, missed: false, fadeTimer: 0,
+            });
+            gs.nextNoteIndex++;
+          } else {
+            break;
           }
         }
-        if (n.hit || n.missed) {
-          n.fadeTimer -= dt;
-        }
-      }
-      // Remove fully faded notes
-      g.notes = g.notes.filter(n => !(n.hit && n.fadeTimer <= 0) && !(n.missed && n.fadeTimer <= 0));
 
-      // Update hit flash
-      for (let i = 0; i < LANES; i++) {
-        if (g.hitFlash[i] > 0) g.hitFlash[i] -= dt;
-      }
-
-      // Update judgment popup
-      if (g.judgmentPopup) {
-        g.judgmentPopup.alpha -= dt * 3;
-        g.judgmentPopup.y -= dt * 60;
-        g.judgmentPopup.scale = Math.max(1, g.judgmentPopup.scale - dt * 3);
-        if (g.judgmentPopup.alpha <= 0) g.judgmentPopup = null;
-      }
-
-      // Check song end
-      if (g.songTime >= song.duration + 1 && !g.songEnded) {
-        g.songEnded = true;
-        submitScore(g.score);
-        soundRef.current?.playLevelUp();
-        setPhase("result");
-      }
-
-      // ─── Render ────────────────────────────────────────
-      ctx.save();
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      // Background
-      const grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, "#0a0a12");
-      grad.addColorStop(1, "#0f0f0f");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
-
-      // Lane backgrounds
-      for (let i = 0; i < LANES; i++) {
-        const lx = i * laneW;
-        ctx.fillStyle = `rgba(255,255,255,0.02)`;
-        ctx.fillRect(lx, 0, laneW, h);
-        // Lane separator
-        ctx.strokeStyle = "rgba(255,255,255,0.06)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(lx, 0);
-        ctx.lineTo(lx, h);
-        ctx.stroke();
-      }
-
-      // Hit line glow
-      ctx.fillStyle = "rgba(255,255,255,0.08)";
-      ctx.fillRect(0, hitY - 2, w, 4);
-
-      // Hit zone indicators
-      for (let i = 0; i < LANES; i++) {
-        const lx = i * laneW;
-        const cx = lx + laneW / 2;
-        const flash = g.hitFlash[i] > 0;
-
-        if (flash) {
-          // Glow effect
-          const glowGrad = ctx.createRadialGradient(cx, hitY, 0, cx, hitY, laneW * 0.6);
-          glowGrad.addColorStop(0, LANE_GLOW[i]);
-          glowGrad.addColorStop(1, "transparent");
-          ctx.fillStyle = glowGrad;
-          ctx.fillRect(lx, hitY - laneW * 0.6, laneW, laneW * 1.2);
+        // Play melody notes
+        while (gs.melodyIndex < song.melody.length && gs.songTime >= song.melody[gs.melodyIndex].time) {
+          const m = song.melody[gs.melodyIndex];
+          soundRef.current?.playNote(m.note, m.octave, m.duration);
+          gs.melodyIndex++;
         }
 
-        // Hit zone button
-        const btnH = Math.max(24, h * 0.04);
-        const btnW = laneW - 12;
-        const btnX = lx + 6;
-        const btnY = hitY - btnH / 2;
-        ctx.fillStyle = flash ? LANE_COLORS[i] : "rgba(255,255,255,0.08)";
-        ctx.beginPath();
-        ctx.roundRect(btnX, btnY, btnW, btnH, 6);
-        ctx.fill();
-
-        // Key label
-        ctx.fillStyle = flash ? "#fff" : "#555";
-        ctx.font = `bold ${Math.max(11, h * 0.02)}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(LANE_KEYS[i].toUpperCase(), cx, hitY);
-      }
-
-      // Notes
-      for (const n of g.notes) {
-        if (n.hit) {
-          // Hit animation: expanding glow
-          const alpha = Math.max(0, n.fadeTimer / 0.3);
-          const expand = 1 + (1 - alpha) * 0.5;
-          const cx = n.lane * laneW + laneW / 2;
-          ctx.save();
-          ctx.globalAlpha = alpha * 0.6;
-          const nw = (laneW - 14) * expand;
-          const nh = noteH * expand;
-          ctx.fillStyle = LANE_COLORS[n.lane];
-          ctx.beginPath();
-          ctx.roundRect(cx - nw / 2, n.y - nh / 2, nw, nh, 4);
-          ctx.fill();
-          ctx.restore();
-          continue;
+        // Update notes
+        for (const n of gs.notes) {
+          if (!n.hit && !n.missed) {
+            n.y += gs.noteSpeed * dt;
+            if (n.y > hitY + OK_WINDOW + 10) {
+              n.missed = true;
+              n.fadeTimer = 0.3;
+              gs.miss++;
+              gs.combo = 0;
+              setCombo(0);
+              gs.judgmentPopup = {
+                text: "失误", color: "#ff4757",
+                y: hitY - 40, alpha: 1, scale: 1.2,
+              };
+              playHitSound("miss");
+            }
+          }
+          if (n.hit || n.missed) {
+            n.fadeTimer -= dt;
+          }
         }
-        if (n.missed) {
-          const alpha = Math.max(0, n.fadeTimer / 0.3) * 0.4;
-          ctx.save();
-          ctx.globalAlpha = alpha;
+        gs.notes = gs.notes.filter(n => !(n.hit && n.fadeTimer <= 0) && !(n.missed && n.fadeTimer <= 0));
+
+        // Update hit flash
+        for (let i = 0; i < LANES; i++) {
+          if (gs.hitFlash[i] > 0) gs.hitFlash[i] -= dt;
+        }
+
+        // Update judgment popup
+        if (gs.judgmentPopup) {
+          gs.judgmentPopup.alpha -= dt * 3;
+          gs.judgmentPopup.y -= dt * 60;
+          gs.judgmentPopup.scale = Math.max(1, gs.judgmentPopup.scale - dt * 3);
+          if (gs.judgmentPopup.alpha <= 0) gs.judgmentPopup = null;
+        }
+
+        // Check song end
+        if (gs.songTime >= song.duration + 1 && !gs.songEnded) {
+          gs.songEnded = true;
+          submitScore(gs.score);
+          soundRef.current?.playLevelUp();
+          setPhase("result");
+        }
+
+        // ─── RENDER (PixiJS) ─────────────────────────────
+        gfx.clear();
+        textIdx = 0;
+        for (const t of texts) t.visible = false;
+
+        // Background
+        gfx.rect(0, 0, w, h).fill({ color: 0x0a0a12 });
+
+        // Lane backgrounds & separators
+        for (let i = 0; i < LANES; i++) {
+          const lx = i * laneW;
+          gfx.rect(lx, 0, laneW, h).fill({ color: 0xffffff, alpha: 0.02 });
+          gfx.moveTo(lx, 0).lineTo(lx, h).stroke({ color: 0xffffff, alpha: 0.06, width: 1 });
+        }
+
+        // Hit line glow
+        gfx.rect(0, hitY - 2, w, 4).fill({ color: 0xffffff, alpha: 0.08 });
+
+        // Hit zone indicators
+        for (let i = 0; i < LANES; i++) {
+          const lx = i * laneW;
+          const cx = lx + laneW / 2;
+          const flash = gs.hitFlash[i] > 0;
+
+          if (flash) {
+            // Glow effect — approximate radial glow with concentric circles
+            gfx.circle(cx, hitY, laneW * 0.6).fill({ color: LANE_COLOR_NUMS[i], alpha: 0.15 });
+            gfx.circle(cx, hitY, laneW * 0.35).fill({ color: LANE_COLOR_NUMS[i], alpha: 0.1 });
+          }
+
+          // Hit zone button
+          const btnH = Math.max(24, h * 0.04);
+          const btnW = laneW - 12;
+          const btnX = lx + 6;
+          const btnY = hitY - btnH / 2;
+          gfx.roundRect(btnX, btnY, btnW, btnH, 6)
+            .fill({ color: flash ? LANE_COLOR_NUMS[i] : 0xffffff, alpha: flash ? 1 : 0.08 });
+
+          // Key label
+          nextText(LANE_KEYS[i].toUpperCase(), cx, hitY, {
+            fontSize: Math.max(11, h * 0.02),
+            fill: flash ? 0xffffff : 0x555555,
+            fontWeight: "bold",
+            anchorX: 0.5, anchorY: 0.5,
+          });
+        }
+
+        // Notes
+        for (const n of gs.notes) {
+          if (n.hit) {
+            // Hit animation: expanding glow
+            const alpha = Math.max(0, n.fadeTimer / 0.3);
+            const expand = 1 + (1 - alpha) * 0.5;
+            const ncx = n.lane * laneW + laneW / 2;
+            const nw = (laneW - 14) * expand;
+            const nh = noteH * expand;
+            gfx.roundRect(ncx - nw / 2, n.y - nh / 2, nw, nh, 4)
+              .fill({ color: LANE_COLOR_NUMS[n.lane], alpha: alpha * 0.6 });
+            continue;
+          }
+          if (n.missed) {
+            const alpha = Math.max(0, n.fadeTimer / 0.3) * 0.4;
+            const lx = n.lane * laneW;
+            gfx.roundRect(lx + 7, n.y - noteH / 2, laneW - 14, noteH, 4)
+              .fill({ color: 0x666666, alpha });
+            continue;
+          }
+          // Normal note
           const lx = n.lane * laneW;
-          ctx.fillStyle = "#666";
-          ctx.beginPath();
-          ctx.roundRect(lx + 7, n.y - noteH / 2, laneW - 14, noteH, 4);
-          ctx.fill();
-          ctx.restore();
-          continue;
+          gfx.roundRect(lx + 7, n.y - noteH / 2, laneW - 14, noteH, 4)
+            .fill({ color: LANE_COLOR_NUMS[n.lane] });
         }
-        // Normal note
-        const lx = n.lane * laneW;
-        const noteGrad = ctx.createLinearGradient(lx + 7, n.y - noteH / 2, lx + laneW - 7, n.y + noteH / 2);
-        noteGrad.addColorStop(0, LANE_COLORS[n.lane]);
-        noteGrad.addColorStop(1, LANE_COLORS[n.lane] + "cc");
-        ctx.fillStyle = noteGrad;
-        ctx.shadowColor = LANE_COLORS[n.lane];
-        ctx.shadowBlur = 8;
-        ctx.beginPath();
-        ctx.roundRect(lx + 7, n.y - noteH / 2, laneW - 14, noteH, 4);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-      }
 
-      // Judgment popup
-      if (g.judgmentPopup) {
-        const jp = g.judgmentPopup;
-        ctx.save();
-        ctx.globalAlpha = Math.max(0, jp.alpha);
-        ctx.fillStyle = jp.color;
-        ctx.font = `bold ${Math.round(22 * jp.scale)}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(jp.text, w / 2, jp.y);
-        ctx.restore();
-      }
+        // Judgment popup
+        if (gs.judgmentPopup) {
+          const jp = gs.judgmentPopup;
+          nextText(jp.text, w / 2, jp.y, {
+            fontSize: Math.round(22 * jp.scale),
+            fill: jp.color,
+            fontWeight: "bold",
+            anchorX: 0.5, anchorY: 0.5,
+            alpha: Math.max(0, jp.alpha),
+          });
+        }
 
-      // HUD - Top bar
-      const hudH = Math.max(50, h * 0.08);
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(0, 0, w, hudH);
+        // HUD - Top bar
+        const hudH = Math.max(50, h * 0.08);
+        gfx.rect(0, 0, w, hudH).fill({ color: 0x000000, alpha: 0.6 });
 
-      // Song name
-      ctx.fillStyle = song.color;
-      ctx.font = `bold ${Math.max(13, h * 0.022)}px sans-serif`;
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(song.name, 10, hudH * 0.35);
+        // Song name
+        nextText(song.name, 10, hudH * 0.35, {
+          fontSize: Math.max(13, h * 0.022),
+          fill: song.color,
+          fontWeight: "bold",
+          anchorX: 0, anchorY: 0.5,
+        });
 
-      // Difficulty
-      ctx.fillStyle = DIFFICULTY_COLORS[difficulty];
-      ctx.font = `${Math.max(10, h * 0.016)}px sans-serif`;
-      ctx.fillText(DIFFICULTY_LABELS[difficulty], 10, hudH * 0.7);
+        // Difficulty
+        nextText(DIFFICULTY_LABELS[difficulty], 10, hudH * 0.7, {
+          fontSize: Math.max(10, h * 0.016),
+          fill: DIFFICULTY_COLORS[difficulty],
+          anchorX: 0, anchorY: 0.5,
+        });
 
-      // Score
-      ctx.fillStyle = "#fff";
-      ctx.font = `bold ${Math.max(16, h * 0.026)}px sans-serif`;
-      ctx.textAlign = "right";
-      ctx.fillText(g.score.toLocaleString(), w - 10, hudH * 0.35);
+        // Score
+        nextText(gs.score.toLocaleString(), w - 10, hudH * 0.35, {
+          fontSize: Math.max(16, h * 0.026),
+          fill: 0xffffff,
+          fontWeight: "bold",
+          anchorX: 1, anchorY: 0.5,
+        });
 
-      // Combo
-      if (g.combo > 0) {
-        ctx.fillStyle = g.combo >= 50 ? "#ffd700" : g.combo >= 20 ? "#ffa502" : "#aaa";
-        ctx.font = `bold ${Math.max(12, h * 0.018)}px sans-serif`;
-        ctx.fillText(`${g.combo}x 连击`, w - 10, hudH * 0.7);
-      }
+        // Combo
+        if (gs.combo > 0) {
+          nextText(`${gs.combo}x 连击`, w - 10, hudH * 0.7, {
+            fontSize: Math.max(12, h * 0.018),
+            fill: gs.combo >= 50 ? 0xffd700 : gs.combo >= 20 ? 0xffa502 : 0xaaaaaa,
+            fontWeight: "bold",
+            anchorX: 1, anchorY: 0.5,
+          });
+        }
 
-      // Progress bar
-      const progress = Math.max(0, Math.min(1, g.songTime / song.duration));
-      const barY = hudH - 3;
-      ctx.fillStyle = "rgba(255,255,255,0.1)";
-      ctx.fillRect(0, barY, w, 3);
-      ctx.fillStyle = song.color;
-      ctx.fillRect(0, barY, w * progress, 3);
+        // Progress bar
+        const progress = Math.max(0, Math.min(1, gs.songTime / song.duration));
+        const barY = hudH - 3;
+        gfx.rect(0, barY, w, 3).fill({ color: 0xffffff, alpha: 0.1 });
+        gfx.rect(0, barY, w * progress, 3).fill({ color: hexToNum(song.color) });
 
-      // Touch zones at bottom
-      const touchH = Math.max(50, h * 0.08);
-      const touchY = h - touchH;
-      for (let i = 0; i < LANES; i++) {
-        const lx = i * laneW;
-        ctx.fillStyle = `rgba(${i === 0 ? "255,71,87" : i === 1 ? "62,166,255" : i === 2 ? "46,213,115" : "255,165,2"}, 0.12)`;
-        ctx.beginPath();
-        ctx.roundRect(lx + 3, touchY + 3, laneW - 6, touchH - 6, 8);
-        ctx.fill();
-        // Touch label
-        ctx.fillStyle = "rgba(255,255,255,0.2)";
-        ctx.font = `bold ${Math.max(14, h * 0.022)}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(LANE_KEYS[i].toUpperCase(), lx + laneW / 2, touchY + touchH / 2);
-      }
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(loop);
-    };
-
-    rafRef.current = requestAnimationFrame(loop);
+        // Touch zones at bottom
+        const touchH = Math.max(50, h * 0.08);
+        const touchY = h - touchH;
+        const touchRgba: number[] = [0xff4757, 0x3ea6ff, 0x2ed573, 0xffa502];
+        for (let i = 0; i < LANES; i++) {
+          const lx = i * laneW;
+          gfx.roundRect(lx + 3, touchY + 3, laneW - 6, touchH - 6, 8)
+            .fill({ color: touchRgba[i], alpha: 0.12 });
+          // Touch label
+          nextText(LANE_KEYS[i].toUpperCase(), lx + laneW / 2, touchY + touchH / 2, {
+            fontSize: Math.max(14, h * 0.022),
+            fill: 0xffffff,
+            fontWeight: "bold",
+            anchorX: 0.5, anchorY: 0.5,
+            alpha: 0.2,
+          });
+        }
+      }); // end app.ticker.add
+    })(); // end async IIFE
 
     // Input handlers
     const onKeyDown = (e: KeyboardEvent) => {
@@ -739,11 +748,12 @@ export default function RhythmGame() {
     canvas.addEventListener("click", onClick);
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
+      destroyed = true;
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("touchstart", onTouchStart);
       canvas.removeEventListener("click", onClick);
+      if (app) { app.destroy(true); app = null; }
     };
   }, [phase, selectedSong, difficulty, hitLane, submitScore, playHitSound]);
 

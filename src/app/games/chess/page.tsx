@@ -6,9 +6,11 @@ import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 import {
-  ChevronLeft, RotateCcw, Volume2, VolumeX, Play, Circle,
-  Undo2, Trophy
+  ChevronLeft, RotateCcw, Volume2, VolumeX, Circle,
+  Undo2,
 } from "lucide-react";
 
 /* ================================================================
@@ -54,6 +56,10 @@ const SCORE_TABLE: Record<string, number> = {
   "010010": 400,
 };
 
+function hexToNum(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
+}
+
 function createBoard(): Stone[][] {
   return Array.from({ length: BOARD_SIZE }, () =>
     new Array<Stone>(BOARD_SIZE).fill(0)
@@ -71,10 +77,6 @@ function createGameState(): GameState {
     undoLeft: 3,
     moveCount: 0,
   };
-}
-
-function cloneBoard(b: Stone[][]): Stone[][] {
-  return b.map(row => [...row]);
 }
 
 /* ================================================================
@@ -109,7 +111,6 @@ function checkWin(board: Stone[][], r: number, c: number): boolean {
    ================================================================ */
 function evaluateLine(board: Stone[][], r: number, c: number, dr: number, dc: number, stone: Stone): number {
   let score = 0;
-  // 从 (r,c) 沿 (dr,dc) 方向提取长度为6的窗口
   for (let start = -4; start <= 0; start++) {
     for (const len of [5, 6]) {
       let pattern = "";
@@ -125,7 +126,6 @@ function evaluateLine(board: Stone[][], r: number, c: number, dr: number, dc: nu
       if (!valid) continue;
       const s = SCORE_TABLE[pattern];
       if (s) score += s;
-      // 也检查反转模式
       const rev = pattern.split("").reverse().join("");
       const sr = SCORE_TABLE[rev];
       if (sr) score += sr;
@@ -139,7 +139,6 @@ function evaluatePosition(board: Stone[][], r: number, c: number, stone: Stone):
   for (const [dr, dc] of DIRS) {
     score += evaluateLine(board, r, c, dr, dc, stone);
   }
-  // 中心偏好
   const centerDist = Math.abs(r - 7) + Math.abs(c - 7);
   score += Math.max(0, 14 - centerDist) * 2;
   return score;
@@ -150,7 +149,6 @@ function aiMove(board: Stone[][], difficulty: Difficulty): Pos | null {
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
       if (board[r][c] === 0) {
-        // 只考虑周围有棋子的位置（优化搜索范围）
         let near = false;
         for (let dr = -2; dr <= 2 && !near; dr++) {
           for (let dc = -2; dc <= 2 && !near; dc++) {
@@ -165,12 +163,10 @@ function aiMove(board: Stone[][], difficulty: Difficulty): Pos | null {
     }
   }
   if (empty.length === 0) {
-    // 棋盘空，下中心
     if (board[7][7] === 0) return { r: 7, c: 7 };
     return null;
   }
 
-  // 难度系数
   const depthMap: Record<Difficulty, number> = { easy: 1, normal: 2, hard: 3 };
   const depth = depthMap[difficulty];
   const noise: Record<Difficulty, number> = { easy: 800, normal: 200, hard: 20 };
@@ -179,7 +175,6 @@ function aiMove(board: Stone[][], difficulty: Difficulty): Pos | null {
   let bestMove: Pos = empty[0];
 
   for (const pos of empty) {
-    // 检查 AI 是否能直接赢
     board[pos.r][pos.c] = 2;
     if (checkWin(board, pos.r, pos.c)) {
       board[pos.r][pos.c] = 0;
@@ -187,18 +182,15 @@ function aiMove(board: Stone[][], difficulty: Difficulty): Pos | null {
     }
     board[pos.r][pos.c] = 0;
 
-    // 检查玩家是否能直接赢（必须堵）
     board[pos.r][pos.c] = 1;
     if (checkWin(board, pos.r, pos.c)) {
       board[pos.r][pos.c] = 0;
-      // 标记为高优先级
       const blockScore = 900000 + Math.random() * noise[difficulty];
       if (blockScore > bestScore) { bestScore = blockScore; bestMove = pos; }
       continue;
     }
     board[pos.r][pos.c] = 0;
 
-    // 评分：攻击分 + 防守分
     board[pos.r][pos.c] = 2;
     let attackScore = evaluatePosition(board, pos.r, pos.c, 2);
     board[pos.r][pos.c] = 0;
@@ -207,13 +199,11 @@ function aiMove(board: Stone[][], difficulty: Difficulty): Pos | null {
     let defendScore = evaluatePosition(board, pos.r, pos.c, 1);
     board[pos.r][pos.c] = 0;
 
-    // 深度搜索加成（简化版）
     if (depth >= 2) {
       attackScore *= 1.5;
       defendScore *= 1.2;
     }
     if (depth >= 3) {
-      // 额外考虑对手下一步的最佳位置
       board[pos.r][pos.c] = 2;
       let maxThreat = 0;
       for (const p2 of empty) {
@@ -244,7 +234,6 @@ export default function GomokuGame() {
   const [muted, setMuted] = useState(false);
   const gsRef = useRef<GameState>(createGameState());
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
   const lastStoneRef = useRef<Pos | null>(null);
 
   // React state mirrors for UI
@@ -332,7 +321,6 @@ export default function GomokuGame() {
     }
   }, []);
 
-
   /* ----------------------------------------------------------------
      开始游戏
      ---------------------------------------------------------------- */
@@ -366,7 +354,6 @@ export default function GomokuGame() {
       setMoveCount(gs.moveCount);
       if (gs.turn === 1) {
         playWin();
-        // 分数：难度加成 * (225 - 步数)
         const diffBonus: Record<Difficulty, number> = { easy: 1, normal: 2, hard: 3 };
         const score = (225 - gs.moveCount) * 10 * diffBonus[difficulty];
         submitScore(score);
@@ -377,7 +364,6 @@ export default function GomokuGame() {
       return true;
     }
 
-    // 检查平局
     if (gs.moveCount >= BOARD_SIZE * BOARD_SIZE) {
       gs.winner = 0;
       setPhase("gameover");
@@ -415,7 +401,6 @@ export default function GomokuGame() {
     const gs = gsRef.current;
     if (gs.undoLeft <= 0 || gs.history.length < 2 || gs.winner !== 0) return;
     if (phase !== "playing") return;
-    // 撤销 AI 的最后一步和玩家的最后一步
     for (let i = 0; i < 2 && gs.history.length > 0; i++) {
       const last = gs.history.pop()!;
       gs.board[last.r][last.c] = 0;
@@ -438,7 +423,6 @@ export default function GomokuGame() {
     if (phase === "cpu") return;
 
     const gs = gsRef.current;
-    // 将像素坐标转换为棋盘坐标
     const c = Math.round((mx - PAD) / CELL);
     const r = Math.round((my - PAD) / CELL);
     if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return;
@@ -508,295 +492,255 @@ export default function GomokuGame() {
     return () => window.removeEventListener("keydown", onKey);
   }, [phase, difficulty, startGame, placeStone, doCpuMove, handleUndo]);
 
-
   /* ----------------------------------------------------------------
-     Canvas 渲染循环
+     PixiJS 渲染循环
      ---------------------------------------------------------------- */
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
+    let destroyed = false;
+    let app: Application | null = null;
 
-    const onClick = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = (e.clientX - rect.left) * (W / rect.width);
-      const my = (e.clientY - rect.top) * (H / rect.height);
-      handleBoardClick(mx, my);
-    };
-    const onTouch = (e: TouchEvent) => {
-      e.preventDefault();
-      const t = e.changedTouches[0];
-      const rect = canvas.getBoundingClientRect();
-      const mx = (t.clientX - rect.left) * (W / rect.width);
-      const my = (t.clientY - rect.top) * (H / rect.height);
-      handleBoardClick(mx, my);
-    };
-    canvas.addEventListener("click", onClick);
-    canvas.addEventListener("touchend", onTouch, { passive: false });
+    (async () => {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0f0f0f, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
 
-    let animFrame = 0;
-    const render = () => {
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = "#0f0f0f";
-      ctx.fillRect(0, 0, W, H);
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
 
-      if (phase === "title") {
-        renderTitle(ctx);
-      } else {
-        renderBoard(ctx);
-        renderStatus(ctx);
-        if (phase === "gameover") {
-          renderGameOver(ctx);
+      // Text pool
+      const TEXT_POOL_SIZE = 70;
+      const texts: PixiText[] = [];
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({ text: "", style: { fontSize: 14, fill: 0xffffff, fontFamily: "sans-serif" } });
+        t.visible = false;
+        app.stage.addChild(t);
+        texts.push(t);
+      }
+      let textIdx = 0;
+
+      function nextText(str: string, x: number, y: number, opts: {
+        fontSize?: number; fill?: number | string; fontWeight?: string;
+        align?: "left" | "center" | "right"; alpha?: number;
+      } = {}): void {
+        if (textIdx >= TEXT_POOL_SIZE) return;
+        const t = texts[textIdx++];
+        t.text = str;
+        t.visible = true;
+        t.alpha = opts.alpha ?? 1;
+        const fillVal = typeof opts.fill === "string" ? hexToNum(opts.fill) : (opts.fill ?? 0xffffff);
+        t.style.fontSize = opts.fontSize ?? 14;
+        t.style.fill = fillVal;
+        t.style.fontWeight = (opts.fontWeight ?? "normal") as "normal" | "bold";
+        t.style.fontFamily = "sans-serif";
+        const anchor = opts.align ?? "left";
+        if (anchor === "center") { t.anchor.set(0.5, 0.5); t.x = x; }
+        else if (anchor === "right") { t.anchor.set(1, 0.5); t.x = x; }
+        else { t.anchor.set(0, 0.5); t.x = x; }
+        t.y = y;
+      }
+
+      // Stroke helpers
+      function strokeLine(gfx: PixiGraphics, x1: number, y1: number, x2: number, y2: number, color: number, alpha: number, lineW: number) {
+        gfx.moveTo(x1, y1).lineTo(x2, y2).stroke({ color, alpha, width: lineW });
+      }
+
+      // Click / touch handlers
+      const onClick = (e: MouseEvent) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = (e.clientX - rect.left) * (W / rect.width);
+        const my = (e.clientY - rect.top) * (H / rect.height);
+        handleBoardClick(mx, my);
+      };
+      const onTouch = (e: TouchEvent) => {
+        e.preventDefault();
+        const t = e.changedTouches[0];
+        const rect = canvas.getBoundingClientRect();
+        const mx = (t.clientX - rect.left) * (W / rect.width);
+        const my = (t.clientY - rect.top) * (H / rect.height);
+        handleBoardClick(mx, my);
+      };
+      canvas.addEventListener("click", onClick);
+      canvas.addEventListener("touchend", onTouch, { passive: false });
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        const gs = gsRef.current;
+
+        g.clear();
+        textIdx = 0;
+        for (const t of texts) t.visible = false;
+
+        // Background
+        g.rect(0, 0, W, H).fill(0x0f0f0f);
+
+        if (phase === "title") {
+          /* ============ TITLE SCREEN ============ */
+          // Decorative board grid
+          for (let i = 0; i < BOARD_SIZE; i++) {
+            strokeLine(g, PAD + i * CELL, PAD, PAD + i * CELL, PAD + (BOARD_SIZE - 1) * CELL, 0x3ea6ff, 0.15, 1);
+            strokeLine(g, PAD, PAD + i * CELL, PAD + (BOARD_SIZE - 1) * CELL, PAD + i * CELL, 0x3ea6ff, 0.15, 1);
+          }
+
+          // Title
+          nextText("五子棋", W / 2, H / 2 - 60, { fontSize: 36, fill: 0x3ea6ff, fontWeight: "bold", align: "center" });
+          // Subtitle
+          nextText("黑白对弈 · AI 对战", W / 2, H / 2 - 25, { fontSize: 14, fill: 0xaaaaaa, align: "center" });
+
+          // Difficulty buttons
+          const diffs: { label: string; value: Difficulty; y: number }[] = [
+            { label: "简单", value: "easy", y: H / 2 + 20 },
+            { label: "普通", value: "normal", y: H / 2 + 55 },
+            { label: "困难", value: "hard", y: H / 2 + 90 },
+          ];
+          for (const d of diffs) {
+            const selected = d.value === difficulty;
+            const bw = 120, bh = 28;
+            const bx = W / 2 - bw / 2, by = d.y - bh / 2;
+            g.roundRect(bx, by, bw, bh, 6).fill(selected ? 0x3ea6ff : 0x555555);
+            nextText(d.label, W / 2, d.y, {
+              fontSize: 14, fill: selected ? 0xffffff : 0xaaaaaa,
+              fontWeight: selected ? "bold" : "normal", align: "center",
+            });
+          }
+
+          // Hints
+          nextText("点击难度开始对局 / 按回车开始", W / 2, H / 2 + 130, { fontSize: 12, fill: 0x888888, align: "center" });
+          nextText("方向键移动光标 · 回车落子 · U键悔棋", W / 2, H / 2 + 150, { fontSize: 12, fill: 0x888888, align: "center" });
+
+        } else {
+          /* ============ GAME BOARD ============ */
+          // Board background
+          g.roundRect(PAD - 12, PAD - 12, (BOARD_SIZE - 1) * CELL + 24, (BOARD_SIZE - 1) * CELL + 24, 4).fill(0x1a1a2e);
+
+          // Grid lines
+          for (let i = 0; i < BOARD_SIZE; i++) {
+            strokeLine(g, PAD + i * CELL, PAD, PAD + i * CELL, PAD + (BOARD_SIZE - 1) * CELL, 0x444444, 1, 1);
+            strokeLine(g, PAD, PAD + i * CELL, PAD + (BOARD_SIZE - 1) * CELL, PAD + i * CELL, 0x444444, 1, 1);
+          }
+
+          // Star points
+          const stars = [3, 7, 11];
+          for (const sr of stars) {
+            for (const sc of stars) {
+              g.circle(PAD + sc * CELL, PAD + sr * CELL, 3).fill(0x666666);
+            }
+          }
+
+          // Cursor (playing phase only)
+          if (phase === "playing" && gs.board[gs.cursorR][gs.cursorC] === 0) {
+            const cx = PAD + gs.cursorC * CELL;
+            const cy = PAD + gs.cursorR * CELL;
+            const sz = 10;
+            // Four corner marks
+            g.moveTo(cx - sz, cy - sz).lineTo(cx - sz + 6, cy - sz).stroke({ color: 0x3ea6ff, width: 2 });
+            g.moveTo(cx - sz, cy - sz).lineTo(cx - sz, cy - sz + 6).stroke({ color: 0x3ea6ff, width: 2 });
+            g.moveTo(cx + sz, cy - sz).lineTo(cx + sz - 6, cy - sz).stroke({ color: 0x3ea6ff, width: 2 });
+            g.moveTo(cx + sz, cy - sz).lineTo(cx + sz, cy - sz + 6).stroke({ color: 0x3ea6ff, width: 2 });
+            g.moveTo(cx - sz, cy + sz).lineTo(cx - sz + 6, cy + sz).stroke({ color: 0x3ea6ff, width: 2 });
+            g.moveTo(cx - sz, cy + sz).lineTo(cx - sz, cy + sz - 6).stroke({ color: 0x3ea6ff, width: 2 });
+            g.moveTo(cx + sz, cy + sz).lineTo(cx + sz - 6, cy + sz).stroke({ color: 0x3ea6ff, width: 2 });
+            g.moveTo(cx + sz, cy + sz).lineTo(cx + sz, cy + sz - 6).stroke({ color: 0x3ea6ff, width: 2 });
+          }
+
+          // Stones
+          for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let col = 0; col < BOARD_SIZE; col++) {
+              const s = gs.board[r][col];
+              if (s === 0) continue;
+              const cx = PAD + col * CELL;
+              const cy = PAD + r * CELL;
+
+              // Shadow
+              g.circle(cx + 2, cy + 2, STONE_R).fill({ color: 0x000000, alpha: 0.3 });
+
+              // Stone body (flat color since PixiJS Graphics doesn't support radial gradients easily)
+              if (s === 1) {
+                g.circle(cx, cy, STONE_R).fill(0x222222);
+                // Highlight
+                g.circle(cx - 3, cy - 3, 4).fill({ color: 0x555555, alpha: 0.6 });
+              } else {
+                g.circle(cx, cy, STONE_R).fill(0xdddddd);
+                // Highlight
+                g.circle(cx - 3, cy - 3, 4).fill({ color: 0xffffff, alpha: 0.6 });
+              }
+
+              // Last stone marker
+              if (lastStoneRef.current && lastStoneRef.current.r === r && lastStoneRef.current.c === col) {
+                g.circle(cx, cy, 4).fill(s === 1 ? 0x3ea6ff : 0xff4757);
+              }
+            }
+          }
+
+          // Winning line highlight
+          if (gs.winner !== 0 && lastStoneRef.current) {
+            const lr = lastStoneRef.current.r, lc = lastStoneRef.current.c;
+            for (const [dr, dc] of DIRS) {
+              const line: Pos[] = [{ r: lr, c: lc }];
+              for (let i = 1; i < 5; i++) {
+                const nr = lr + dr * i, nc = lc + dc * i;
+                if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) break;
+                if (gs.board[nr][nc] !== gs.winner) break;
+                line.push({ r: nr, c: nc });
+              }
+              for (let i = 1; i < 5; i++) {
+                const nr = lr - dr * i, nc = lc - dc * i;
+                if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) break;
+                if (gs.board[nr][nc] !== gs.winner) break;
+                line.push({ r: nr, c: nc });
+              }
+              if (line.length >= 5) {
+                line.sort((a, b) => a.r !== b.r ? a.r - b.r : a.c - b.c);
+                const winColor = gs.winner === 1 ? 0x3ea6ff : 0xff4757;
+                g.moveTo(PAD + line[0].c * CELL, PAD + line[0].r * CELL)
+                  .lineTo(PAD + line[line.length - 1].c * CELL, PAD + line[line.length - 1].r * CELL)
+                  .stroke({ color: winColor, alpha: 0.7, width: 4 });
+              }
+            }
+          }
+
+          // Status bar
+          const statusY = PAD + (BOARD_SIZE - 1) * CELL + 30;
+          if (phase === "cpu") {
+            nextText("白方思考中...", W / 2, statusY, { fontSize: 14, fill: 0xaaaaaa, align: "center" });
+          } else if (phase === "playing") {
+            nextText(gs.turn === 1 ? "黑方回合" : "白方回合", W / 2, statusY, {
+              fontSize: 14, fill: gs.turn === 1 ? 0xffffff : 0xcccccc, align: "center",
+            });
+          }
+
+          // Move count & difficulty
+          const diffLabel: Record<Difficulty, string> = { easy: "简单", normal: "普通", hard: "困难" };
+          nextText(`第 ${gs.moveCount} 手`, PAD, statusY, { fontSize: 11, fill: 0x666666, align: "left" });
+          nextText(diffLabel[difficulty], W - PAD, statusY, { fontSize: 11, fill: 0x666666, align: "right" });
+
+          // Game over overlay
+          if (phase === "gameover") {
+            g.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.65 });
+
+            const isWin = gs.winner === 1;
+            const isDraw = gs.winner === 0 && gs.moveCount >= BOARD_SIZE * BOARD_SIZE;
+
+            if (isDraw) {
+              nextText("平局", W / 2, H / 2 - 20, { fontSize: 28, fill: 0xaaaaaa, fontWeight: "bold", align: "center" });
+            } else {
+              nextText(isWin ? "黑方胜利!" : "白方胜利!", W / 2, H / 2 - 20, {
+                fontSize: 28, fill: isWin ? 0x2ed573 : 0xff4757, fontWeight: "bold", align: "center",
+              });
+            }
+
+            nextText(`共 ${gs.moveCount} 手`, W / 2, H / 2 + 15, { fontSize: 13, fill: 0xaaaaaa, align: "center" });
+            nextText("点击 新局 或按回车重新开始", W / 2, H / 2 + 40, { fontSize: 13, fill: 0xaaaaaa, align: "center" });
+          }
         }
-      }
+      });
+    })();
 
-      ctx.restore();
-      animFrame = requestAnimationFrame(render);
-    };
-
-    const renderTitle = (c: CanvasRenderingContext2D) => {
-      // 背景棋盘装饰
-      c.globalAlpha = 0.15;
-      c.strokeStyle = "#3ea6ff";
-      for (let i = 0; i < BOARD_SIZE; i++) {
-        c.beginPath();
-        c.moveTo(PAD + i * CELL, PAD);
-        c.lineTo(PAD + i * CELL, PAD + (BOARD_SIZE - 1) * CELL);
-        c.stroke();
-        c.beginPath();
-        c.moveTo(PAD, PAD + i * CELL);
-        c.lineTo(PAD + (BOARD_SIZE - 1) * CELL, PAD + i * CELL);
-        c.stroke();
-      }
-      c.globalAlpha = 1;
-
-      // 标题
-      c.fillStyle = "#3ea6ff";
-      c.font = "bold 36px sans-serif";
-      c.textAlign = "center";
-      c.textBaseline = "middle";
-      c.fillText("五子棋", W / 2, H / 2 - 60);
-
-      // 副标题
-      c.fillStyle = "#aaa";
-      c.font = "14px sans-serif";
-      c.fillText("黑白对弈 · AI 对战", W / 2, H / 2 - 25);
-
-      // 难度选择
-      const diffs: { label: string; value: Difficulty; y: number }[] = [
-        { label: "简单", value: "easy", y: H / 2 + 20 },
-        { label: "普通", value: "normal", y: H / 2 + 55 },
-        { label: "困难", value: "hard", y: H / 2 + 90 },
-      ];
-      for (const d of diffs) {
-        const selected = d.value === difficulty;
-        c.fillStyle = selected ? "#3ea6ff" : "#555";
-        c.beginPath();
-        const bw = 120, bh = 28;
-        const bx = W / 2 - bw / 2, by = d.y - bh / 2;
-        c.roundRect(bx, by, bw, bh, 6);
-        c.fill();
-        c.fillStyle = selected ? "#fff" : "#aaa";
-        c.font = selected ? "bold 14px sans-serif" : "14px sans-serif";
-        c.fillText(d.label, W / 2, d.y);
-      }
-
-      // 提示
-      c.fillStyle = "#888";
-      c.font = "12px sans-serif";
-      c.fillText("点击难度开始对局 / 按回车开始", W / 2, H / 2 + 130);
-      c.fillText("方向键移动光标 · 回车落子 · U键悔棋", W / 2, H / 2 + 150);
-    };
-
-    const renderBoard = (c: CanvasRenderingContext2D) => {
-      const gs = gsRef.current;
-
-      // 棋盘背景
-      c.fillStyle = "#1a1a2e";
-      c.beginPath();
-      c.roundRect(PAD - 12, PAD - 12, (BOARD_SIZE - 1) * CELL + 24, (BOARD_SIZE - 1) * CELL + 24, 4);
-      c.fill();
-
-      // 网格线
-      c.strokeStyle = "#444";
-      c.lineWidth = 1;
-      for (let i = 0; i < BOARD_SIZE; i++) {
-        c.beginPath();
-        c.moveTo(PAD + i * CELL, PAD);
-        c.lineTo(PAD + i * CELL, PAD + (BOARD_SIZE - 1) * CELL);
-        c.stroke();
-        c.beginPath();
-        c.moveTo(PAD, PAD + i * CELL);
-        c.lineTo(PAD + (BOARD_SIZE - 1) * CELL, PAD + i * CELL);
-        c.stroke();
-      }
-
-      // 星位点
-      const stars = [3, 7, 11];
-      c.fillStyle = "#666";
-      for (const sr of stars) {
-        for (const sc of stars) {
-          c.beginPath();
-          c.arc(PAD + sc * CELL, PAD + sr * CELL, 3, 0, Math.PI * 2);
-          c.fill();
-        }
-      }
-
-      // 光标（仅在 playing 阶段显示）
-      if (phase === "playing" && gs.board[gs.cursorR][gs.cursorC] === 0) {
-        const cx = PAD + gs.cursorC * CELL;
-        const cy = PAD + gs.cursorR * CELL;
-        c.strokeStyle = "#3ea6ff";
-        c.lineWidth = 2;
-        const sz = 10;
-        // 四角标记
-        c.beginPath();
-        c.moveTo(cx - sz, cy - sz); c.lineTo(cx - sz + 6, cy - sz);
-        c.moveTo(cx - sz, cy - sz); c.lineTo(cx - sz, cy - sz + 6);
-        c.moveTo(cx + sz, cy - sz); c.lineTo(cx + sz - 6, cy - sz);
-        c.moveTo(cx + sz, cy - sz); c.lineTo(cx + sz, cy - sz + 6);
-        c.moveTo(cx - sz, cy + sz); c.lineTo(cx - sz + 6, cy + sz);
-        c.moveTo(cx - sz, cy + sz); c.lineTo(cx - sz, cy + sz - 6);
-        c.moveTo(cx + sz, cy + sz); c.lineTo(cx + sz - 6, cy + sz);
-        c.moveTo(cx + sz, cy + sz); c.lineTo(cx + sz, cy + sz - 6);
-        c.stroke();
-      }
-
-      // 棋子
-      for (let r = 0; r < BOARD_SIZE; r++) {
-        for (let col = 0; col < BOARD_SIZE; col++) {
-          const s = gs.board[r][col];
-          if (s === 0) continue;
-          const cx = PAD + col * CELL;
-          const cy = PAD + r * CELL;
-
-          // 阴影
-          c.fillStyle = "rgba(0,0,0,0.3)";
-          c.beginPath();
-          c.arc(cx + 2, cy + 2, STONE_R, 0, Math.PI * 2);
-          c.fill();
-
-          // 棋子本体
-          const grad = c.createRadialGradient(cx - 3, cy - 3, 2, cx, cy, STONE_R);
-          if (s === 1) {
-            grad.addColorStop(0, "#555");
-            grad.addColorStop(1, "#111");
-          } else {
-            grad.addColorStop(0, "#fff");
-            grad.addColorStop(1, "#bbb");
-          }
-          c.fillStyle = grad;
-          c.beginPath();
-          c.arc(cx, cy, STONE_R, 0, Math.PI * 2);
-          c.fill();
-
-          // 最后一步标记
-          if (lastStoneRef.current && lastStoneRef.current.r === r && lastStoneRef.current.c === col) {
-            c.fillStyle = s === 1 ? "#3ea6ff" : "#ff4757";
-            c.beginPath();
-            c.arc(cx, cy, 4, 0, Math.PI * 2);
-            c.fill();
-          }
-        }
-      }
-
-      // 获胜连线高亮
-      if (gs.winner !== 0 && lastStoneRef.current) {
-        const lr = lastStoneRef.current.r, lc = lastStoneRef.current.c;
-        for (const [dr, dc] of DIRS) {
-          const line: Pos[] = [{ r: lr, c: lc }];
-          for (let i = 1; i < 5; i++) {
-            const nr = lr + dr * i, nc = lc + dc * i;
-            if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) break;
-            if (gs.board[nr][nc] !== gs.winner) break;
-            line.push({ r: nr, c: nc });
-          }
-          for (let i = 1; i < 5; i++) {
-            const nr = lr - dr * i, nc = lc - dc * i;
-            if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) break;
-            if (gs.board[nr][nc] !== gs.winner) break;
-            line.push({ r: nr, c: nc });
-          }
-          if (line.length >= 5) {
-            c.strokeStyle = gs.winner === 1 ? "rgba(62,166,255,0.7)" : "rgba(255,71,87,0.7)";
-            c.lineWidth = 4;
-            c.lineCap = "round";
-            // 排序连线
-            line.sort((a, b) => a.r !== b.r ? a.r - b.r : a.c - b.c);
-            c.beginPath();
-            c.moveTo(PAD + line[0].c * CELL, PAD + line[0].r * CELL);
-            c.lineTo(PAD + line[line.length - 1].c * CELL, PAD + line[line.length - 1].r * CELL);
-            c.stroke();
-          }
-        }
-      }
-    };
-
-    const renderStatus = (c: CanvasRenderingContext2D) => {
-      const gs = gsRef.current;
-      const statusY = PAD + (BOARD_SIZE - 1) * CELL + 30;
-      c.textAlign = "center";
-      c.textBaseline = "middle";
-
-      if (phase === "cpu") {
-        c.fillStyle = "#aaa";
-        c.font = "14px sans-serif";
-        c.fillText("白方思考中...", W / 2, statusY);
-      } else if (phase === "playing") {
-        c.fillStyle = gs.turn === 1 ? "#fff" : "#ccc";
-        c.font = "14px sans-serif";
-        c.fillText(gs.turn === 1 ? "黑方回合" : "白方回合", W / 2, statusY);
-      }
-
-      // 步数显示
-      c.fillStyle = "#666";
-      c.font = "11px sans-serif";
-      c.textAlign = "left";
-      c.fillText(`第 ${gs.moveCount} 手`, PAD, statusY);
-      c.textAlign = "right";
-      const diffLabel: Record<Difficulty, string> = { easy: "简单", normal: "普通", hard: "困难" };
-      c.fillText(diffLabel[difficulty], W - PAD, statusY);
-    };
-
-    const renderGameOver = (c: CanvasRenderingContext2D) => {
-      const gs = gsRef.current;
-      c.fillStyle = "rgba(0,0,0,0.65)";
-      c.fillRect(0, 0, W, H);
-
-      const isWin = gs.winner === 1;
-      const isDraw = gs.winner === 0 && gs.moveCount >= BOARD_SIZE * BOARD_SIZE;
-
-      c.textAlign = "center";
-      c.textBaseline = "middle";
-
-      if (isDraw) {
-        c.fillStyle = "#aaa";
-        c.font = "bold 28px sans-serif";
-        c.fillText("平局", W / 2, H / 2 - 20);
-      } else {
-        c.fillStyle = isWin ? "#2ed573" : "#ff4757";
-        c.font = "bold 28px sans-serif";
-        c.fillText(isWin ? "黑方胜利!" : "白方胜利!", W / 2, H / 2 - 20);
-      }
-
-      c.fillStyle = "#aaa";
-      c.font = "13px sans-serif";
-      c.fillText(`共 ${gs.moveCount} 手`, W / 2, H / 2 + 15);
-      c.fillText("点击 新局 或按回车重新开始", W / 2, H / 2 + 40);
-    };
-
-    animFrame = requestAnimationFrame(render);
     return () => {
-      cancelAnimationFrame(animFrame);
-      canvas.removeEventListener("click", onClick);
-      canvas.removeEventListener("touchend", onTouch);
+      destroyed = true;
+      if (app) { app.destroy(true); app = null; }
     };
   }, [phase, difficulty, handleBoardClick]);
 
@@ -846,7 +790,6 @@ export default function GomokuGame() {
       canvas.removeEventListener("touchend", onTitleTouch);
     };
   }, [phase, startGame]);
-
 
   /* ----------------------------------------------------------------
      JSX 渲染

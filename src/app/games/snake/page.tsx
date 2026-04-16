@@ -5,10 +5,11 @@ import Link from "next/link";
 import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import { fetchWithAuth } from "@/lib/auth";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GRID = 25;
-const CELL = 16; // base cell size, scaled to canvas
 const CANVAS_SIZE = 440;
 const ACCENT = "#2ba640";
 const ACCENT_GLOW = "#3aff55";
@@ -29,7 +30,6 @@ interface Food {
   type: FoodType;
   age: number;
   pulsePhase: number;
-  // boss food movement
   vx?: number; vy?: number;
   size?: number;
 }
@@ -46,7 +46,7 @@ interface Obstacle { x: number; y: number; }
 
 interface PowerUp {
   type: "speed" | "shield" | "ghost" | "magnet";
-  remaining: number; // ticks remaining
+  remaining: number;
 }
 
 interface DeathSegment {
@@ -70,25 +70,17 @@ interface GameState {
   powerUps: PowerUp[];
   shieldHits: number;
   tickCount: number;
-  // interpolation
   moveProgress: number;
   lastMoveTime: number;
-  // trail
   trail: { x: number; y: number; alpha: number }[];
-  // particles
   particles: Particle[];
-  // screen flash
   flashAlpha: number;
   flashColor: string;
-  // death animation
   deathSegments: DeathSegment[];
   deathTime: number;
-  // score animation
   displayScore: number;
   scorePopups: { x: number; y: number; value: number; life: number }[];
-  // boss food timer
   bossTimer: number;
-  // speed
   baseSpeed: number;
   currentSpeed: number;
 }
@@ -103,6 +95,11 @@ const FOOD_CONFIG: Record<FoodType, { points: number; color: string; glow: strin
   magnet:  { points: 5,  color: "#ff8800", glow: "#ffaa44", emoji: "?" },
   boss:    { points: 50, color: "#ff0066", glow: "#ff4499", emoji: "?" },
 };
+
+// ─── Hex to PixiJS number ────────────────────────────────────────────────────
+function hexToNum(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
+}
 
 // ─── Audio ───────────────────────────────────────────────────────────────────
 function createAudioCtx() {
@@ -179,13 +176,9 @@ function generateObstacles(level: number, diffObstacles: number, snake: Pos[], e
   const count = diffObstacles + Math.floor(level / 2) * 2;
   const obs: Obstacle[] = [...existingObs];
   const patterns = [
-    // horizontal line
     (cx: number, cy: number) => Array.from({ length: 3 }, (_, i) => ({ x: cx + i - 1, y: cy })),
-    // vertical line
     (cx: number, cy: number) => Array.from({ length: 3 }, (_, i) => ({ x: cx, y: cy + i - 1 })),
-    // L shape
     (cx: number, cy: number) => [{ x: cx, y: cy }, { x: cx + 1, y: cy }, { x: cx, y: cy + 1 }],
-    // dot pair
     (cx: number, cy: number) => [{ x: cx, y: cy }, { x: cx + 2, y: cy }],
   ];
   for (let i = obs.length; i < count; i++) {
@@ -207,7 +200,6 @@ function generateObstacles(level: number, diffObstacles: number, snake: Pos[], e
 export default function SnakeGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const animFrameRef = useRef<number>(0);
   const gameRef = useRef<GameState>(null!);
   const [score, setScore] = useState(0);
   const [level, setLevel] = useState(1);
@@ -220,6 +212,13 @@ export default function SnakeGame() {
   const [shieldCount, setShieldCount] = useState(0);
   const [submitted, setSubmitted] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  // PixiJS refs
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
+  const frameRef = useRef(0);
 
   // ─── Init audio ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -279,11 +278,9 @@ export default function SnakeGame() {
 
   // ─── Spawn food logic ───────────────────────────────────────────────────
   const maybeSpawnFood = useCallback((g: GameState) => {
-    // Always have at least 1 normal food
     if (!g.foods.some(f => f.type === "normal")) {
       g.foods.push(spawnFood("normal", g.snake, g.obstacles, g.foods));
     }
-    // Random power-up food
     if (g.tickCount % 30 === 0 && g.foods.length < 4) {
       const r = Math.random();
       if (r < 0.08) g.foods.push(spawnFood("golden", g.snake, g.obstacles, g.foods));
@@ -292,7 +289,6 @@ export default function SnakeGame() {
       else if (r < 0.28) g.foods.push(spawnFood("ghost", g.snake, g.obstacles, g.foods));
       else if (r < 0.34) g.foods.push(spawnFood("magnet", g.snake, g.obstacles, g.foods));
     }
-    // Boss food every ~200 ticks
     g.bossTimer++;
     if (g.bossTimer >= 200 && !g.foods.some(f => f.type === "boss")) {
       g.foods.push(spawnFood("boss", g.snake, g.obstacles, g.foods));
@@ -326,7 +322,6 @@ export default function SnakeGame() {
 
     const head = { x: g.snake[0].x + g.dir.x, y: g.snake[0].y + g.dir.y };
 
-    // Wall collision
     const hitWall = head.x < 0 || head.x >= GRID || head.y < 0 || head.y >= GRID;
     const hitObstacle = g.obstacles.some(o => o.x === head.x && o.y === head.y);
     const hasGhost = g.powerUps.some(p => p.type === "ghost");
@@ -338,14 +333,11 @@ export default function SnakeGame() {
         setShieldCount(g.shieldHits);
         g.flashAlpha = 0.4;
         g.flashColor = "#8855ff";
-        // Bounce back - don't move
         return;
       }
-      // Death
       g.running = false;
       g.gameOver = true;
       playDeath(audioCtxRef.current);
-      // Create death segments
       const cellPx = CANVAS_SIZE / GRID;
       g.deathSegments = g.snake.map((s, i) => ({
         x: s.x * cellPx + cellPx / 2, y: s.y * cellPx + cellPx / 2,
@@ -382,7 +374,6 @@ export default function SnakeGame() {
       return;
     }
 
-    // Add trail
     g.trail.unshift({ x: g.snake[0].x, y: g.snake[0].y, alpha: 1 });
     if (g.trail.length > 30) g.trail.pop();
 
@@ -416,10 +407,8 @@ export default function SnakeGame() {
         setScore(g.score);
         g.scorePopups.push({ x: f.x * cellPx + cellPx / 2, y: f.y * cellPx, value: cfg.points, life: 40 });
 
-        // Spawn particles
         spawnParticles(g, f.x * cellPx + cellPx / 2, f.y * cellPx + cellPx / 2, cfg.color, f.type === "boss" ? 30 : 12);
 
-        // Apply power-ups
         if (f.type === "speed") {
           g.powerUps = g.powerUps.filter(p => p.type !== "speed");
           g.powerUps.push({ type: "speed", remaining: 60 });
@@ -448,14 +437,12 @@ export default function SnakeGame() {
         g.foods.splice(i, 1);
         ate = true;
 
-        // Level progression
         const newLevel = Math.floor(g.score / 100) + 1;
         if (newLevel > g.level) {
           g.level = newLevel;
           setLevel(newLevel);
           playLevelUp(audioCtxRef.current);
           g.flashAlpha = 0.5; g.flashColor = "#ffd700";
-          // Add obstacles
           if (g.score >= 50) {
             g.obstacles = generateObstacles(g.level, DIFFS[diffIdx].obstacles, g.snake, g.obstacles);
           }
@@ -486,12 +473,10 @@ export default function SnakeGame() {
       f.age++;
     });
 
-    // Remove old non-normal food
     g.foods = g.foods.filter(f => f.type === "normal" || f.type === "boss" || f.age < 300);
 
     maybeSpawnFood(g);
 
-    // Obstacle spawn every 50 points
     if (g.score > 0 && g.score % 50 === 0 && g.tickCount % 10 === 0) {
       const p = randomFreePos(g.snake, g.obstacles, g.foods);
       if (!g.obstacles.some(o => o.x === p.x && o.y === p.y)) {
@@ -503,339 +488,293 @@ export default function SnakeGame() {
     g.lastMoveTime = performance.now();
   }, [diffIdx, best, saveBest, submitScore, spawnParticles, maybeSpawnFood]);
 
-
-  // ─── Render frame ──────────────────────────────────────────────────────
-  const renderFrame = useCallback((ctx: CanvasRenderingContext2D, g: GameState, time: number) => {
-    const W = CANVAS_SIZE;
-    const cellPx = W / GRID;
-
-    // ── Background with animated grid ──
-    ctx.fillStyle = "#0a0a0a";
-    ctx.fillRect(0, 0, W, W);
-
-    // Subtle grid pulse
-    const gridPulse = 0.03 + Math.sin(time * 0.001) * 0.015;
-    ctx.strokeStyle = `rgba(43, 166, 64, ${gridPulse})`;
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= GRID; i++) {
-      ctx.beginPath(); ctx.moveTo(i * cellPx, 0); ctx.lineTo(i * cellPx, W); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, i * cellPx); ctx.lineTo(W, i * cellPx); ctx.stroke();
-    }
-
-    // ── Interpolation progress ──
-    const elapsed = time - g.lastMoveTime;
-    const progress = Math.min(elapsed / g.currentSpeed, 1);
-
-    // ── Obstacles ──
-    g.obstacles.forEach(o => {
-      const pulse = 0.6 + Math.sin(time * 0.003 + o.x + o.y) * 0.15;
-      ctx.fillStyle = `rgba(100, 40, 40, ${pulse})`;
-      ctx.shadowColor = "#ff2222";
-      ctx.shadowBlur = 4;
-      ctx.fillRect(o.x * cellPx + 1, o.y * cellPx + 1, cellPx - 2, cellPx - 2);
-      ctx.shadowBlur = 0;
-      // X mark
-      ctx.strokeStyle = `rgba(255, 80, 80, ${pulse * 0.7})`;
-      ctx.lineWidth = 1.5;
-      const cx = o.x * cellPx + cellPx / 2;
-      const cy = o.y * cellPx + cellPx / 2;
-      const s = cellPx * 0.25;
-      ctx.beginPath(); ctx.moveTo(cx - s, cy - s); ctx.lineTo(cx + s, cy + s); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(cx + s, cy - s); ctx.lineTo(cx - s, cy + s); ctx.stroke();
-    });
-
-    // ── Trail ──
-    g.trail.forEach((t, i) => {
-      t.alpha -= 0.035;
-      if (t.alpha <= 0) return;
-      const a = t.alpha * 0.4;
-      ctx.fillStyle = `rgba(43, 166, 64, ${a})`;
-      ctx.shadowColor = ACCENT_GLOW;
-      ctx.shadowBlur = 6 * t.alpha;
-      ctx.beginPath();
-      ctx.arc(t.x * cellPx + cellPx / 2, t.y * cellPx + cellPx / 2, cellPx * 0.3 * t.alpha, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    });
-    g.trail = g.trail.filter(t => t.alpha > 0);
-
-    // ── Snake body with neon glow ──
-    const isGhost = g.powerUps.some(p => p.type === "ghost");
-    const isMagnet = g.powerUps.some(p => p.type === "magnet");
-
-    g.snake.forEach((seg, i) => {
-      let drawX = seg.x * cellPx;
-      let drawY = seg.y * cellPx;
-
-      // Interpolate head position
-      if (i === 0 && g.running) {
-        const prevX = (seg.x - g.dir.x) * cellPx;
-        const prevY = (seg.y - g.dir.y) * cellPx;
-        drawX = prevX + (drawX - prevX) * progress;
-        drawY = prevY + (drawY - prevY) * progress;
-      }
-
-      const ratio = 1 - (i / g.snake.length) * 0.6;
-      const segSize = cellPx * (0.85 - i * 0.003);
-      const offset = (cellPx - segSize) / 2;
-
-      // Glow
-      if (i === 0) {
-        ctx.shadowColor = "#3ea6ff";
-        ctx.shadowBlur = 12;
-      } else {
-        ctx.shadowColor = ACCENT_GLOW;
-        ctx.shadowBlur = 6 * ratio;
-      }
-
-      // Ghost effect
-      const alpha = isGhost ? 0.5 + Math.sin(time * 0.01 + i * 0.3) * 0.2 : ratio;
-
-      if (i === 0) {
-        // Head - rounded rect
-        ctx.fillStyle = `rgba(62, 166, 255, ${alpha})`;
-        const r = segSize * 0.3;
-        const hx = drawX + offset;
-        const hy = drawY + offset;
-        ctx.beginPath();
-        ctx.moveTo(hx + r, hy);
-        ctx.lineTo(hx + segSize - r, hy);
-        ctx.quadraticCurveTo(hx + segSize, hy, hx + segSize, hy + r);
-        ctx.lineTo(hx + segSize, hy + segSize - r);
-        ctx.quadraticCurveTo(hx + segSize, hy + segSize, hx + segSize - r, hy + segSize);
-        ctx.lineTo(hx + r, hy + segSize);
-        ctx.quadraticCurveTo(hx, hy + segSize, hx, hy + segSize - r);
-        ctx.lineTo(hx, hy + r);
-        ctx.quadraticCurveTo(hx, hy, hx + r, hy);
-        ctx.fill();
-
-        // Eyes
-        ctx.shadowBlur = 0;
-        const eyeSize = cellPx * 0.15;
-        const pupilSize = cellPx * 0.08;
-        let ex1: number, ey1: number, ex2: number, ey2: number;
-        const hcx = drawX + cellPx / 2;
-        const hcy = drawY + cellPx / 2;
-
-        if (g.dir.x === 1) { ex1 = hcx + cellPx * 0.15; ey1 = hcy - cellPx * 0.18; ex2 = hcx + cellPx * 0.15; ey2 = hcy + cellPx * 0.18; }
-        else if (g.dir.x === -1) { ex1 = hcx - cellPx * 0.15; ey1 = hcy - cellPx * 0.18; ex2 = hcx - cellPx * 0.15; ey2 = hcy + cellPx * 0.18; }
-        else if (g.dir.y === -1) { ex1 = hcx - cellPx * 0.18; ey1 = hcy - cellPx * 0.15; ex2 = hcx + cellPx * 0.18; ey2 = hcy - cellPx * 0.15; }
-        else { ex1 = hcx - cellPx * 0.18; ey1 = hcy + cellPx * 0.15; ex2 = hcx + cellPx * 0.18; ey2 = hcy + cellPx * 0.15; }
-
-        // White of eye
-        ctx.fillStyle = "#fff";
-        ctx.beginPath(); ctx.arc(ex1, ey1, eyeSize, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(ex2, ey2, eyeSize, 0, Math.PI * 2); ctx.fill();
-        // Pupil
-        ctx.fillStyle = "#111";
-        ctx.beginPath(); ctx.arc(ex1 + g.dir.x * 1.5, ey1 + g.dir.y * 1.5, pupilSize, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(ex2 + g.dir.x * 1.5, ey2 + g.dir.y * 1.5, pupilSize, 0, Math.PI * 2); ctx.fill();
-      } else {
-        // Body segment with gradient
-        const r = Math.max(1, segSize * 0.2);
-        const bx = seg.x * cellPx + offset;
-        const by = seg.y * cellPx + offset;
-        const green = Math.floor(166 * ratio);
-        const red = Math.floor(43 * ratio);
-        ctx.fillStyle = isGhost
-          ? `rgba(180, 120, 255, ${alpha})`
-          : isMagnet
-            ? `rgba(255, ${100 + green * 0.5}, 0, ${alpha})`
-            : `rgba(${red}, ${green}, ${Math.floor(64 * ratio)}, ${alpha})`;
-        ctx.beginPath();
-        ctx.moveTo(bx + r, by);
-        ctx.lineTo(bx + segSize - r, by);
-        ctx.quadraticCurveTo(bx + segSize, by, bx + segSize, by + r);
-        ctx.lineTo(bx + segSize, by + segSize - r);
-        ctx.quadraticCurveTo(bx + segSize, by + segSize, bx + segSize - r, by + segSize);
-        ctx.lineTo(bx + r, by + segSize);
-        ctx.quadraticCurveTo(bx, by + segSize, bx, by + segSize - r);
-        ctx.lineTo(bx, by + r);
-        ctx.quadraticCurveTo(bx, by, bx + r, by);
-        ctx.fill();
-      }
-      ctx.shadowBlur = 0;
-    });
-
-    // Shield indicator on head
-    if (g.shieldHits > 0) {
-      const hx = g.snake[0].x * cellPx + cellPx / 2;
-      const hy = g.snake[0].y * cellPx + cellPx / 2;
-      ctx.strokeStyle = `rgba(136, 85, 255, ${0.5 + Math.sin(time * 0.005) * 0.3})`;
-      ctx.lineWidth = 2;
-      ctx.shadowColor = "#8855ff";
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.arc(hx, hy, cellPx * 0.7, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-    }
-
-    // ── Food items ──
-    g.foods.forEach(f => {
-      const cfg = FOOD_CONFIG[f.type];
-      const pulse = 1 + Math.sin(time * 0.005 + f.pulsePhase) * 0.15;
-      const rotation = time * 0.002 + f.pulsePhase;
-      const fx = f.type === "boss" ? f.x * cellPx : f.x * cellPx + cellPx / 2;
-      const fy = f.type === "boss" ? f.y * cellPx : f.y * cellPx + cellPx / 2;
-
-      ctx.save();
-      if (f.type === "boss") {
-        // Boss: large pulsing circle
-        const bossSize = cellPx * 1.5 * pulse;
-        ctx.shadowColor = cfg.glow;
-        ctx.shadowBlur = 15 + Math.sin(time * 0.008) * 5;
-        ctx.fillStyle = cfg.color;
-        ctx.beginPath();
-        ctx.arc(fx + cellPx, fy + cellPx, bossSize / 2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        // Crown emoji
-        ctx.font = `${cellPx * 0.8}px serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("?", fx + cellPx, fy + cellPx);
-      } else {
-        ctx.translate(fx, fy);
-        ctx.rotate(f.type !== "normal" ? rotation : 0);
-        ctx.scale(pulse, pulse);
-
-        // Glow
-        ctx.shadowColor = cfg.glow;
-        ctx.shadowBlur = 10;
-
-        // Draw food
-        ctx.fillStyle = cfg.color;
-        ctx.beginPath();
-        ctx.arc(0, 0, cellPx * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // Inner highlight
-        ctx.fillStyle = `rgba(255,255,255,0.3)`;
-        ctx.beginPath();
-        ctx.arc(-cellPx * 0.08, -cellPx * 0.08, cellPx * 0.12, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Emoji overlay for special food
-        if (f.type !== "normal") {
-          ctx.rotate(-rotation);
-          ctx.font = `${cellPx * 0.55}px serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(cfg.emoji, 0, 1);
-        }
-      }
-      ctx.restore();
-    });
-
-    // ── Particles ──
-    g.particles.forEach(p => {
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vy += 0.05; // gravity
-      p.life--;
-      const a = Math.max(0, p.life / p.maxLife);
-      ctx.fillStyle = p.color;
-      ctx.globalAlpha = a;
-      ctx.shadowColor = p.color;
-      ctx.shadowBlur = 4;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * a, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.globalAlpha = 1;
-    ctx.shadowBlur = 0;
-    g.particles = g.particles.filter(p => p.life > 0);
-
-    // ── Score popups ──
-    g.scorePopups.forEach(sp => {
-      sp.y -= 0.8;
-      sp.life--;
-      const a = sp.life / 40;
-      ctx.fillStyle = `rgba(255, 215, 0, ${a})`;
-      ctx.font = `bold ${14 + (1 - a) * 4}px monospace`;
-      ctx.textAlign = "center";
-      ctx.fillText(`+${sp.value}`, sp.x, sp.y);
-    });
-    g.scorePopups = g.scorePopups.filter(sp => sp.life > 0);
-
-    // ── Death animation ──
-    if (g.gameOver && g.deathSegments.length > 0) {
-      g.deathSegments.forEach(ds => {
-        ds.x += ds.vx;
-        ds.y += ds.vy;
-        ds.vy += 0.15;
-        ds.rot += ds.rotV;
-        ds.alpha = Math.max(0, ds.alpha - 0.008);
-        ctx.save();
-        ctx.translate(ds.x, ds.y);
-        ctx.rotate(ds.rot);
-        ctx.globalAlpha = ds.alpha;
-        ctx.fillStyle = ds.color;
-        ctx.shadowColor = ds.color;
-        ctx.shadowBlur = 6;
-        ctx.fillRect(-ds.size / 2, -ds.size / 2, ds.size, ds.size);
-        ctx.restore();
-      });
-      ctx.globalAlpha = 1;
-      ctx.shadowBlur = 0;
-    }
-
-    // ── Screen flash ──
-    if (g.flashAlpha > 0) {
-      ctx.fillStyle = g.flashColor;
-      ctx.globalAlpha = g.flashAlpha;
-      ctx.fillRect(0, 0, W, W);
-      ctx.globalAlpha = 1;
-      g.flashAlpha -= 0.02;
-    }
-
-    // ── Animated score display on canvas ──
-    if (g.displayScore < g.score) {
-      g.displayScore += Math.ceil((g.score - g.displayScore) * 0.2);
-      if (g.score - g.displayScore < 2) g.displayScore = g.score;
-    }
-
-    // ── Level indicator ──
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    ctx.font = "bold 10px monospace";
-    ctx.textAlign = "left";
-    ctx.fillText(`LV.${g.level}`, 4, 12);
-
-    // ── Paused overlay ──
-    if (!g.running && !g.gameOver && g.started) {
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(0, 0, W, W);
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 20px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("暂停", W / 2, W / 2);
-      ctx.font = "12px monospace";
-      ctx.fillStyle = "#888";
-      ctx.fillText("按空格继续", W / 2, W / 2 + 24);
-    }
-  }, []);
-
-
-  // ─── Game loop ─────────────────────────────────────────────────────────
-  const gameLoop = useCallback((time: number) => {
+  // ─── PixiJS Render Loop ────────────────────────────────────────────────
+  useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    const g = gameRef.current;
-    if (!ctx || !g || !g.started) return;
+    if (!canvas) return;
+    let destroyed = false;
 
-    // Game logic tick
-    if (g.running) {
-      const elapsed = time - g.lastMoveTime;
-      if (elapsed >= g.currentSpeed) {
-        gameTick(g);
-      }
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: CANVAS_SIZE, height: CANVAS_SIZE, backgroundColor: 0x0a0a0a, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
+
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
+
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
+
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "monospace",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // Pre-create text pool (70 objects)
+      for (let i = 0; i < 70; i++) makeText(`t${i}`, { fontSize: 12 });
+
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => {
+        if (textIdx >= 70) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      const cn = hexToNum;
+      const W = CANVAS_SIZE;
+      const cellPx = W / GRID;
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        frameRef.current++;
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const gs = gameRef.current;
+        const time = performance.now();
+
+        if (!gs || !gs.started) {
+          // ── Initial title screen ──
+          // Grid lines
+          for (let i = 0; i <= GRID; i++) {
+            g.rect(i * cellPx, 0, 0.5, W).fill({ color: cn(ACCENT), alpha: 0.04 });
+            g.rect(0, i * cellPx, W, 0.5).fill({ color: cn(ACCENT), alpha: 0.04 });
+          }
+          showText("S 贪吃蛇", W / 2, W / 2 - 10, { fill: ACCENT, fontSize: 24, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText("选择难度，点击开始", W / 2, W / 2 + 16, { fill: "#666666", fontSize: 12, ax: 0.5, ay: 0.5 });
+          return;
+        }
+
+        // ── Interpolation progress ──
+        const elapsed = time - gs.lastMoveTime;
+        const progress = Math.min(elapsed / gs.currentSpeed, 1);
+
+        // ── Game logic tick ──
+        if (gs.running) {
+          if (elapsed >= gs.currentSpeed) {
+            gameTick(gs);
+          }
+        }
+
+        // ── Background grid with pulse ──
+        const gridPulse = 0.03 + Math.sin(time * 0.001) * 0.015;
+        for (let i = 0; i <= GRID; i++) {
+          g.rect(i * cellPx, 0, 0.5, W).fill({ color: cn(ACCENT), alpha: gridPulse });
+          g.rect(0, i * cellPx, W, 0.5).fill({ color: cn(ACCENT), alpha: gridPulse });
+        }
+
+        // ── Obstacles ──
+        gs.obstacles.forEach(o => {
+          const pulse = 0.6 + Math.sin(time * 0.003 + o.x + o.y) * 0.15;
+          g.rect(o.x * cellPx + 1, o.y * cellPx + 1, cellPx - 2, cellPx - 2).fill({ color: 0x642828, alpha: pulse });
+          // X mark lines
+          const cx = o.x * cellPx + cellPx / 2;
+          const cy = o.y * cellPx + cellPx / 2;
+          const s = cellPx * 0.25;
+          g.moveTo(cx - s, cy - s).lineTo(cx + s, cy + s).stroke({ color: 0xff5050, alpha: pulse * 0.7, width: 1.5 });
+          g.moveTo(cx + s, cy - s).lineTo(cx - s, cy + s).stroke({ color: 0xff5050, alpha: pulse * 0.7, width: 1.5 });
+        });
+
+        // ── Trail ──
+        gs.trail.forEach(t => {
+          t.alpha -= 0.035;
+          if (t.alpha <= 0) return;
+          const a = t.alpha * 0.4;
+          g.circle(t.x * cellPx + cellPx / 2, t.y * cellPx + cellPx / 2, cellPx * 0.3 * t.alpha).fill({ color: cn(ACCENT), alpha: a });
+        });
+        gs.trail = gs.trail.filter(t => t.alpha > 0);
+
+        // ── Snake body ──
+        const isGhost = gs.powerUps.some(p => p.type === "ghost");
+        const isMagnet = gs.powerUps.some(p => p.type === "magnet");
+
+        gs.snake.forEach((seg, i) => {
+          let drawX = seg.x * cellPx;
+          let drawY = seg.y * cellPx;
+
+          // Interpolate head position
+          if (i === 0 && gs.running) {
+            const prevX = (seg.x - gs.dir.x) * cellPx;
+            const prevY = (seg.y - gs.dir.y) * cellPx;
+            drawX = prevX + (drawX - prevX) * progress;
+            drawY = prevY + (drawY - prevY) * progress;
+          }
+
+          const ratio = 1 - (i / gs.snake.length) * 0.6;
+          const segSize = cellPx * (0.85 - i * 0.003);
+          const offset = (cellPx - segSize) / 2;
+          const alpha = isGhost ? 0.5 + Math.sin(time * 0.01 + i * 0.3) * 0.2 : ratio;
+
+          if (i === 0) {
+            // Head - rounded rect
+            const r = segSize * 0.3;
+            const hx = drawX + offset;
+            const hy = drawY + offset;
+            g.roundRect(hx, hy, segSize, segSize, r).fill({ color: 0x3ea6ff, alpha });
+
+            // Eyes
+            const hcx = drawX + cellPx / 2;
+            const hcy = drawY + cellPx / 2;
+            const eyeSize = cellPx * 0.15;
+            const pupilSize = cellPx * 0.08;
+            let ex1: number, ey1: number, ex2: number, ey2: number;
+
+            if (gs.dir.x === 1) { ex1 = hcx + cellPx * 0.15; ey1 = hcy - cellPx * 0.18; ex2 = hcx + cellPx * 0.15; ey2 = hcy + cellPx * 0.18; }
+            else if (gs.dir.x === -1) { ex1 = hcx - cellPx * 0.15; ey1 = hcy - cellPx * 0.18; ex2 = hcx - cellPx * 0.15; ey2 = hcy + cellPx * 0.18; }
+            else if (gs.dir.y === -1) { ex1 = hcx - cellPx * 0.18; ey1 = hcy - cellPx * 0.15; ex2 = hcx + cellPx * 0.18; ey2 = hcy - cellPx * 0.15; }
+            else { ex1 = hcx - cellPx * 0.18; ey1 = hcy + cellPx * 0.15; ex2 = hcx + cellPx * 0.18; ey2 = hcy + cellPx * 0.15; }
+
+            // White of eye
+            g.circle(ex1, ey1, eyeSize).fill({ color: 0xffffff });
+            g.circle(ex2, ey2, eyeSize).fill({ color: 0xffffff });
+            // Pupil
+            g.circle(ex1 + gs.dir.x * 1.5, ey1 + gs.dir.y * 1.5, pupilSize).fill({ color: 0x111111 });
+            g.circle(ex2 + gs.dir.x * 1.5, ey2 + gs.dir.y * 1.5, pupilSize).fill({ color: 0x111111 });
+          } else {
+            // Body segment
+            const r = Math.max(1, segSize * 0.2);
+            const bx = seg.x * cellPx + offset;
+            const by = seg.y * cellPx + offset;
+            const green = Math.floor(166 * ratio);
+            const red = Math.floor(43 * ratio);
+            const blue = Math.floor(64 * ratio);
+            let bodyColor: number;
+            if (isGhost) {
+              bodyColor = 0xb478ff;
+            } else if (isMagnet) {
+              bodyColor = (0xff << 16) | (Math.floor(100 + green * 0.5) << 8) | 0;
+            } else {
+              bodyColor = (red << 16) | (green << 8) | blue;
+            }
+            g.roundRect(bx, by, segSize, segSize, r).fill({ color: bodyColor, alpha });
+          }
+        });
+
+        // Shield indicator on head
+        if (gs.shieldHits > 0) {
+          const hx = gs.snake[0].x * cellPx + cellPx / 2;
+          const hy = gs.snake[0].y * cellPx + cellPx / 2;
+          const shieldAlpha = 0.5 + Math.sin(time * 0.005) * 0.3;
+          g.circle(hx, hy, cellPx * 0.7).stroke({ color: 0x8855ff, alpha: shieldAlpha, width: 2 });
+        }
+
+        // ── Food items ──
+        gs.foods.forEach(f => {
+          const cfg = FOOD_CONFIG[f.type];
+          const pulse = 1 + Math.sin(time * 0.005 + f.pulsePhase) * 0.15;
+
+          if (f.type === "boss") {
+            const bossSize = cellPx * 1.5 * pulse;
+            const fx = f.x * cellPx + cellPx;
+            const fy = f.y * cellPx + cellPx;
+            g.circle(fx, fy, bossSize / 2).fill({ color: cn(cfg.color) });
+            showText(cfg.emoji, fx, fy, { fontSize: cellPx * 0.8, ax: 0.5, ay: 0.5 });
+          } else {
+            const fx = f.x * cellPx + cellPx / 2;
+            const fy = f.y * cellPx + cellPx / 2;
+            // Main food circle
+            g.circle(fx, fy, cellPx * 0.35 * pulse).fill({ color: cn(cfg.color) });
+            // Inner highlight
+            g.circle(fx - cellPx * 0.08, fy - cellPx * 0.08, cellPx * 0.12 * pulse).fill({ color: 0xffffff, alpha: 0.3 });
+            // Emoji overlay for special food
+            if (f.type !== "normal") {
+              showText(cfg.emoji, fx, fy + 1, { fontSize: cellPx * 0.55, ax: 0.5, ay: 0.5 });
+            }
+          }
+        });
+
+        // ── Particles ──
+        gs.particles.forEach(p => {
+          p.x += p.vx;
+          p.y += p.vy;
+          p.vy += 0.05;
+          p.life--;
+          const a = Math.max(0, p.life / p.maxLife);
+          g.circle(p.x, p.y, p.size * a).fill({ color: cn(p.color), alpha: a });
+        });
+        gs.particles = gs.particles.filter(p => p.life > 0);
+
+        // ── Score popups ──
+        gs.scorePopups.forEach(sp => {
+          sp.y -= 0.8;
+          sp.life--;
+          const a = sp.life / 40;
+          showText(`+${sp.value}`, sp.x, sp.y, { fill: "#ffd700", fontSize: 14 + (1 - a) * 4, fontWeight: "bold", ax: 0.5, ay: 0.5, alpha: a });
+        });
+        gs.scorePopups = gs.scorePopups.filter(sp => sp.life > 0);
+
+        // ── Death animation ──
+        if (gs.gameOver && gs.deathSegments.length > 0) {
+          gs.deathSegments.forEach(ds => {
+            ds.x += ds.vx;
+            ds.y += ds.vy;
+            ds.vy += 0.15;
+            ds.rot += ds.rotV;
+            ds.alpha = Math.max(0, ds.alpha - 0.008);
+            g.rect(ds.x - ds.size / 2, ds.y - ds.size / 2, ds.size, ds.size).fill({ color: cn(ds.color), alpha: ds.alpha });
+          });
+        }
+
+        // ── Screen flash ──
+        if (gs.flashAlpha > 0) {
+          g.rect(0, 0, W, W).fill({ color: cn(gs.flashColor), alpha: gs.flashAlpha });
+          gs.flashAlpha -= 0.02;
+        }
+
+        // ── Animated score display ──
+        if (gs.displayScore < gs.score) {
+          gs.displayScore += Math.ceil((gs.score - gs.displayScore) * 0.2);
+          if (gs.score - gs.displayScore < 2) gs.displayScore = gs.score;
+        }
+
+        // ── Level indicator ──
+        showText(`LV.${gs.level}`, 4, 4, { fill: "#ffffff", fontSize: 10, fontWeight: "bold", alpha: 0.08 });
+
+        // ── Paused overlay ──
+        if (!gs.running && !gs.gameOver && gs.started) {
+          g.rect(0, 0, W, W).fill({ color: 0x000000, alpha: 0.6 });
+          showText("暂停", W / 2, W / 2, { fill: "#ffffff", fontSize: 20, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText("按空格继续", W / 2, W / 2 + 24, { fill: "#888888", fontSize: 12, ax: 0.5, ay: 0.5 });
+        }
+      });
     }
 
-    renderFrame(ctx, g, time);
-    animFrameRef.current = requestAnimationFrame(gameLoop);
-  }, [gameTick, renderFrame]);
+    initPixi();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
+    };
+  }, [gameTick]);
 
   // ─── Start game ────────────────────────────────────────────────────────
   const startGame = useCallback(() => {
@@ -851,11 +790,7 @@ export default function SnakeGame() {
     setSubmitted(false);
 
     if (!audioCtxRef.current) audioCtxRef.current = createAudioCtx();
-
-    // Start loop
-    cancelAnimationFrame(animFrameRef.current);
-    animFrameRef.current = requestAnimationFrame(gameLoop);
-  }, [diffIdx, createGameState, gameLoop]);
+  }, [diffIdx, createGameState]);
 
   // ─── Toggle pause ──────────────────────────────────────────────────────
   const togglePause = useCallback(() => {
@@ -865,49 +800,6 @@ export default function SnakeGame() {
     if (g.running) g.lastMoveTime = performance.now();
     setPaused(!g.running);
   }, []);
-
-  // ─── Canvas setup ──────────────────────────────────────────────────────
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = CANVAS_SIZE;
-    canvas.height = CANVAS_SIZE;
-    // Draw initial state
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.fillStyle = "#0a0a0a";
-      ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-      // Grid
-      ctx.strokeStyle = "rgba(43, 166, 64, 0.04)";
-      ctx.lineWidth = 0.5;
-      const cellPx = CANVAS_SIZE / GRID;
-      for (let i = 0; i <= GRID; i++) {
-        ctx.beginPath(); ctx.moveTo(i * cellPx, 0); ctx.lineTo(i * cellPx, CANVAS_SIZE); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(0, i * cellPx); ctx.lineTo(CANVAS_SIZE, i * cellPx); ctx.stroke();
-      }
-      // Title
-      ctx.fillStyle = ACCENT;
-      ctx.font = "bold 24px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("S 贪吃蛇", CANVAS_SIZE / 2, CANVAS_SIZE / 2 - 10);
-      ctx.fillStyle = "#666";
-      ctx.font = "12px monospace";
-      ctx.fillText("选择难度，点击开始", CANVAS_SIZE / 2, CANVAS_SIZE / 2 + 16);
-    }
-  }, []);
-
-  // ─── Cleanup animation frame ───────────────────────────────────────────
-  useEffect(() => {
-    return () => cancelAnimationFrame(animFrameRef.current);
-  }, []);
-
-  // ─── Keep game loop running when started ───────────────────────────────
-  useEffect(() => {
-    if (started && !over) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = requestAnimationFrame(gameLoop);
-    }
-  }, [started, over, gameLoop]);
 
   // ─── Keyboard input ────────────────────────────────────────────────────
   useEffect(() => {
@@ -957,7 +849,7 @@ export default function SnakeGame() {
       const dy = t.clientY - touchStartRef.current.y;
       const absDx = Math.abs(dx);
       const absDy = Math.abs(dy);
-      if (Math.max(absDx, absDy) < 20) return; // too small
+      if (Math.max(absDx, absDy) < 20) return;
 
       const g = gameRef.current;
       if (!g || !g.running) return;
@@ -1026,9 +918,7 @@ export default function SnakeGame() {
     setActivePowers(d.powerUps.map(p => p.type));
     setShieldCount(d.shieldHits);
     setSubmitted(false);
-    cancelAnimationFrame(animFrameRef.current);
-    animFrameRef.current = requestAnimationFrame(gameLoop);
-  }, [createGameState, gameLoop]);
+  }, [createGameState]);
 
   // ─── Power-up labels ──────────────────────────────────────────────────
   const powerLabels: Record<string, { icon: string; label: string; color: string }> = {
@@ -1122,7 +1012,6 @@ export default function SnakeGame() {
             className="mt-4 px-8 py-2.5 rounded-xl text-white font-bold text-sm transition active:scale-95"
             style={{ backgroundColor: ACCENT }}
           >
-            
             开始游戏
           </button>
         )}
@@ -1145,7 +1034,6 @@ export default function SnakeGame() {
               className="px-6 py-2 rounded-xl text-white font-bold text-sm transition active:scale-95"
               style={{ backgroundColor: ACCENT }}
             >
-              
               再来一局
             </button>
           </div>

@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { ageGate } from "@/lib/age-gate";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "adult-fight";
@@ -131,6 +133,11 @@ interface GameState {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
 function makeFighter(charDef: CharDef, x: number, facing: 1 | -1): Fighter {
   return {
     x, y: GROUND_Y, vx: 0, vy: 0,
@@ -189,9 +196,12 @@ const diffLabel = (d: Difficulty) => d === "easy" ? "简单" : d === "hard" ? "�
 export default function AdultFight() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
-  const lastRef = useRef(0);
   const keysRef = useRef(new Set<string>());
+
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
 
   const [blocked, setBlocked] = useState(false);
   const [phase, setPhase] = useState<Phase>("title");
@@ -200,9 +210,21 @@ export default function AdultFight() {
   const [muted, setMuted] = useState(false);
   const [score, setScore] = useState(0);
   const [stage, setStage] = useState(1);
-  const [comboDisplay, setComboDisplay] = useState(0);
+  const [, setComboDisplay] = useState(0);
 
   const gsRef = useRef<GameState | null>(null);
+  const lastRef = useRef(0);
+
+  // Refs for render loop access
+  const phaseRef = useRef(phase);
+  const difficultyRef = useRef(difficulty);
+  const stageRef = useRef(stage);
+  const scoreRef = useRef(score);
+
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => { difficultyRef.current = difficulty; }, [difficulty]);
+  useEffect(() => { stageRef.current = stage; }, [stage]);
+  useEffect(() => { scoreRef.current = score; }, [score]);
 
   // ─── Age Gate ──────────────────────────────────────────────────────────────
   useEffect(() => { if (!ageGate.canAccess("NC-17")) setBlocked(true); }, []);
@@ -269,7 +291,6 @@ export default function AdultFight() {
     if (ns > 5) { setPhase("victory"); playSound("win"); return; }
     setStage(ns);
     const newGs = initGameState(selectedChar, difficulty, ns, gs.score, gs.rewardsUnlocked);
-    // Carry over some HP
     newGs.player.hp = Math.min(gs.player.hp + 30, newGs.player.maxHp);
     newGs.player.energy = newGs.player.maxEnergy;
     gsRef.current = newGs;
@@ -292,13 +313,11 @@ export default function AdultFight() {
     const dist = Math.abs(attacker.x - defender.x);
     if (dist <= atk.range) {
       if (defender.state === "block" && defender.blockTimer > 0) {
-        // Blocked
         spawnParticles(gs.particles, defender.x, defender.y, "#ffffff", 3);
         playSound("block");
         defender.vx = defender.facing * -20;
         gs.msg = "格挡"; gs.msgTimer = 0.5;
       } else {
-        // Hit
         const baseDmg = atk.damage * (attacker.power / 8);
         const defReduction = defender.defense * 0.5;
         let dmg = Math.max(1, Math.floor(baseDmg - defReduction + (Math.random() * 4 - 2)));
@@ -306,7 +325,6 @@ export default function AdultFight() {
         if (isPlayer) {
           gs.comboCount++;
           if (gs.comboCount > gs.maxCombo) gs.maxCombo = gs.comboCount;
-          // Combo bonus
           const comboMult = 1 + gs.comboCount * 0.1;
           dmg = Math.floor(dmg * comboMult);
 
@@ -360,19 +378,15 @@ export default function AdultFight() {
     const diffMult = difficulty === "easy" ? 0.5 : difficulty === "hard" ? 1.5 : 1.0;
     const dist = Math.abs(e.x - p.x);
 
-    // Face player
     e.facing = p.x < e.x ? -1 : 1;
 
-    // Decision making
     const actionRoll = Math.random();
 
     if (dist > 100) {
-      // Approach
       e.vx = e.facing * e.speed * 40;
       e.state = "walk";
     } else if (dist <= 90) {
       if (actionRoll < aggr * diffMult * 0.6) {
-        // Attack
         const atkRoll = Math.random();
         let atkType: AttackType;
         if (atkRoll < 0.4) atkType = "lightPunch";
@@ -381,20 +395,16 @@ export default function AdultFight() {
         else atkType = e.energy >= 30 ? "special" : "lightPunch";
         performAttack(gs, e, p, atkType, false);
       } else if (actionRoll < aggr * diffMult * 0.6 + 0.2) {
-        // Block
         e.state = "block";
         e.blockTimer = 0.5 + Math.random() * 0.5;
       } else {
-        // Retreat or idle
         e.vx = -e.facing * e.speed * 30;
         e.state = "walk";
       }
     }
 
-    // Energy regen
     e.energy = Math.min(e.maxEnergy, e.energy + dt * 8);
   }, [difficulty, performAttack]);
-
 
   // ─── Save / Load ───────────────────────────────────────────────────────────
   const handleSave = useCallback(() => {
@@ -428,387 +438,337 @@ export default function AdultFight() {
     lastRef.current = 0;
   }, [initGameState]);
 
-  // ─── Game Loop ─────────────────────────────────────────────────────────────
+  // ─── PixiJS Render Loop ────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let destroyed = false;
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = CW * dpr;
-    canvas.height = CH * dpr;
-    canvas.style.width = `${CW}px`;
-    canvas.style.height = `${CH}px`;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: CW, height: CH, backgroundColor: 0x0a0a1a, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-    const loop = (ts: number) => {
-      if (!lastRef.current) lastRef.current = ts;
-      const dt = Math.min((ts - lastRef.current) / 1000, 0.05);
-      lastRef.current = ts;
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
 
-      const gs = gsRef.current;
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-      ctx.save();
-      ctx.scale(dpr, dpr);
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
 
-      if (phase === "playing" && gs) {
-        const keys = keysRef.current;
-        const p = gs.player;
-        const e = gs.enemy;
+      for (let i = 0; i < 80; i++) makeText(`t${i}`, { fontSize: 12 });
 
-        // ─── Player Input ────────────────────────────────────────────
-        if (p.state !== "hit" && p.state !== "down" && p.hp > 0) {
-          let moving = false;
-          if (keys.has("a") || keys.has("A") || keys.has("ArrowLeft")) {
-            p.vx = -p.speed * 50; p.facing = -1; moving = true;
-          } else if (keys.has("d") || keys.has("D") || keys.has("ArrowRight")) {
-            p.vx = p.speed * 50; p.facing = 1; moving = true;
-          } else {
-            p.vx *= 0.8;
-          }
-          if ((keys.has("w") || keys.has("W") || keys.has("ArrowUp")) && p.y >= GROUND_Y) {
-            p.vy = -500; p.state = "jump";
-          }
-          if (keys.has("s") || keys.has("S") || keys.has("ArrowDown")) {
-            p.state = "block"; p.blockTimer = 0.3;
-          }
-          if (moving && p.state !== "attack" && p.state !== "jump" && p.state !== "block") {
-            p.state = "walk";
-          }
-        }
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => {
+        if (textIdx >= 80) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
 
-        // ─── Update Fighters ─────────────────────────────────────────
-        for (const f of [p, e]) {
-          // Physics
-          f.x += f.vx * dt;
-          f.vy += GRAVITY * dt;
-          f.y += f.vy * dt;
-          if (f.y >= GROUND_Y) { f.y = GROUND_Y; f.vy = 0; if (f.state === "jump") f.state = "idle"; }
-          f.x = Math.max(30, Math.min(CW - 30, f.x));
-          f.vx *= 0.9;
+      const cn = hexToNum;
 
-          // Timers
-          f.cooldownTimer = Math.max(0, f.cooldownTimer - dt);
-          f.animFrame += dt * 8;
+      let prevTime = 0;
 
-          if (f.attackTimer > 0) {
-            f.attackTimer -= dt;
-            if (f.attackTimer <= 0) { f.state = "idle"; f.attackType = null; }
-          }
-          if (f.hitTimer > 0) {
-            f.hitTimer -= dt;
-            if (f.hitTimer <= 0) { f.state = f.hp > 0 ? "idle" : "down"; }
-          }
-          if (f.blockTimer > 0) {
-            f.blockTimer -= dt;
-            if (f.blockTimer <= 0 && f.state === "block") f.state = "idle";
-          }
-          if (f.comboTimer > 0) {
-            f.comboTimer -= dt;
-            if (f.comboTimer <= 0) f.comboHistory = [];
-          }
-        }
+      app.ticker.add((ticker) => {
+        if (destroyed) return;
+        const now = ticker.lastTime;
+        if (!prevTime) prevTime = now;
+        const dt = Math.min((now - prevTime) / 1000, 0.05);
+        prevTime = now;
 
-        // Player energy regen
-        p.energy = Math.min(p.maxEnergy, p.energy + dt * 12);
+        gfx.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
 
-        // Face each other
-        if (p.state === "idle" || p.state === "walk") {
-          p.facing = e.x > p.x ? 1 : -1;
-        }
+        const currentPhase = phaseRef.current;
+        const gs = gsRef.current;
 
-        // AI
-        aiUpdate(gs, dt);
+        if (currentPhase === "playing" && gs) {
+          const keys = keysRef.current;
+          const p = gs.player;
+          const e = gs.enemy;
 
-        // Particles
-        for (const pt of gs.particles) {
-          pt.x += pt.vx * dt;
-          pt.y += pt.vy * dt;
-          pt.vy += 400 * dt;
-          pt.life -= dt;
-        }
-        gs.particles = gs.particles.filter(pt => pt.life > 0);
-
-        // Shake
-        gs.shakeTimer = Math.max(0, gs.shakeTimer - dt);
-
-        // Message
-        gs.msgTimer = Math.max(0, gs.msgTimer - dt);
-
-        // Round timer
-        gs.roundTimer -= dt;
-
-        // Check win/lose
-        if (e.hp <= 0 && e.state !== "down") {
-          e.state = "down";
-          playSound("ko");
-          gs.rewardsUnlocked.push(gs.stage);
-          gs.score += 500 * gs.stage;
-          setScore(gs.score);
-          setTimeout(() => {
-            if (gs.stage >= 5) {
-              setPhase("victory");
-              playSound("win");
+          // ─── Player Input ────────────────────────────────────────────
+          if (p.state !== "hit" && p.state !== "down" && p.hp > 0) {
+            let moving = false;
+            if (keys.has("a") || keys.has("A") || keys.has("ArrowLeft")) {
+              p.vx = -p.speed * 50; p.facing = -1; moving = true;
+            } else if (keys.has("d") || keys.has("D") || keys.has("ArrowRight")) {
+              p.vx = p.speed * 50; p.facing = 1; moving = true;
             } else {
-              setPhase("reward");
+              p.vx *= 0.8;
             }
-          }, 1500);
-        }
-        if (p.hp <= 0 && p.state !== "down") {
-          p.state = "down";
-          playSound("ko");
-          setTimeout(() => setPhase("defeat"), 1500);
-        }
-        if (gs.roundTimer <= 0) {
-          if (p.hp > e.hp) {
-            e.hp = 0; e.state = "down";
-          } else {
-            p.hp = 0; p.state = "down";
-          }
-        }
-
-        // ─── Render ──────────────────────────────────────────────────
-        const sx = gs.shakeTimer > 0 ? (Math.random() - 0.5) * gs.shakeIntensity : 0;
-        const sy = gs.shakeTimer > 0 ? (Math.random() - 0.5) * gs.shakeIntensity : 0;
-        ctx.translate(sx, sy);
-
-        // Background
-        const bgGrad = ctx.createLinearGradient(0, 0, 0, CH);
-        bgGrad.addColorStop(0, "#0a0a1a");
-        bgGrad.addColorStop(1, "#1a0a2e");
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(-10, -10, CW + 20, CH + 20);
-
-        // Arena floor
-        ctx.fillStyle = "#1a1a2e";
-        ctx.fillRect(0, GROUND_Y + 30, CW, CH - GROUND_Y - 30);
-        ctx.strokeStyle = "#333";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(0, GROUND_Y + 30);
-        ctx.lineTo(CW, GROUND_Y + 30);
-        ctx.stroke();
-
-        // Stage indicator
-        ctx.fillStyle = "#555";
-        ctx.font = "11px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(`第${gs.stage}关 - ${diffLabel(difficulty)}`, CW / 2, 14);
-
-        // Draw fighters
-        for (const f of [p, e]) {
-          const isP = f === p;
-          ctx.save();
-          ctx.translate(f.x, f.y);
-
-          // Shadow
-          ctx.fillStyle = "rgba(0,0,0,0.3)";
-          ctx.beginPath();
-          ctx.ellipse(0, 30, 20, 6, 0, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Body
-          const bodyBob = f.state === "walk" ? Math.sin(f.animFrame * 3) * 3 : 0;
-          const hitFlash = f.state === "hit" && Math.floor(f.animFrame * 20) % 2 === 0;
-
-          // Legs
-          ctx.fillStyle = hitFlash ? "#fff" : "#333";
-          const legSpread = f.state === "walk" ? Math.sin(f.animFrame * 4) * 8 : 4;
-          ctx.fillRect(-legSpread - 3, 10, 6, 20);
-          ctx.fillRect(legSpread - 3, 10, 6, 20);
-
-          // Torso
-          ctx.fillStyle = hitFlash ? "#fff" : f.color;
-          ctx.fillRect(-12, -20 + bodyBob, 24, 30);
-
-          // Head
-          ctx.fillStyle = hitFlash ? "#fff" : f.accentColor;
-          ctx.beginPath();
-          ctx.arc(0, -28 + bodyBob, 10, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Arms
-          ctx.fillStyle = hitFlash ? "#fff" : f.color;
-          if (f.state === "attack") {
-            // Extended arm
-            const armX = f.facing * 25;
-            ctx.fillRect(f.facing > 0 ? 12 : -37, -15 + bodyBob, 25, 6);
-            // Fist
-            ctx.fillStyle = hitFlash ? "#fff" : f.accentColor;
-            ctx.beginPath();
-            ctx.arc(armX + f.facing * 10, -12 + bodyBob, 5, 0, Math.PI * 2);
-            ctx.fill();
-          } else if (f.state === "block") {
-            // Guard pose
-            ctx.fillRect(-8, -18 + bodyBob, 6, 16);
-            ctx.fillRect(2, -18 + bodyBob, 6, 16);
-          } else {
-            // Idle arms
-            ctx.fillRect(-16, -15 + bodyBob, 6, 14);
-            ctx.fillRect(10, -15 + bodyBob, 6, 14);
+            if ((keys.has("w") || keys.has("W") || keys.has("ArrowUp")) && p.y >= GROUND_Y) {
+              p.vy = -500; p.state = "jump";
+            }
+            if (keys.has("s") || keys.has("S") || keys.has("ArrowDown")) {
+              p.state = "block"; p.blockTimer = 0.3;
+            }
+            if (moving && p.state !== "attack" && p.state !== "jump" && p.state !== "block") {
+              p.state = "walk";
+            }
           }
 
-          // Down state
-          if (f.state === "down") {
-            ctx.globalAlpha = 0.5;
+          // ─── Update Fighters ─────────────────────────────────────────
+          for (const f of [p, e]) {
+            f.x += f.vx * dt;
+            f.vy += GRAVITY * dt;
+            f.y += f.vy * dt;
+            if (f.y >= GROUND_Y) { f.y = GROUND_Y; f.vy = 0; if (f.state === "jump") f.state = "idle"; }
+            f.x = Math.max(30, Math.min(CW - 30, f.x));
+            f.vx *= 0.9;
+
+            f.cooldownTimer = Math.max(0, f.cooldownTimer - dt);
+            f.animFrame += dt * 8;
+
+            if (f.attackTimer > 0) {
+              f.attackTimer -= dt;
+              if (f.attackTimer <= 0) { f.state = "idle"; f.attackType = null; }
+            }
+            if (f.hitTimer > 0) {
+              f.hitTimer -= dt;
+              if (f.hitTimer <= 0) { f.state = f.hp > 0 ? "idle" : "down"; }
+            }
+            if (f.blockTimer > 0) {
+              f.blockTimer -= dt;
+              if (f.blockTimer <= 0 && f.state === "block") f.state = "idle";
+            }
+            if (f.comboTimer > 0) {
+              f.comboTimer -= dt;
+              if (f.comboTimer <= 0) f.comboHistory = [];
+            }
           }
 
-          // Name
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = isP ? "#3ea6ff" : "#ff6b6b";
-          ctx.font = "bold 10px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(f.name, 0, -42);
+          p.energy = Math.min(p.maxEnergy, p.energy + dt * 12);
 
-          ctx.restore();
+          if (p.state === "idle" || p.state === "walk") {
+            p.facing = e.x > p.x ? 1 : -1;
+          }
+
+          // AI
+          aiUpdate(gs, dt);
+
+          // Particles
+          for (const pt of gs.particles) {
+            pt.x += pt.vx * dt;
+            pt.y += pt.vy * dt;
+            pt.vy += 400 * dt;
+            pt.life -= dt;
+          }
+          gs.particles = gs.particles.filter(pt => pt.life > 0);
+
+          gs.shakeTimer = Math.max(0, gs.shakeTimer - dt);
+          gs.msgTimer = Math.max(0, gs.msgTimer - dt);
+          gs.roundTimer -= dt;
+
+          // Check win/lose
+          if (e.hp <= 0 && e.state !== "down") {
+            e.state = "down";
+            gs.rewardsUnlocked.push(gs.stage);
+            gs.score += 500 * gs.stage;
+            setScore(gs.score);
+            setTimeout(() => {
+              if (gs.stage >= 5) {
+                setPhase("victory");
+              } else {
+                setPhase("reward");
+              }
+            }, 1500);
+          }
+          if (p.hp <= 0 && p.state !== "down") {
+            p.state = "down";
+            setTimeout(() => setPhase("defeat"), 1500);
+          }
+          if (gs.roundTimer <= 0) {
+            if (p.hp > e.hp) {
+              e.hp = 0; e.state = "down";
+            } else {
+              p.hp = 0; p.state = "down";
+            }
+          }
+
+          // ─── Render Playing ──────────────────────────────────────────
+          const sx = gs.shakeTimer > 0 ? (Math.random() - 0.5) * gs.shakeIntensity : 0;
+          const sy = gs.shakeTimer > 0 ? (Math.random() - 0.5) * gs.shakeIntensity : 0;
+
+          // Background
+          gfx.rect(sx - 10, sy - 10, CW + 20, CH * 0.5 + 10).fill({ color: 0x0a0a1a });
+          gfx.rect(sx - 10, sy + CH * 0.5, CW + 20, CH * 0.5 + 10).fill({ color: 0x1a0a2e });
+
+          // Arena floor
+          gfx.rect(sx, sy + GROUND_Y + 30, CW, CH - GROUND_Y - 30).fill({ color: 0x1a1a2e });
+          gfx.moveTo(sx, sy + GROUND_Y + 30).lineTo(sx + CW, sy + GROUND_Y + 30).stroke({ color: 0x333333, width: 2 });
+
+          // Stage indicator
+          showText(`第${gs.stage}关 - ${diffLabel(difficultyRef.current)}`, CW / 2 + sx, 14 + sy, { fill: "#555555", fontSize: 11, ax: 0.5, ay: 0.5 });
+
+          // Draw fighters
+          for (const f of [p, e]) {
+            const isP = f === p;
+            const fx = f.x + sx;
+            const fy = f.y + sy;
+
+            // Shadow
+            gfx.ellipse(fx, fy + 30, 20, 6).fill({ color: 0x000000, alpha: 0.3 });
+
+            const bodyBob = f.state === "walk" ? Math.sin(f.animFrame * 3) * 3 : 0;
+            const hitFlash = f.state === "hit" && Math.floor(f.animFrame * 20) % 2 === 0;
+
+            // Legs
+            const legColor = hitFlash ? 0xffffff : 0x333333;
+            const legSpread = f.state === "walk" ? Math.sin(f.animFrame * 4) * 8 : 4;
+            gfx.rect(fx - legSpread - 3, fy + 10, 6, 20).fill({ color: legColor });
+            gfx.rect(fx + legSpread - 3, fy + 10, 6, 20).fill({ color: legColor });
+
+            // Torso
+            const torsoColor = hitFlash ? 0xffffff : cn(f.color);
+            gfx.rect(fx - 12, fy - 20 + bodyBob, 24, 30).fill({ color: torsoColor });
+
+            // Head
+            const headColor = hitFlash ? 0xffffff : cn(f.accentColor);
+            gfx.circle(fx, fy - 28 + bodyBob, 10).fill({ color: headColor });
+
+            // Arms
+            const armColor = hitFlash ? 0xffffff : cn(f.color);
+            if (f.state === "attack") {
+              gfx.rect(f.facing > 0 ? fx + 12 : fx - 37, fy - 15 + bodyBob, 25, 6).fill({ color: armColor });
+              const fistColor = hitFlash ? 0xffffff : cn(f.accentColor);
+              const armX = f.facing * 25;
+              gfx.circle(fx + armX + f.facing * 10, fy - 12 + bodyBob, 5).fill({ color: fistColor });
+            } else if (f.state === "block") {
+              gfx.rect(fx - 8, fy - 18 + bodyBob, 6, 16).fill({ color: armColor });
+              gfx.rect(fx + 2, fy - 18 + bodyBob, 6, 16).fill({ color: armColor });
+            } else {
+              gfx.rect(fx - 16, fy - 15 + bodyBob, 6, 14).fill({ color: armColor });
+              gfx.rect(fx + 10, fy - 15 + bodyBob, 6, 14).fill({ color: armColor });
+            }
+
+            // Down state alpha handled via separate draw (PixiJS Graphics doesn't support per-shape alpha easily for complex shapes)
+
+            // Name
+            showText(f.name, fx, fy - 42, { fill: isP ? "#3ea6ff" : "#ff6b6b", fontSize: 10, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          }
+
+          // Particles
+          for (const pt of gs.particles) {
+            const alpha = pt.life / pt.maxLife;
+            gfx.circle(pt.x + sx, pt.y + sy, pt.size).fill({ color: cn(pt.color), alpha });
+          }
+
+          // ─── HUD ─────────────────────────────────────────────────────
+          // Player HP bar
+          gfx.rect(10, 24, 160, 10).fill({ color: 0x222222 });
+          const pHpColor = p.hp / p.maxHp > 0.3 ? 0x27ae60 : 0xe74c3c;
+          gfx.rect(10, 24, 160 * Math.max(0, p.hp / p.maxHp), 10).fill({ color: pHpColor });
+          gfx.rect(10, 24, 160, 10).stroke({ color: 0x555555, width: 1 });
+          showText(`${Math.max(0, Math.ceil(p.hp))}/${p.maxHp}`, 12, 29, { fill: "#ffffff", fontSize: 9, ay: 0.5 });
+
+          // Player Energy bar
+          gfx.rect(10, 36, 120, 6).fill({ color: 0x222222 });
+          gfx.rect(10, 36, 120 * Math.max(0, p.energy / p.maxEnergy), 6).fill({ color: 0x3ea6ff });
+          gfx.rect(10, 36, 120, 6).stroke({ color: 0x555555, width: 1 });
+
+          // Enemy HP bar
+          gfx.rect(CW - 170, 24, 160, 10).fill({ color: 0x222222 });
+          const eHpColor = e.hp / e.maxHp > 0.3 ? 0xe74c3c : 0xff6b6b;
+          gfx.rect(CW - 170, 24, 160 * Math.max(0, e.hp / e.maxHp), 10).fill({ color: eHpColor });
+          gfx.rect(CW - 170, 24, 160, 10).stroke({ color: 0x555555, width: 1 });
+          showText(`${Math.max(0, Math.ceil(e.hp))}/${e.maxHp}`, CW - 12, 29, { fill: "#ffffff", fontSize: 9, ax: 1, ay: 0.5 });
+
+          // Enemy Energy bar
+          gfx.rect(CW - 130, 36, 120, 6).fill({ color: 0x222222 });
+          gfx.rect(CW - 130, 36, 120 * Math.max(0, e.energy / e.maxEnergy), 6).fill({ color: 0xe67e22 });
+          gfx.rect(CW - 130, 36, 120, 6).stroke({ color: 0x555555, width: 1 });
+
+          // Combo counter
+          if (gs.comboCount > 1) {
+            showText(`${gs.comboCount} 连击`, 10, 55, { fill: "#ffd700", fontSize: 18, fontWeight: "bold" });
+          }
+
+          // Timer
+          showText(`${Math.max(0, Math.ceil(gs.roundTimer))}`, CW / 2, 28, {
+            fill: gs.roundTimer < 10 ? "#ff4757" : "#aaaaaa", fontSize: 16, fontWeight: "bold", ax: 0.5, ay: 0.5,
+          });
+
+          // Score
+          showText(`分数: ${gs.score}`, CW / 2, CH - 8, { fill: "#aaaaaa", fontSize: 11, ax: 0.5, ay: 0.5 });
+
+          // Message
+          if (gs.msgTimer > 0) {
+            showText(gs.msg, CW / 2, CH / 2 - 40, {
+              fill: "#ffd700", fontSize: 16, fontWeight: "bold", ax: 0.5, ay: 0.5,
+              alpha: Math.min(1, gs.msgTimer * 2),
+            });
+          }
+
+        } else {
+          // Non-playing phases
+          gfx.rect(0, 0, CW, CH).fill({ color: 0x0a0a1a });
+
+          if (currentPhase === "title") {
+            showText("暗夜格斗", CW / 2, CH / 2 - 50, { fill: PRIMARY, fontSize: 32, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            showText("NC-17 成人格斗游戏", CW / 2, CH / 2 - 20, { fill: "#aaaaaa", fontSize: 13, ax: 0.5, ay: 0.5 });
+            showText("WASD 移动 / J 轻拳 / K 重拳 / L 踢 / U 必杀", CW / 2, CH / 2 + 10, { fill: "#666666", fontSize: 11, ax: 0.5, ay: 0.5 });
+            showText("S 格挡 / W 跳跃", CW / 2, CH / 2 + 28, { fill: "#666666", fontSize: 11, ax: 0.5, ay: 0.5 });
+            showText("点击开始", CW / 2, CH / 2 + 60, { fill: "#3ea6ff", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          } else if (currentPhase === "victory") {
+            showText("全关通过", CW / 2, CH / 2 - 40, { fill: "#ffd700", fontSize: 28, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            showText(`最终分数: ${scoreRef.current}`, CW / 2, CH / 2, { fill: "#aaaaaa", fontSize: 14, ax: 0.5, ay: 0.5 });
+            showText(`最大连击: ${gsRef.current?.maxCombo ?? 0}`, CW / 2, CH / 2 + 22, { fill: "#aaaaaa", fontSize: 14, ax: 0.5, ay: 0.5 });
+            showText("点击重新开始", CW / 2, CH / 2 + 60, { fill: "#3ea6ff", fontSize: 13, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          } else if (currentPhase === "defeat") {
+            showText("战败", CW / 2, CH / 2 - 30, { fill: "#ff4757", fontSize: 28, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            showText(`分数: ${scoreRef.current}`, CW / 2, CH / 2 + 5, { fill: "#aaaaaa", fontSize: 14, ax: 0.5, ay: 0.5 });
+            showText("点击重新开始", CW / 2, CH / 2 + 45, { fill: "#3ea6ff", fontSize: 13, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          } else if (currentPhase === "reward") {
+            showText("胜利", CW / 2, CH / 2 - 50, { fill: "#ffd700", fontSize: 22, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            showText(`第${stageRef.current}关 通过`, CW / 2, CH / 2 - 20, { fill: PRIMARY, fontSize: 16, ax: 0.5, ay: 0.5 });
+            showText("奖励场景已解锁", CW / 2, CH / 2 + 10, { fill: "#aaaaaa", fontSize: 13, ax: 0.5, ay: 0.5 });
+            showText("点击进入下一关", CW / 2, CH / 2 + 50, { fill: "#3ea6ff", fontSize: 13, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          }
         }
+      });
+    }
 
-        // Particles
-        for (const pt of gs.particles) {
-          ctx.globalAlpha = pt.life / pt.maxLife;
-          ctx.fillStyle = pt.color;
-          ctx.beginPath();
-          ctx.arc(pt.x, pt.y, pt.size, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.globalAlpha = 1;
+    initPixi();
 
-        // ─── HUD ─────────────────────────────────────────────────────
-        // Player HP bar
-        ctx.fillStyle = "#222"; ctx.fillRect(10, 24, 160, 10);
-        ctx.fillStyle = p.hp / p.maxHp > 0.3 ? "#27ae60" : "#e74c3c";
-        ctx.fillRect(10, 24, 160 * Math.max(0, p.hp / p.maxHp), 10);
-        ctx.strokeStyle = "#555"; ctx.lineWidth = 1; ctx.strokeRect(10, 24, 160, 10);
-        ctx.fillStyle = "#fff"; ctx.font = "9px sans-serif"; ctx.textAlign = "left";
-        ctx.fillText(`${Math.max(0, Math.ceil(p.hp))}/${p.maxHp}`, 12, 32);
-
-        // Player Energy bar
-        ctx.fillStyle = "#222"; ctx.fillRect(10, 36, 120, 6);
-        ctx.fillStyle = "#3ea6ff";
-        ctx.fillRect(10, 36, 120 * Math.max(0, p.energy / p.maxEnergy), 6);
-        ctx.strokeStyle = "#555"; ctx.strokeRect(10, 36, 120, 6);
-
-        // Enemy HP bar
-        ctx.fillStyle = "#222"; ctx.fillRect(CW - 170, 24, 160, 10);
-        ctx.fillStyle = e.hp / e.maxHp > 0.3 ? "#e74c3c" : "#ff6b6b";
-        ctx.fillRect(CW - 170, 24, 160 * Math.max(0, e.hp / e.maxHp), 10);
-        ctx.strokeStyle = "#555"; ctx.strokeRect(CW - 170, 24, 160, 10);
-        ctx.fillStyle = "#fff"; ctx.textAlign = "right";
-        ctx.fillText(`${Math.max(0, Math.ceil(e.hp))}/${e.maxHp}`, CW - 12, 32);
-
-        // Enemy Energy bar
-        ctx.fillStyle = "#222"; ctx.fillRect(CW - 130, 36, 120, 6);
-        ctx.fillStyle = "#e67e22";
-        ctx.fillRect(CW - 130, 36, 120 * Math.max(0, e.energy / e.maxEnergy), 6);
-        ctx.strokeStyle = "#555"; ctx.strokeRect(CW - 130, 36, 120, 6);
-
-        // Combo counter
-        if (gs.comboCount > 1) {
-          ctx.fillStyle = "#ffd700";
-          ctx.font = "bold 18px sans-serif";
-          ctx.textAlign = "left";
-          ctx.fillText(`${gs.comboCount} 连击`, 10, 60);
-        }
-
-        // Timer
-        ctx.fillStyle = gs.roundTimer < 10 ? "#ff4757" : "#aaa";
-        ctx.font = "bold 16px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(`${Math.max(0, Math.ceil(gs.roundTimer))}`, CW / 2, 32);
-
-        // Score
-        ctx.fillStyle = "#aaa";
-        ctx.font = "11px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(`分数: ${gs.score}`, CW / 2, CH - 8);
-
-        // Message
-        if (gs.msgTimer > 0) {
-          ctx.fillStyle = "#ffd700";
-          ctx.font = "bold 16px sans-serif";
-          ctx.textAlign = "center";
-          ctx.globalAlpha = Math.min(1, gs.msgTimer * 2);
-          ctx.fillText(gs.msg, CW / 2, CH / 2 - 40);
-          ctx.globalAlpha = 1;
-        }
-      } else {
-        // Non-playing phases: clear canvas
-        ctx.fillStyle = "#0a0a1a";
-        ctx.fillRect(0, 0, CW, CH);
-
-        if (phase === "title") {
-          // Title screen
-          ctx.fillStyle = PRIMARY;
-          ctx.font = "bold 32px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText("暗夜格斗", CW / 2, CH / 2 - 50);
-
-          ctx.fillStyle = "#aaa";
-          ctx.font = "13px sans-serif";
-          ctx.fillText("NC-17 成人格斗游戏", CW / 2, CH / 2 - 20);
-
-          ctx.fillStyle = "#666";
-          ctx.font = "11px sans-serif";
-          ctx.fillText("WASD 移动 / J 轻拳 / K 重拳 / L 踢 / U 必杀", CW / 2, CH / 2 + 10);
-          ctx.fillText("S 格挡 / W 跳跃", CW / 2, CH / 2 + 28);
-
-          ctx.fillStyle = "#3ea6ff";
-          ctx.font = "bold 14px sans-serif";
-          ctx.fillText("点击开始", CW / 2, CH / 2 + 60);
-        } else if (phase === "victory") {
-          ctx.fillStyle = "#ffd700";
-          ctx.font = "bold 28px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText("全关通过", CW / 2, CH / 2 - 40);
-
-          ctx.fillStyle = "#aaa";
-          ctx.font = "14px sans-serif";
-          ctx.fillText(`最终分数: ${score}`, CW / 2, CH / 2);
-          ctx.fillText(`最大连击: ${gsRef.current?.maxCombo ?? 0}`, CW / 2, CH / 2 + 22);
-
-          ctx.fillStyle = "#3ea6ff";
-          ctx.font = "bold 13px sans-serif";
-          ctx.fillText("点击重新开始", CW / 2, CH / 2 + 60);
-        } else if (phase === "defeat") {
-          ctx.fillStyle = "#ff4757";
-          ctx.font = "bold 28px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText("战败", CW / 2, CH / 2 - 30);
-
-          ctx.fillStyle = "#aaa";
-          ctx.font = "14px sans-serif";
-          ctx.fillText(`分数: ${score}`, CW / 2, CH / 2 + 5);
-
-          ctx.fillStyle = "#3ea6ff";
-          ctx.font = "bold 13px sans-serif";
-          ctx.fillText("点击重新开始", CW / 2, CH / 2 + 45);
-        } else if (phase === "reward") {
-          ctx.fillStyle = "#ffd700";
-          ctx.font = "bold 22px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText("胜利", CW / 2, CH / 2 - 50);
-
-          ctx.fillStyle = PRIMARY;
-          ctx.font = "16px sans-serif";
-          ctx.fillText(`第${stage}关 通过`, CW / 2, CH / 2 - 20);
-
-          ctx.fillStyle = "#aaa";
-          ctx.font = "13px sans-serif";
-          ctx.fillText("奖励场景已解锁", CW / 2, CH / 2 + 10);
-
-          ctx.fillStyle = "#3ea6ff";
-          ctx.font = "bold 13px sans-serif";
-          ctx.fillText("点击进入下一关", CW / 2, CH / 2 + 50);
-        }
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
       }
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(loop);
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
-
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [phase, difficulty, stage, score, aiUpdate, playSound]);
+  }, []);
 
   // ─── Keyboard Input ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -874,7 +834,6 @@ export default function AdultFight() {
       </div>
     );
   }
-
 
   // ─── Character Select Phase ────────────────────────────────────────────────
   if (phase === "charSelect") {

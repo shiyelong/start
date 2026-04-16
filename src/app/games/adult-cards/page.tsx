@@ -12,11 +12,13 @@ import {
 } from "lucide-react";
 import { ageGate } from "@/lib/age-gate";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "adult-cards";
 const W = 480, H = 560;
-const PRIMARY = "#a55eea", ACCENT = "#3ea6ff", BG = "#0f0f0f";
+const PRIMARY = "#a55eea", ACCENT = "#3ea6ff";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type CardType = "attack" | "defense" | "skill" | "special";
@@ -149,13 +151,21 @@ function diffMult(diff: Difficulty): { hp: number; eMult: number } {
   }
 }
 
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function AdultCards() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
   const frameRef = useRef(0);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
 
   const [blocked, setBlocked] = useState(false);
   const [phase, setPhase] = useState<Phase>("title");
@@ -317,7 +327,6 @@ export default function AdultCards() {
         break;
       }
       default: {
-        // Generic attack/defense
         if (card.atk > 0) {
           const dmg = Math.max(0, card.atk - defender.armor);
           defender.hp -= dmg;
@@ -331,7 +340,6 @@ export default function AdultCards() {
         break;
       }
     }
-    // Clamp HP
     attacker.hp = Math.max(0, attacker.hp);
     defender.hp = Math.max(0, defender.hp);
   }, []);
@@ -342,7 +350,6 @@ export default function AdultCards() {
     const dm = diffMult(diff);
     const op = OPPONENTS[opIdx];
     const playerDeck = shuffle(buildStarterDeck());
-    // Add unlocked cards
     const unlocked = battleRef.current.unlockedCards;
     let nextId = 100;
     unlocked.forEach(idx => {
@@ -413,21 +420,18 @@ export default function AdultCards() {
     b.discard.push(card);
     b.selectedCard = null;
 
-    // Apply player card
     const soundType = card.type === "attack" ? "attack" : card.type === "defense" ? "defend" : card.type === "special" ? "special" : "heal";
     playSound(soundType);
     b.animType = card.type === "attack" || card.type === "special" ? "playerAtk" : card.type === "defense" ? "shield" : "heal";
     b.animTimer = 20;
     applyCard(card, true);
 
-    // Check enemy death
     if (b.enemy.hp <= 0) {
       const opIdx = b.opponentIdx;
       const pts = (opIdx + 1) * 500 + b.player.hp * 10 + b.turn * 5;
       setScore(prev => prev + pts);
       b.log.push(`击败了 ${OPPONENTS[opIdx].name}！+${pts}分`);
 
-      // Unlock reward cards
       const rewardIdx = 3 + opIdx * 2;
       if (rewardIdx < ALL_CARDS.length && !b.unlockedCards.includes(rewardIdx)) {
         b.unlockedCards.push(rewardIdx);
@@ -449,20 +453,16 @@ export default function AdultCards() {
       return;
     }
 
-    // Enemy turn
     enemyTurn();
   }, [applyCard, playSound]);
 
   // ─── Enemy Turn ────────────────────────────────────────────────────────────
   const enemyTurn = useCallback(() => {
     const b = battleRef.current;
-    // Restore enemy energy
     b.enemy.energy = Math.min(b.enemy.maxEnergy, b.enemy.energy + 2);
 
-    // Pick best affordable card
     const affordable = b.enemyHand.filter(c => c.cost <= b.enemy.energy);
     if (affordable.length > 0) {
-      // Prioritize: if low HP, heal/defend; otherwise attack
       let chosen: GameCard;
       if (b.enemy.hp < b.enemy.maxHp * 0.3) {
         const defCards = affordable.filter(c => c.type === "defense" || c.type === "skill");
@@ -476,7 +476,6 @@ export default function AdultCards() {
       b.animType = "enemyAtk";
       b.animTimer = 20;
 
-      // Recycle enemy card
       const idx = b.enemyHand.indexOf(chosen);
       if (idx >= 0) {
         b.enemyHand.splice(idx, 1);
@@ -487,22 +486,17 @@ export default function AdultCards() {
       b.enemy.energy = Math.min(b.enemy.maxEnergy, b.enemy.energy + 1);
     }
 
-    // Check player death
     if (b.player.hp <= 0) {
       setPhase("defeat");
       playSound("lose");
       return;
     }
 
-    // New turn
     b.turn++;
     b.player.energy = Math.min(b.player.maxEnergy, b.player.energy + 2);
-    // Armor decay
     b.player.armor = Math.max(0, b.player.armor - 1);
     b.enemy.armor = Math.max(0, b.enemy.armor - 1);
-    // Draw
     drawCards(3 - b.hand.length > 0 ? Math.min(3, 3 - b.hand.length + 1) : 1);
-    // Ensure at least 1 card in hand
     if (b.hand.length === 0) drawCards(1);
   }, [applyCard, drawCards, playSound]);
 
@@ -524,7 +518,6 @@ export default function AdultCards() {
     enemyTurn();
     playSound("click");
   }, [enemyTurn, playSound]);
-
 
   // ─── Save / Load ──────────────────────────────────────────────────────────
   const handleSave = useCallback(() => {
@@ -586,438 +579,335 @@ export default function AdultCards() {
     if (phase === "gameComplete" || phase === "defeat") submitScore();
   }, [phase, submitScore]);
 
-  // ─── Canvas Render ─────────────────────────────────────────────────────────
+
+  // ─── PixiJS Render Loop ────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
+    let destroyed = false;
 
-    const render = () => {
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = "#0a0a0a";
-      ctx.fillRect(0, 0, W, H);
-      frameRef.current++;
-      const b = battleRef.current;
-      const p = stateRef.current.phase;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0a0a0a, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      if (b.animTimer > 0) b.animTimer--;
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
 
-      if (p === "title" || p === "diffSelect") {
-        // ─── Title Screen ────────────────────────────────────────────
-        // Background pattern
-        const t = frameRef.current * 0.02;
-        for (let i = 0; i < 12; i++) {
-          const x = W / 2 + Math.cos(t + i * 0.5) * 120;
-          const y = 120 + Math.sin(t + i * 0.7) * 40;
-          ctx.fillStyle = `rgba(165, 94, 234, ${0.05 + 0.03 * Math.sin(t + i)})`;
-          ctx.beginPath();
-          ctx.arc(x, y, 30 + i * 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-        ctx.fillStyle = PRIMARY;
-        ctx.font = "bold 36px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("暗影牌局", W / 2, 100);
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "monospace",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
 
-        ctx.fillStyle = "#ff4757";
-        ctx.font = "13px monospace";
-        ctx.fillText("NC-17 成人卡牌对战", W / 2, 130);
+      // Pre-create text pool (80 objects)
+      for (let i = 0; i < 80; i++) makeText(`t${i}`, { fontSize: 12 });
 
-        ctx.fillStyle = "#888";
-        ctx.font = "12px monospace";
-        ctx.fillText("回合制策略 / 20+卡牌 / 5位对手", W / 2, 155);
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => {
+        if (textIdx >= 80) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
 
-        // Card preview animation
-        const previewCards = [0, 2, 8, 14, 20];
-        previewCards.forEach((ci, i) => {
-          const c = ALL_CARDS[ci];
-          const cx = 60 + i * 90;
-          const cy = 200 + Math.sin(t + i * 0.8) * 8;
-          const cw = 70, ch = 95;
-          ctx.fillStyle = "#1a1a2e";
-          ctx.beginPath();
-          ctx.roundRect(cx, cy, cw, ch, 6);
-          ctx.fill();
-          ctx.strokeStyle = c.color;
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.roundRect(cx, cy, cw, ch, 6);
-          ctx.stroke();
-          ctx.fillStyle = c.color;
-          ctx.font = "bold 10px monospace";
-          ctx.textAlign = "center";
-          ctx.fillText(c.name.slice(0, 4), cx + cw / 2, cy + 20);
-          ctx.fillStyle = "#fff";
-          ctx.font = "bold 18px monospace";
-          ctx.fillText(`${c.atk || c.def}`, cx + cw / 2, cy + 50);
-          ctx.fillStyle = "#888";
-          ctx.font = "9px monospace";
-          ctx.fillText(c.type === "attack" ? "攻击" : c.type === "defense" ? "防御" : c.type === "skill" ? "技能" : "特殊", cx + cw / 2, cy + 75);
-        });
+      const cn = hexToNum;
 
-        if (p === "title") {
-          const glow = 0.5 + 0.5 * Math.sin(frameRef.current * 0.06);
-          ctx.fillStyle = `rgba(62, 166, 255, ${glow})`;
-          ctx.font = "16px monospace";
-          ctx.fillText("点击开始", W / 2, 360);
-        }
+      app.ticker.add(() => {
+        if (destroyed) return;
+        frameRef.current++;
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
 
-        if (p === "diffSelect") {
-          ctx.fillStyle = "#fff";
-          ctx.font = "bold 16px monospace";
-          ctx.fillText("选择难度", W / 2, 340);
+        const b = battleRef.current;
+        const p = stateRef.current.phase;
 
-          const diffs: { label: string; d: Difficulty; color: string; y: number }[] = [
-            { label: "简单 - 高HP/弱敌", d: "easy", color: "#2ed573", y: 380 },
-            { label: "普通 - 标准挑战", d: "normal", color: "#ffa502", y: 420 },
-            { label: "困难 - 低HP/强敌", d: "hard", color: "#ff4757", y: 460 },
-          ];
-          diffs.forEach(df => {
-            ctx.fillStyle = "#1a1a2e";
-            ctx.beginPath();
-            ctx.roundRect(W / 2 - 120, df.y - 18, 240, 32, 8);
-            ctx.fill();
-            ctx.strokeStyle = df.color;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.roundRect(W / 2 - 120, df.y - 18, 240, 32, 8);
-            ctx.stroke();
-            ctx.fillStyle = df.color;
-            ctx.font = "13px monospace";
-            ctx.textAlign = "center";
-            ctx.fillText(df.label, W / 2, df.y + 2);
+        if (b.animTimer > 0) b.animTimer--;
+
+        if (p === "title" || p === "diffSelect") {
+          // ─── Title Screen ────────────────────────────────────────────
+          const t = frameRef.current * 0.02;
+          // Background pattern
+          for (let i = 0; i < 12; i++) {
+            const bx = W / 2 + Math.cos(t + i * 0.5) * 120;
+            const by = 120 + Math.sin(t + i * 0.7) * 40;
+            const alpha = 0.05 + 0.03 * Math.sin(t + i);
+            g.circle(bx, by, 30 + i * 3).fill({ color: cn(PRIMARY), alpha });
+          }
+
+          showText("暗影牌局", W / 2, 100, { fill: PRIMARY, fontSize: 36, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText("NC-17 成人卡牌对战", W / 2, 130, { fill: "#ff4757", fontSize: 13, ax: 0.5, ay: 0.5 });
+          showText("回合制策略 / 20+卡牌 / 5位对手", W / 2, 155, { fill: "#888888", fontSize: 12, ax: 0.5, ay: 0.5 });
+
+          // Card preview animation
+          const previewCards = [0, 2, 8, 14, 20];
+          previewCards.forEach((ci, i) => {
+            const c = ALL_CARDS[ci];
+            const cx = 60 + i * 90;
+            const cy = 200 + Math.sin(t + i * 0.8) * 8;
+            const cw = 70, ch = 95;
+            g.roundRect(cx, cy, cw, ch, 6).fill({ color: 0x1a1a2e });
+            g.roundRect(cx, cy, cw, ch, 6).stroke({ color: cn(c.color), width: 1.5 });
+            showText(c.name.slice(0, 4), cx + cw / 2, cy + 20, { fill: c.color, fontSize: 10, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            showText(`${c.atk || c.def}`, cx + cw / 2, cy + 50, { fill: "#ffffff", fontSize: 18, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            const typeStr = c.type === "attack" ? "攻击" : c.type === "defense" ? "防御" : c.type === "skill" ? "技能" : "特殊";
+            showText(typeStr, cx + cw / 2, cy + 75, { fill: "#888888", fontSize: 9, ax: 0.5, ay: 0.5 });
           });
-        }
-      } else if (p === "selectCard" || p === "battle" || p === "resolve" || p === "drawPhase") {
-        // ─── Battle Screen ───────────────────────────────────────────
-        const op = OPPONENTS[b.opponentIdx];
 
-        // Enemy area (top)
-        ctx.fillStyle = "#1a0a2e";
-        ctx.fillRect(0, 0, W, 120);
-
-        // Enemy name
-        ctx.fillStyle = op.color;
-        ctx.font = "bold 14px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`${op.name} - ${op.title}`, W / 2, 20);
-
-        // Enemy HP bar
-        const eHpRatio = Math.max(0, b.enemy.hp / b.enemy.maxHp);
-        ctx.fillStyle = "#333";
-        ctx.beginPath(); ctx.roundRect(60, 30, W - 120, 14, 4); ctx.fill();
-        ctx.fillStyle = "#ff4757";
-        ctx.beginPath(); ctx.roundRect(60, 30, (W - 120) * eHpRatio, 14, 4); ctx.fill();
-        ctx.fillStyle = "#fff";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`HP ${b.enemy.hp}/${b.enemy.maxHp}`, W / 2, 41);
-
-        // Enemy armor & energy
-        ctx.fillStyle = ACCENT;
-        ctx.font = "11px monospace";
-        ctx.textAlign = "left";
-        ctx.fillText(`护甲: ${b.enemy.armor}`, 60, 62);
-        ctx.fillStyle = "#fdcb6e";
-        ctx.textAlign = "right";
-        ctx.fillText(`能量: ${b.enemy.energy}/${b.enemy.maxEnergy}`, W - 60, 62);
-
-        // Enemy card back (visual)
-        ctx.fillStyle = "#2d1b4e";
-        ctx.beginPath(); ctx.roundRect(W / 2 - 30, 72, 60, 40, 4); ctx.fill();
-        ctx.strokeStyle = op.color;
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.roundRect(W / 2 - 30, 72, 60, 40, 4); ctx.stroke();
-        ctx.fillStyle = op.color;
-        ctx.font = "10px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("?", W / 2, 96);
-
-        // Divider
-        ctx.fillStyle = "#333";
-        ctx.fillRect(0, 120, W, 1);
-
-        // Battle log area
-        ctx.fillStyle = "#0d0d1a";
-        ctx.fillRect(0, 121, W, 60);
-        const logStart = Math.max(0, b.log.length - 3);
-        ctx.fillStyle = "#888";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "left";
-        for (let i = logStart; i < b.log.length; i++) {
-          ctx.fillText(b.log[i].slice(0, 40), 10, 136 + (i - logStart) * 16);
-        }
-
-        // Turn info
-        ctx.fillStyle = "#555";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "right";
-        ctx.fillText(`回合 ${b.turn}`, W - 10, 136);
-
-        // Player area
-        ctx.fillStyle = "#0a0a1a";
-        ctx.fillRect(0, 182, W, 60);
-
-        // Player HP bar
-        const pHpRatio = Math.max(0, b.player.hp / b.player.maxHp);
-        ctx.fillStyle = "#333";
-        ctx.beginPath(); ctx.roundRect(60, 190, W - 120, 14, 4); ctx.fill();
-        ctx.fillStyle = "#2ed573";
-        ctx.beginPath(); ctx.roundRect(60, 190, (W - 120) * pHpRatio, 14, 4); ctx.fill();
-        ctx.fillStyle = "#fff";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`HP ${b.player.hp}/${b.player.maxHp}`, W / 2, 201);
-
-        // Player armor & energy
-        ctx.fillStyle = ACCENT;
-        ctx.font = "11px monospace";
-        ctx.textAlign = "left";
-        ctx.fillText(`护甲: ${b.player.armor}`, 60, 222);
-        ctx.fillStyle = "#fdcb6e";
-        ctx.textAlign = "right";
-        ctx.fillText(`能量: ${b.player.energy}/${b.player.maxEnergy}`, W - 60, 222);
-
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 12px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("你的手牌", W / 2, 256);
-
-        // Hand cards
-        const cardW = 90, cardH = 130, gap = 8;
-        const handLen = b.hand.length;
-        const totalW = handLen * (cardW + gap) - gap;
-        const startX = (W - totalW) / 2;
-        const cardY = 268;
-
-        for (let i = 0; i < handLen; i++) {
-          const c = b.hand[i];
-          const cx = startX + i * (cardW + gap);
-          const isSelected = b.selectedCard === i;
-          const canAfford = c.cost <= b.player.energy;
-          const yOff = isSelected ? -12 : 0;
-
-          // Card background
-          ctx.fillStyle = isSelected ? "#2a1a4e" : "#1a1a2e";
-          ctx.beginPath(); ctx.roundRect(cx, cardY + yOff, cardW, cardH, 6); ctx.fill();
-
-          // Card border
-          ctx.strokeStyle = isSelected ? "#fff" : canAfford ? c.color : "#444";
-          ctx.lineWidth = isSelected ? 2 : 1;
-          ctx.beginPath(); ctx.roundRect(cx, cardY + yOff, cardW, cardH, 6); ctx.stroke();
-
-          // Cost badge
-          ctx.fillStyle = "#fdcb6e";
-          ctx.beginPath(); ctx.arc(cx + 14, cardY + yOff + 14, 10, 0, Math.PI * 2); ctx.fill();
-          ctx.fillStyle = "#000";
-          ctx.font = "bold 11px monospace";
-          ctx.textAlign = "center";
-          ctx.fillText(`${c.cost}`, cx + 14, cardY + yOff + 18);
-
-          // Card name
-          ctx.fillStyle = c.color;
-          ctx.font = "bold 11px monospace";
-          ctx.textAlign = "center";
-          ctx.fillText(c.name.slice(0, 5), cx + cardW / 2, cardY + yOff + 18);
-
-          // Type label
-          const typeLabel = c.type === "attack" ? "攻击" : c.type === "defense" ? "防御" : c.type === "skill" ? "技能" : "特殊";
-          ctx.fillStyle = "#888";
-          ctx.font = "9px monospace";
-          ctx.fillText(typeLabel, cx + cardW / 2, cardY + yOff + 34);
-
-          // Stats
-          if (c.atk > 0) {
-            ctx.fillStyle = "#ff4757";
-            ctx.font = "bold 20px monospace";
-            ctx.fillText(`${c.atk}`, cx + (c.def > 0 ? cardW / 3 : cardW / 2), cardY + yOff + 65);
-            ctx.fillStyle = "#ff4757";
-            ctx.font = "9px monospace";
-            ctx.fillText("攻", cx + (c.def > 0 ? cardW / 3 : cardW / 2), cardY + yOff + 78);
-          }
-          if (c.def > 0) {
-            ctx.fillStyle = ACCENT;
-            ctx.font = "bold 20px monospace";
-            ctx.fillText(`${c.def}`, cx + (c.atk > 0 ? cardW * 2 / 3 : cardW / 2), cardY + yOff + 65);
-            ctx.fillStyle = ACCENT;
-            ctx.font = "9px monospace";
-            ctx.fillText("防", cx + (c.atk > 0 ? cardW * 2 / 3 : cardW / 2), cardY + yOff + 78);
-          }
-          if (c.atk === 0 && c.def === 0) {
-            ctx.fillStyle = "#ffd700";
-            ctx.font = "bold 14px monospace";
-            ctx.fillText("SP", cx + cardW / 2, cardY + yOff + 65);
+          if (p === "title") {
+            const glow = 0.5 + 0.5 * Math.sin(frameRef.current * 0.06);
+            showText("点击开始", W / 2, 360, { fill: ACCENT, fontSize: 16, ax: 0.5, ay: 0.5, alpha: glow });
           }
 
-          // Effect text
-          ctx.fillStyle = "#aaa";
-          ctx.font = "9px monospace";
-          ctx.fillText(c.effect.slice(0, 8), cx + cardW / 2, cardY + yOff + 100);
+          if (p === "diffSelect") {
+            showText("选择难度", W / 2, 340, { fill: "#ffffff", fontSize: 16, fontWeight: "bold", ax: 0.5, ay: 0.5 });
 
-          // Afford indicator
-          if (!canAfford) {
-            ctx.fillStyle = "rgba(0,0,0,0.5)";
-            ctx.beginPath(); ctx.roundRect(cx, cardY + yOff, cardW, cardH, 6); ctx.fill();
-            ctx.fillStyle = "#ff4757";
-            ctx.font = "10px monospace";
-            ctx.fillText("能量不足", cx + cardW / 2, cardY + yOff + cardH / 2);
+            const diffs: { label: string; color: string; y: number }[] = [
+              { label: "简单 - 高HP/弱敌", color: "#2ed573", y: 380 },
+              { label: "普通 - 标准挑战", color: "#ffa502", y: 420 },
+              { label: "困难 - 低HP/强敌", color: "#ff4757", y: 460 },
+            ];
+            diffs.forEach(df => {
+              g.roundRect(W / 2 - 120, df.y - 18, 240, 32, 8).fill({ color: 0x1a1a2e });
+              g.roundRect(W / 2 - 120, df.y - 18, 240, 32, 8).stroke({ color: cn(df.color), width: 1 });
+              showText(df.label, W / 2, df.y + 2, { fill: df.color, fontSize: 13, ax: 0.5, ay: 0.5 });
+            });
           }
-        }
 
-        // Action buttons
-        const btnY = 410;
-        // Play button
-        if (b.selectedCard !== null) {
-          ctx.fillStyle = "#2ed573";
-          ctx.beginPath(); ctx.roundRect(W / 2 - 100, btnY, 90, 32, 6); ctx.fill();
-          ctx.fillStyle = "#000";
-          ctx.font = "bold 13px monospace";
-          ctx.textAlign = "center";
-          ctx.fillText("出牌", W / 2 - 55, btnY + 21);
-        }
-        // End turn button
-        ctx.fillStyle = "#555";
-        ctx.beginPath(); ctx.roundRect(W / 2 + 10, btnY, 90, 32, 6); ctx.fill();
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 13px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("跳过", W / 2 + 55, btnY + 21);
+        } else if (p === "selectCard" || p === "battle" || p === "resolve" || p === "drawPhase") {
+          // ─── Battle Screen ───────────────────────────────────────────
+          const op = OPPONENTS[b.opponentIdx];
 
-        // Opponent progress
-        ctx.fillStyle = "#444";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`对手 ${b.opponentIdx + 1}/${OPPONENTS.length}`, W / 2, 460);
+          // Enemy area (top)
+          g.rect(0, 0, W, 120).fill({ color: 0x1a0a2e });
 
-        // Animation overlay
-        if (b.animTimer > 0) {
-          const alpha = b.animTimer / 20;
-          if (b.animType === "playerAtk") {
-            ctx.fillStyle = `rgba(255, 71, 87, ${alpha * 0.3})`;
-            ctx.fillRect(0, 0, W, 120);
-          } else if (b.animType === "enemyAtk") {
-            ctx.fillStyle = `rgba(255, 71, 87, ${alpha * 0.3})`;
-            ctx.fillRect(0, 182, W, 60);
-          } else if (b.animType === "shield") {
-            ctx.fillStyle = `rgba(62, 166, 255, ${alpha * 0.3})`;
-            ctx.fillRect(0, 182, W, 60);
-          } else if (b.animType === "heal") {
-            ctx.fillStyle = `rgba(46, 213, 115, ${alpha * 0.3})`;
-            ctx.fillRect(0, 182, W, 60);
+          // Enemy name
+          showText(`${op.name} - ${op.title}`, W / 2, 20, { fill: op.color, fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+          // Enemy HP bar
+          const eHpRatio = Math.max(0, b.enemy.hp / b.enemy.maxHp);
+          g.roundRect(60, 30, W - 120, 14, 4).fill({ color: 0x333333 });
+          if (eHpRatio > 0) g.roundRect(60, 30, (W - 120) * eHpRatio, 14, 4).fill({ color: 0xff4757 });
+          showText(`HP ${b.enemy.hp}/${b.enemy.maxHp}`, W / 2, 37, { fill: "#ffffff", fontSize: 10, ax: 0.5, ay: 0.5 });
+
+          // Enemy armor & energy
+          showText(`护甲: ${b.enemy.armor}`, 60, 62, { fill: ACCENT, fontSize: 11 });
+          showText(`能量: ${b.enemy.energy}/${b.enemy.maxEnergy}`, W - 60, 62, { fill: "#fdcb6e", fontSize: 11, ax: 1, ay: 0 });
+
+          // Enemy card back (visual)
+          g.roundRect(W / 2 - 30, 72, 60, 40, 4).fill({ color: 0x2d1b4e });
+          g.roundRect(W / 2 - 30, 72, 60, 40, 4).stroke({ color: cn(op.color), width: 1 });
+          showText("?", W / 2, 96, { fill: op.color, fontSize: 10, ax: 0.5, ay: 0.5 });
+
+          // Divider
+          g.rect(0, 120, W, 1).fill({ color: 0x333333 });
+
+          // Battle log area
+          g.rect(0, 121, W, 60).fill({ color: 0x0d0d1a });
+          const logStart = Math.max(0, b.log.length - 3);
+          for (let i = logStart; i < b.log.length; i++) {
+            showText(b.log[i].slice(0, 40), 10, 136 + (i - logStart) * 16, { fill: "#888888", fontSize: 10 });
           }
-        }
 
-      } else if (p === "victory") {
-        // ─── Victory Screen ──────────────────────────────────────────
-        const op = OPPONENTS[b.opponentIdx];
-        ctx.fillStyle = "#ffd700";
-        ctx.font = "bold 30px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("胜利", W / 2, 120);
+          // Turn info
+          showText(`回合 ${b.turn}`, W - 10, 136, { fill: "#555555", fontSize: 10, ax: 1, ay: 0 });
 
-        ctx.fillStyle = "#fff";
-        ctx.font = "16px monospace";
-        ctx.fillText(`击败了 ${op.name}`, W / 2, 160);
+          // Player area
+          g.rect(0, 182, W, 60).fill({ color: 0x0a0a1a });
 
-        ctx.fillStyle = "#aaa";
-        ctx.font = "13px monospace";
-        ctx.fillText(`当前分数: ${stateRef.current.score}`, W / 2, 200);
-        ctx.fillText(`剩余HP: ${b.player.hp}/${b.player.maxHp}`, W / 2, 225);
+          // Player HP bar
+          const pHpRatio = Math.max(0, b.player.hp / b.player.maxHp);
+          g.roundRect(60, 190, W - 120, 14, 4).fill({ color: 0x333333 });
+          if (pHpRatio > 0) g.roundRect(60, 190, (W - 120) * pHpRatio, 14, 4).fill({ color: 0x2ed573 });
+          showText(`HP ${b.player.hp}/${b.player.maxHp}`, W / 2, 197, { fill: "#ffffff", fontSize: 10, ax: 0.5, ay: 0.5 });
 
-        // Unlocked cards
-        if (b.unlockedCards.length > 0) {
-          ctx.fillStyle = PRIMARY;
-          ctx.font = "12px monospace";
-          ctx.fillText("解锁卡牌:", W / 2, 260);
-          b.unlockedCards.forEach((ci, i) => {
-            if (ci < ALL_CARDS.length) {
-              ctx.fillStyle = ALL_CARDS[ci].color;
-              ctx.fillText(ALL_CARDS[ci].name, W / 2, 280 + i * 18);
+          // Player armor & energy
+          showText(`护甲: ${b.player.armor}`, 60, 222, { fill: ACCENT, fontSize: 11 });
+          showText(`能量: ${b.player.energy}/${b.player.maxEnergy}`, W - 60, 222, { fill: "#fdcb6e", fontSize: 11, ax: 1, ay: 0 });
+
+          showText("你的手牌", W / 2, 256, { fill: "#ffffff", fontSize: 12, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+          // Hand cards
+          const cardW = 90, cardH = 130, gap = 8;
+          const handLen = b.hand.length;
+          const totalW = handLen * (cardW + gap) - gap;
+          const startX = (W - totalW) / 2;
+          const cardY = 268;
+
+          for (let i = 0; i < handLen; i++) {
+            const c = b.hand[i];
+            const cx = startX + i * (cardW + gap);
+            const isSelected = b.selectedCard === i;
+            const canAfford = c.cost <= b.player.energy;
+            const yOff = isSelected ? -12 : 0;
+
+            // Card background
+            g.roundRect(cx, cardY + yOff, cardW, cardH, 6).fill({ color: isSelected ? 0x2a1a4e : 0x1a1a2e });
+
+            // Card border
+            const borderColor = isSelected ? 0xffffff : canAfford ? cn(c.color) : 0x444444;
+            g.roundRect(cx, cardY + yOff, cardW, cardH, 6).stroke({ color: borderColor, width: isSelected ? 2 : 1 });
+
+            // Cost badge
+            g.circle(cx + 14, cardY + yOff + 14, 10).fill({ color: 0xfdcb6e });
+            showText(`${c.cost}`, cx + 14, cardY + yOff + 14, { fill: "#000000", fontSize: 11, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+            // Card name
+            showText(c.name.slice(0, 5), cx + cardW / 2, cardY + yOff + 18, { fill: c.color, fontSize: 11, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+            // Type label
+            const typeLabel = c.type === "attack" ? "攻击" : c.type === "defense" ? "防御" : c.type === "skill" ? "技能" : "特殊";
+            showText(typeLabel, cx + cardW / 2, cardY + yOff + 34, { fill: "#888888", fontSize: 9, ax: 0.5, ay: 0.5 });
+
+            // Stats
+            if (c.atk > 0) {
+              const sx = c.def > 0 ? cx + cardW / 3 : cx + cardW / 2;
+              showText(`${c.atk}`, sx, cardY + yOff + 60, { fill: "#ff4757", fontSize: 20, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+              showText("攻", sx, cardY + yOff + 78, { fill: "#ff4757", fontSize: 9, ax: 0.5, ay: 0.5 });
             }
-          });
+            if (c.def > 0) {
+              const sx = c.atk > 0 ? cx + cardW * 2 / 3 : cx + cardW / 2;
+              showText(`${c.def}`, sx, cardY + yOff + 60, { fill: ACCENT, fontSize: 20, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+              showText("防", sx, cardY + yOff + 78, { fill: ACCENT, fontSize: 9, ax: 0.5, ay: 0.5 });
+            }
+            if (c.atk === 0 && c.def === 0) {
+              showText("SP", cx + cardW / 2, cardY + yOff + 65, { fill: "#ffd700", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            }
+
+            // Effect text
+            showText(c.effect.slice(0, 8), cx + cardW / 2, cardY + yOff + 100, { fill: "#aaaaaa", fontSize: 9, ax: 0.5, ay: 0.5 });
+
+            // Afford indicator
+            if (!canAfford) {
+              g.roundRect(cx, cardY + yOff, cardW, cardH, 6).fill({ color: 0x000000, alpha: 0.5 });
+              showText("能量不足", cx + cardW / 2, cardY + yOff + cardH / 2, { fill: "#ff4757", fontSize: 10, ax: 0.5, ay: 0.5 });
+            }
+          }
+
+          // Action buttons
+          const btnY = 410;
+          if (b.selectedCard !== null) {
+            g.roundRect(W / 2 - 100, btnY, 90, 32, 6).fill({ color: 0x2ed573 });
+            showText("出牌", W / 2 - 55, btnY + 16, { fill: "#000000", fontSize: 13, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          }
+          g.roundRect(W / 2 + 10, btnY, 90, 32, 6).fill({ color: 0x555555 });
+          showText("跳过", W / 2 + 55, btnY + 16, { fill: "#ffffff", fontSize: 13, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+          // Opponent progress
+          showText(`对手 ${b.opponentIdx + 1}/${OPPONENTS.length}`, W / 2, 460, { fill: "#444444", fontSize: 10, ax: 0.5, ay: 0.5 });
+
+          // Animation overlay
+          if (b.animTimer > 0) {
+            const alpha = b.animTimer / 20 * 0.3;
+            if (b.animType === "playerAtk") {
+              g.rect(0, 0, W, 120).fill({ color: 0xff4757, alpha });
+            } else if (b.animType === "enemyAtk") {
+              g.rect(0, 182, W, 60).fill({ color: 0xff4757, alpha });
+            } else if (b.animType === "shield") {
+              g.rect(0, 182, W, 60).fill({ color: cn(ACCENT), alpha });
+            } else if (b.animType === "heal") {
+              g.rect(0, 182, W, 60).fill({ color: 0x2ed573, alpha });
+            }
+          }
+
+        } else if (p === "victory") {
+          // ─── Victory Screen ──────────────────────────────────────────
+          const op = OPPONENTS[b.opponentIdx];
+          showText("胜利", W / 2, 120, { fill: "#ffd700", fontSize: 30, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText(`击败了 ${op.name}`, W / 2, 160, { fill: "#ffffff", fontSize: 16, ax: 0.5, ay: 0.5 });
+          showText(`当前分数: ${stateRef.current.score}`, W / 2, 200, { fill: "#aaaaaa", fontSize: 13, ax: 0.5, ay: 0.5 });
+          showText(`剩余HP: ${b.player.hp}/${b.player.maxHp}`, W / 2, 225, { fill: "#aaaaaa", fontSize: 13, ax: 0.5, ay: 0.5 });
+
+          // Unlocked cards
+          if (b.unlockedCards.length > 0) {
+            showText("解锁卡牌:", W / 2, 260, { fill: PRIMARY, fontSize: 12, ax: 0.5, ay: 0.5 });
+            b.unlockedCards.forEach((ci, i) => {
+              if (ci < ALL_CARDS.length) {
+                showText(ALL_CARDS[ci].name, W / 2, 280 + i * 18, { fill: ALL_CARDS[ci].color, fontSize: 12, ax: 0.5, ay: 0.5 });
+              }
+            });
+          }
+
+          // Next button
+          const nextIdx = b.opponentIdx + 1;
+          if (nextIdx < OPPONENTS.length) {
+            const glow = 0.6 + 0.4 * Math.sin(frameRef.current * 0.08);
+            showText(`挑战下一位: ${OPPONENTS[nextIdx].name}`, W / 2, 380, { fill: ACCENT, fontSize: 16, ax: 0.5, ay: 0.5, alpha: glow });
+            g.roundRect(W / 2 - 60, 400, 120, 36, 8).fill({ color: cn(ACCENT) });
+            showText("继续", W / 2, 418, { fill: "#000000", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          }
+
+        } else if (p === "defeat") {
+          // ─── Defeat Screen ───────────────────────────────────────────
+          showText("战败", W / 2, 150, { fill: "#ff4757", fontSize: 30, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText(`最终分数: ${stateRef.current.score}`, W / 2, 200, { fill: "#aaaaaa", fontSize: 14, ax: 0.5, ay: 0.5 });
+          showText(`坚持到第 ${b.turn} 回合`, W / 2, 225, { fill: "#aaaaaa", fontSize: 14, ax: 0.5, ay: 0.5 });
+          showText(`击败 ${b.opponentIdx} 位对手`, W / 2, 250, { fill: "#aaaaaa", fontSize: 14, ax: 0.5, ay: 0.5 });
+
+          const glow = 0.5 + 0.5 * Math.sin(frameRef.current * 0.06);
+          showText("点击重新开始", W / 2, 340, { fill: "#ff4757", fontSize: 16, ax: 0.5, ay: 0.5, alpha: glow });
+
+        } else if (p === "gameComplete") {
+          // ─── Game Complete Screen ────────────────────────────────────
+          const t = frameRef.current * 0.03;
+          // Falling particles
+          for (let i = 0; i < 20; i++) {
+            const px = Math.random() * W;
+            const py = (frameRef.current * 0.5 + i * 30) % H;
+            const alpha = 0.3 + Math.random() * 0.3;
+            g.circle(px, py, 2).fill({ color: 0xffd700, alpha });
+          }
+
+          showText("通关", W / 2, 120, { fill: "#ffd700", fontSize: 34, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText("暗影牌局 - 全部击败", W / 2, 160, { fill: PRIMARY, fontSize: 18, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText(`最终分数: ${stateRef.current.score}`, W / 2, 210, { fill: "#ffffff", fontSize: 16, ax: 0.5, ay: 0.5 });
+
+          const diffLabel = stateRef.current.difficulty === "easy" ? "简单" : stateRef.current.difficulty === "normal" ? "普通" : "困难";
+          showText(`难度: ${diffLabel}`, W / 2, 240, { fill: "#aaaaaa", fontSize: 13, ax: 0.5, ay: 0.5 });
+          showText(`解锁 ${b.unlockedCards.length} 张新卡牌`, W / 2, 265, { fill: "#aaaaaa", fontSize: 13, ax: 0.5, ay: 0.5 });
+
+          const glow = 0.5 + 0.5 * Math.sin(t * 2);
+          showText("点击重新开始", W / 2, 380, { fill: ACCENT, fontSize: 16, ax: 0.5, ay: 0.5, alpha: glow });
         }
+      });
+    }
 
-        // Next button
-        const nextIdx = b.opponentIdx + 1;
-        if (nextIdx < OPPONENTS.length) {
-          const glow = 0.6 + 0.4 * Math.sin(frameRef.current * 0.08);
-          ctx.fillStyle = `rgba(62, 166, 255, ${glow})`;
-          ctx.font = "16px monospace";
-          ctx.fillText(`挑战下一位: ${OPPONENTS[nextIdx].name}`, W / 2, 380);
+    initPixi();
 
-          ctx.fillStyle = ACCENT;
-          ctx.beginPath(); ctx.roundRect(W / 2 - 60, 400, 120, 36, 8); ctx.fill();
-          ctx.fillStyle = "#000";
-          ctx.font = "bold 14px monospace";
-          ctx.fillText("继续", W / 2, 423);
-        }
-
-      } else if (p === "defeat") {
-        // ─── Defeat Screen ───────────────────────────────────────────
-        ctx.fillStyle = "#ff4757";
-        ctx.font = "bold 30px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("战败", W / 2, 150);
-
-        ctx.fillStyle = "#aaa";
-        ctx.font = "14px monospace";
-        ctx.fillText(`最终分数: ${stateRef.current.score}`, W / 2, 200);
-        ctx.fillText(`坚持到第 ${b.turn} 回合`, W / 2, 225);
-        ctx.fillText(`击败 ${b.opponentIdx} 位对手`, W / 2, 250);
-
-        const glow = 0.5 + 0.5 * Math.sin(frameRef.current * 0.06);
-        ctx.fillStyle = `rgba(255, 71, 87, ${glow})`;
-        ctx.font = "16px monospace";
-        ctx.fillText("点击重新开始", W / 2, 340);
-
-      } else if (p === "gameComplete") {
-        // ─── Game Complete Screen ────────────────────────────────────
-        const t = frameRef.current * 0.03;
-        for (let i = 0; i < 20; i++) {
-          const x = Math.random() * W;
-          const y = (frameRef.current * 0.5 + i * 30) % H;
-          ctx.fillStyle = `rgba(255, 215, 0, ${0.3 + Math.random() * 0.3})`;
-          ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.fill();
-        }
-
-        ctx.fillStyle = "#ffd700";
-        ctx.font = "bold 34px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("通关", W / 2, 120);
-
-        ctx.fillStyle = PRIMARY;
-        ctx.font = "bold 18px monospace";
-        ctx.fillText("暗影牌局 - 全部击败", W / 2, 160);
-
-        ctx.fillStyle = "#fff";
-        ctx.font = "16px monospace";
-        ctx.fillText(`最终分数: ${stateRef.current.score}`, W / 2, 210);
-
-        ctx.fillStyle = "#aaa";
-        ctx.font = "13px monospace";
-        ctx.fillText(`难度: ${stateRef.current.difficulty === "easy" ? "简单" : stateRef.current.difficulty === "normal" ? "普通" : "困难"}`, W / 2, 240);
-        ctx.fillText(`解锁 ${b.unlockedCards.length} 张新卡牌`, W / 2, 265);
-
-        const glow = 0.5 + 0.5 * Math.sin(t * 2);
-        ctx.fillStyle = `rgba(62, 166, 255, ${glow})`;
-        ctx.font = "16px monospace";
-        ctx.fillText("点击重新开始", W / 2, 380);
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
       }
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(render);
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
-
-    rafRef.current = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
 
@@ -1060,7 +950,6 @@ export default function AdultCards() {
       }
 
       if (p === "selectCard") {
-        // Check card clicks
         const cardW = 90, cardH = 130, gap = 8;
         const handLen = b.hand.length;
         const totalW = handLen * (cardW + gap) - gap;
@@ -1073,7 +962,6 @@ export default function AdultCards() {
           const yOff = isSelected ? -12 : 0;
           if (mx >= cx && mx <= cx + cardW && my >= cardY + yOff && my <= cardY + yOff + cardH) {
             if (b.selectedCard === i) {
-              // Double click = play
               playCard(i);
             } else {
               b.selectedCard = i;
@@ -1083,26 +971,22 @@ export default function AdultCards() {
           }
         }
 
-        // Play button
         const btnY = 410;
         if (b.selectedCard !== null && mx >= W / 2 - 100 && mx <= W / 2 - 10 && my >= btnY && my <= btnY + 32) {
           playCard(b.selectedCard);
           return;
         }
 
-        // End turn button
         if (mx >= W / 2 + 10 && mx <= W / 2 + 100 && my >= btnY && my <= btnY + 32) {
           endTurn();
           return;
         }
 
-        // Deselect
         b.selectedCard = null;
         return;
       }
 
       if (p === "victory") {
-        // Next opponent button
         if (mx >= W / 2 - 60 && mx <= W / 2 + 60 && my >= 400 && my <= 436) {
           nextOpponent();
           return;

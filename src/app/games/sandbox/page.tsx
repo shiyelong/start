@@ -6,6 +6,8 @@ import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 import {
   ChevronLeft, RotateCcw, Box, Play, Volume2, VolumeX,
   Heart, Pickaxe, Shield
@@ -87,6 +89,14 @@ interface GameState {
   particles: Particle[];
   breakProgress: number;
   breakX: number; breakY: number;
+}
+
+/* ================================================================
+   Hex color → PixiJS number
+   ================================================================ */
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#") && hex.length >= 7) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
 }
 
 /* ================================================================
@@ -180,6 +190,7 @@ function createDefaultState(mode: GameMode, diff: Difficulty): GameState {
   };
 }
 
+
 /* ================================================================
    主组件
    ================================================================ */
@@ -196,7 +207,6 @@ export default function SandboxGame() {
   const stateRef = useRef<GameState | null>(null);
   const keysRef = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0, down: false, right: false });
-  const rafRef = useRef(0);
   const soundRef = useRef<SoundEngine | null>(null);
   const lastTimeRef = useRef(0);
 
@@ -347,329 +357,333 @@ export default function SandboxGame() {
     });
   }, []);
 
-  /* ---- Main game loop ---- */
+
+  /* ---- Main game loop (PixiJS) ---- */
   useEffect(() => {
     if (phase !== "playing") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let destroyed = false;
+    let app: Application | null = null;
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
+    (async () => {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0f0f0f, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
 
-    let physicsTimer = 0;
+      const g: PixiGraphics = new pixi.Graphics();
+      app.stage.addChild(g);
 
-    const loop = (timestamp: number) => {
-      const gs = stateRef.current;
-      if (!gs || phase !== "playing") return;
+      // Pre-create text pool
+      const TEXT_POOL_SIZE = 70;
+      const texts: PixiText[] = [];
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({ fontSize: 14, fill: "#ffffff", fontFamily: "sans-serif" }) });
+        t.visible = false;
+        app.stage.addChild(t);
+        texts.push(t);
+      }
+      let textIdx = 0;
 
-      const dt = lastTimeRef.current ? (timestamp - lastTimeRef.current) / 16.67 : 1;
-      lastTimeRef.current = timestamp;
+      function nextText(str: string, x: number, y: number, opts: {
+        fontSize?: number; fill?: string; fontWeight?: string;
+        align?: "left" | "center" | "right"; alpha?: number;
+        baseline?: "top" | "middle" | "alphabetic";
+      } = {}): void {
+        if (textIdx >= TEXT_POOL_SIZE) return;
+        const t = texts[textIdx++];
+        t.text = str;
+        t.visible = true;
+        t.alpha = opts.alpha ?? 1;
+        const s = t.style as import("pixi.js").TextStyle;
+        s.fontSize = opts.fontSize ?? 14;
+        s.fill = opts.fill ?? "#ffffff";
+        s.fontWeight = (opts.fontWeight ?? "normal") as "normal" | "bold";
+        s.fontFamily = "sans-serif";
+        const align = opts.align ?? "left";
+        t.anchor.set(align === "center" ? 0.5 : align === "right" ? 1 : 0, 0);
+        const baseline = opts.baseline ?? "alphabetic";
+        const fs = opts.fontSize ?? 14;
+        let yOff = 0;
+        if (baseline === "alphabetic") yOff = -fs * 0.8;
+        else if (baseline === "middle") yOff = -fs * 0.4;
+        else if (baseline === "top") yOff = 0;
+        t.x = x;
+        t.y = y + yOff;
+      }
 
-      // ---- Input: camera movement ----
-      const speed = 0.3 * dt;
-      if (keysRef.current.has("w") || keysRef.current.has("arrowup")) gs.camY -= speed;
-      if (keysRef.current.has("s") || keysRef.current.has("arrowdown")) gs.camY += speed;
-      if (keysRef.current.has("a") || keysRef.current.has("arrowleft")) gs.camX -= speed;
-      if (keysRef.current.has("d") || keysRef.current.has("arrowright")) gs.camX += speed;
-      gs.camX = Math.max(0, Math.min(COLS - VIEW_COLS, gs.camX));
-      gs.camY = Math.max(0, Math.min(ROWS - VIEW_ROWS, gs.camY));
+      let physicsTimer = 0;
 
-      // ---- Mouse interaction ----
-      const mx = mouseRef.current.x, my = mouseRef.current.y;
-      const worldX = Math.floor(mx / GRID + gs.camX);
-      const worldY = Math.floor(my / GRID + gs.camY);
+      app.ticker.add(() => {
+        if (destroyed) return;
+        const gs = stateRef.current;
+        if (!gs || phase !== "playing") return;
 
-      if (mouseRef.current.down && worldX >= 0 && worldX < COLS && worldY >= 0 && worldY < ROWS) {
-        if (mouseRef.current.right) {
-          // Break block
-          const target = gs.grid[worldY][worldX];
-          if (target !== "air" && target !== "bedrock") {
-            if (gs.breakX !== worldX || gs.breakY !== worldY) {
-              gs.breakProgress = 0;
-              gs.breakX = worldX; gs.breakY = worldY;
-            }
-            const bDef = BLOCK_DEFS[target];
-            gs.breakProgress += dt * (gs.mode === "creative" ? 5 : 1);
-            if (gs.breakProgress >= bDef.breakTime) {
-              const dropType = bDef.drops || target;
-              if (gs.mode === "survival") {
-                gs.inventory[dropType] = (gs.inventory[dropType] || 0) + 1;
-                gs.score += target === "ore" ? 10 : target === "stone" ? 3 : 1;
+        const now = performance.now();
+        const dt = lastTimeRef.current ? (now - lastTimeRef.current) / 16.67 : 1;
+        lastTimeRef.current = now;
+
+        // ---- Input: camera movement ----
+        const speed = 0.3 * dt;
+        if (keysRef.current.has("w") || keysRef.current.has("arrowup")) gs.camY -= speed;
+        if (keysRef.current.has("s") || keysRef.current.has("arrowdown")) gs.camY += speed;
+        if (keysRef.current.has("a") || keysRef.current.has("arrowleft")) gs.camX -= speed;
+        if (keysRef.current.has("d") || keysRef.current.has("arrowright")) gs.camX += speed;
+        gs.camX = Math.max(0, Math.min(COLS - VIEW_COLS, gs.camX));
+        gs.camY = Math.max(0, Math.min(ROWS - VIEW_ROWS, gs.camY));
+
+        // ---- Mouse interaction ----
+        const mx = mouseRef.current.x, my = mouseRef.current.y;
+        const worldX = Math.floor(mx / GRID + gs.camX);
+        const worldY = Math.floor(my / GRID + gs.camY);
+
+        if (mouseRef.current.down && worldX >= 0 && worldX < COLS && worldY >= 0 && worldY < ROWS) {
+          if (mouseRef.current.right) {
+            // Break block
+            const target = gs.grid[worldY][worldX];
+            if (target !== "air" && target !== "bedrock") {
+              if (gs.breakX !== worldX || gs.breakY !== worldY) {
+                gs.breakProgress = 0;
+                gs.breakX = worldX; gs.breakY = worldY;
               }
-              spawnParticles(gs, (worldX - gs.camX) * GRID + GRID / 2, (worldY - gs.camY) * GRID + GRID / 2, bDef.color, 6);
-              gs.grid[worldY][worldX] = "air";
-              gs.breakProgress = 0;
-              gs.breakX = -1; gs.breakY = -1;
-              playSound("click");
+              const bDef = BLOCK_DEFS[target];
+              gs.breakProgress += dt * (gs.mode === "creative" ? 5 : 1);
+              if (gs.breakProgress >= bDef.breakTime) {
+                const dropType = bDef.drops || target;
+                if (gs.mode === "survival") {
+                  gs.inventory[dropType] = (gs.inventory[dropType] || 0) + 1;
+                  gs.score += target === "ore" ? 10 : target === "stone" ? 3 : 1;
+                }
+                spawnParticles(gs, (worldX - gs.camX) * GRID + GRID / 2, (worldY - gs.camY) * GRID + GRID / 2, bDef.color, 6);
+                gs.grid[worldY][worldX] = "air";
+                gs.breakProgress = 0;
+                gs.breakX = -1; gs.breakY = -1;
+                playSound("click");
+              }
+            }
+          } else {
+            // Place block
+            if (gs.grid[worldY][worldX] === "air" || gs.grid[worldY][worldX] === "water") {
+              const block = gs.selectedBlock;
+              if (gs.mode === "creative" || (gs.inventory[block] && gs.inventory[block] > 0)) {
+                gs.grid[worldY][worldX] = block;
+                if (gs.mode === "survival") {
+                  gs.inventory[block]--;
+                  if (gs.inventory[block] <= 0) delete gs.inventory[block];
+                }
+                gs.score += 1;
+                playSound("move");
+              }
             }
           }
         } else {
-          // Place block
-          if (gs.grid[worldY][worldX] === "air" || gs.grid[worldY][worldX] === "water") {
-            const block = gs.selectedBlock;
-            if (gs.mode === "creative" || (gs.inventory[block] && gs.inventory[block] > 0)) {
-              gs.grid[worldY][worldX] = block;
-              if (gs.mode === "survival") {
-                gs.inventory[block]--;
-                if (gs.inventory[block] <= 0) delete gs.inventory[block];
-              }
-              gs.score += 1;
-              playSound("move");
+          gs.breakProgress = 0;
+          gs.breakX = -1; gs.breakY = -1;
+        }
+
+        // ---- Physics (every 3 frames) ----
+        physicsTimer += dt;
+        if (physicsTimer >= 3) {
+          physicsTick(gs);
+          physicsTimer = 0;
+        }
+
+        // ---- Day/night cycle ----
+        gs.dayTime = (gs.dayTime + dt * 0.5) % gs.dayLength;
+        gs.totalTime += dt;
+
+        // ---- Survival mechanics ----
+        if (gs.mode === "survival") {
+          const ds = DIFF_SETTINGS[gs.difficulty];
+          gs.hunger -= ds.hungerRate * dt;
+          if (gs.hunger <= 0) {
+            gs.hunger = 0;
+            gs.hp -= 0.01 * ds.dmgMul * dt;
+          }
+          // Eating wood restores hunger (simplified)
+          if (keysRef.current.has("e") && gs.inventory["wood"] && gs.inventory["wood"] > 0 && gs.hunger < 80) {
+            gs.inventory["wood"]--;
+            if (gs.inventory["wood"] <= 0) delete gs.inventory["wood"];
+            gs.hunger = Math.min(100, gs.hunger + 25);
+            gs.hp = Math.min(gs.hpMax, gs.hp + 2);
+            playSound("score");
+          }
+          if (gs.hp <= 0) {
+            gs.hp = 0;
+            setPhase("gameover");
+            setScore(gs.score);
+            submitScore(gs.score);
+            playSound("gameOver");
+            return;
+          }
+        }
+
+        setScore(gs.score);
+        updateParticles(gs);
+
+        // ---- Render ----
+        g.clear();
+        textIdx = 0;
+        for (const t of texts) t.visible = false;
+
+        // Sky with day/night cycle
+        const dayProgress = gs.dayTime / gs.dayLength;
+        const isNight = dayProgress > 0.5;
+        const nightFactor = isNight
+          ? Math.min(1, (dayProgress - 0.5) * 4, (1 - dayProgress) * 4)
+          : 0;
+        const dayFactor = !isNight
+          ? Math.min(1, dayProgress * 4, (0.5 - dayProgress) * 4)
+          : 0;
+
+        const skyR = Math.floor(10 + 100 * dayFactor);
+        const skyG = Math.floor(10 + 150 * dayFactor);
+        const skyB = Math.floor(30 + 200 * dayFactor);
+        const skyColor = (skyR << 16) | (skyG << 8) | skyB;
+        g.rect(0, 0, W, H).fill({ color: skyColor });
+
+        // Stars at night
+        if (nightFactor > 0.3) {
+          for (let i = 0; i < 30; i++) {
+            const sx = ((i * 137 + 50) % W);
+            const sy = ((i * 97 + 30) % (H * 0.4));
+            g.rect(sx, sy, 1.5, 1.5).fill({ color: 0xffffff, alpha: nightFactor * 0.8 });
+          }
+        }
+
+        // Sun / Moon
+        const celestialX = dayProgress * W * 1.2 - W * 0.1;
+        const celestialY = 30 + Math.sin(dayProgress * Math.PI) * -20 + 40;
+        if (!isNight) {
+          g.circle(celestialX, celestialY, 12).fill({ color: 0xFFD700 });
+        } else {
+          g.circle(W - celestialX + W * 0.1, celestialY, 10).fill({ color: 0xC8C8DC, alpha: nightFactor });
+        }
+
+        // Blocks
+        const startCol = Math.floor(gs.camX);
+        const startRow = Math.floor(gs.camY);
+        const offX = (gs.camX - startCol) * GRID;
+        const offY = (gs.camY - startRow) * GRID;
+
+        for (let vy = -1; vy <= VIEW_ROWS + 1; vy++) {
+          for (let vx = -1; vx <= VIEW_COLS + 1; vx++) {
+            const gx = startCol + vx;
+            const gy = startRow + vy;
+            if (gx < 0 || gx >= COLS || gy < 0 || gy >= ROWS) continue;
+            const block = gs.grid[gy][gx];
+            if (block === "air") continue;
+
+            const bDef = BLOCK_DEFS[block];
+            const px = vx * GRID - offX;
+            const py = vy * GRID - offY;
+
+            if (block === "water") {
+              g.rect(px, py, GRID, GRID).fill({ color: 0x1E90FF, alpha: 0.5 + Math.sin(gs.totalTime * 0.05 + gx) * 0.1 });
+            } else if (block === "glass") {
+              g.rect(px, py, GRID, GRID).fill({ color: 0x87CEEB, alpha: 0.4 });
+            } else {
+              g.rect(px, py, GRID, GRID).fill({ color: hexToNum(bDef.color) });
+            }
+
+            // Block shading (top highlight, bottom shadow)
+            if (block !== "water" && block !== "glass") {
+              g.rect(px, py, GRID, 2).fill({ color: 0xffffff, alpha: 0.08 });
+              g.rect(px, py + GRID - 2, GRID, 2).fill({ color: 0x000000, alpha: 0.15 });
+              g.rect(px + GRID - 1, py, 1, GRID).fill({ color: 0x000000, alpha: 0.15 });
+            }
+
+            // Ore sparkle
+            if (block === "ore") {
+              g.rect(px + 4, py + 4, 3, 3).fill({ color: 0xFFD700 });
+              g.rect(px + 10, py + 8, 2, 2).fill({ color: 0xFFD700 });
+              g.rect(px + 6, py + 11, 2, 2).fill({ color: 0xFFD700 });
             }
           }
         }
-      } else {
-        gs.breakProgress = 0;
-        gs.breakX = -1; gs.breakY = -1;
-      }
 
-      // ---- Physics (every 3 frames) ----
-      physicsTimer += dt;
-      if (physicsTimer >= 3) {
-        physicsTick(gs);
-        physicsTimer = 0;
-      }
-
-      // ---- Day/night cycle ----
-      gs.dayTime = (gs.dayTime + dt * 0.5) % gs.dayLength;
-      gs.totalTime += dt;
-
-      // ---- Survival mechanics ----
-      if (gs.mode === "survival") {
-        const ds = DIFF_SETTINGS[gs.difficulty];
-        gs.hunger -= ds.hungerRate * dt;
-        if (gs.hunger <= 0) {
-          gs.hunger = 0;
-          gs.hp -= 0.01 * ds.dmgMul * dt;
-        }
-        // Eating wood restores hunger (simplified)
-        if (keysRef.current.has("e") && gs.inventory["wood"] && gs.inventory["wood"] > 0 && gs.hunger < 80) {
-          gs.inventory["wood"]--;
-          if (gs.inventory["wood"] <= 0) delete gs.inventory["wood"];
-          gs.hunger = Math.min(100, gs.hunger + 25);
-          gs.hp = Math.min(gs.hpMax, gs.hp + 2);
-          playSound("score");
-        }
-        if (gs.hp <= 0) {
-          gs.hp = 0;
-          setPhase("gameover");
-          setScore(gs.score);
-          submitScore(gs.score);
-          playSound("gameOver");
-          return;
-        }
-      }
-
-      setScore(gs.score);
-      updateParticles(gs);
-
-      // ---- Render ----
-      ctx.save();
-      ctx.scale(dpr, dpr);
-
-      // Sky with day/night cycle
-      const dayProgress = gs.dayTime / gs.dayLength;
-      const isNight = dayProgress > 0.5;
-      const nightFactor = isNight
-        ? Math.min(1, (dayProgress - 0.5) * 4, (1 - dayProgress) * 4)
-        : 0;
-      const dayFactor = !isNight
-        ? Math.min(1, dayProgress * 4, (0.5 - dayProgress) * 4)
-        : 0;
-
-      const skyR = Math.floor(10 + 100 * dayFactor);
-      const skyG = Math.floor(10 + 150 * dayFactor);
-      const skyB = Math.floor(30 + 200 * dayFactor);
-      ctx.fillStyle = `rgb(${skyR},${skyG},${skyB})`;
-      ctx.fillRect(0, 0, W, H);
-
-      // Stars at night
-      if (nightFactor > 0.3) {
-        ctx.fillStyle = `rgba(255,255,255,${nightFactor * 0.8})`;
-        for (let i = 0; i < 30; i++) {
-          const sx = ((i * 137 + 50) % W);
-          const sy = ((i * 97 + 30) % (H * 0.4));
-          ctx.fillRect(sx, sy, 1.5, 1.5);
-        }
-      }
-
-      // Sun / Moon
-      const celestialX = dayProgress * W * 1.2 - W * 0.1;
-      const celestialY = 30 + Math.sin(dayProgress * Math.PI) * -20 + 40;
-      if (!isNight) {
-        ctx.fillStyle = "#FFD700";
-        ctx.beginPath();
-        ctx.arc(celestialX, celestialY, 12, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.fillStyle = `rgba(200,200,220,${nightFactor})`;
-        ctx.beginPath();
-        ctx.arc(W - celestialX + W * 0.1, celestialY, 10, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Blocks
-      const startCol = Math.floor(gs.camX);
-      const startRow = Math.floor(gs.camY);
-      const offX = (gs.camX - startCol) * GRID;
-      const offY = (gs.camY - startRow) * GRID;
-
-      for (let vy = -1; vy <= VIEW_ROWS + 1; vy++) {
-        for (let vx = -1; vx <= VIEW_COLS + 1; vx++) {
-          const gx = startCol + vx;
-          const gy = startRow + vy;
-          if (gx < 0 || gx >= COLS || gy < 0 || gy >= ROWS) continue;
-          const block = gs.grid[gy][gx];
-          if (block === "air") continue;
-
-          const bDef = BLOCK_DEFS[block];
-          const px = vx * GRID - offX;
-          const py = vy * GRID - offY;
-
-          if (block === "water") {
-            ctx.fillStyle = `rgba(30,144,255,${0.5 + Math.sin(gs.totalTime * 0.05 + gx) * 0.1})`;
-          } else if (block === "glass") {
-            ctx.fillStyle = "rgba(135,206,235,0.4)";
-          } else {
-            ctx.fillStyle = bDef.color;
-          }
-          ctx.fillRect(px, py, GRID, GRID);
-
-          // Block shading (top highlight, bottom shadow)
-          if (block !== "water" && block !== "glass") {
-            ctx.fillStyle = "rgba(255,255,255,0.08)";
-            ctx.fillRect(px, py, GRID, 2);
-            ctx.fillStyle = "rgba(0,0,0,0.15)";
-            ctx.fillRect(px, py + GRID - 2, GRID, 2);
-            ctx.fillRect(px + GRID - 1, py, 1, GRID);
-          }
-
-          // Ore sparkle
-          if (block === "ore") {
-            ctx.fillStyle = "#FFD700";
-            ctx.fillRect(px + 4, py + 4, 3, 3);
-            ctx.fillRect(px + 10, py + 8, 2, 2);
-            ctx.fillRect(px + 6, py + 11, 2, 2);
+        // Break progress indicator
+        if (gs.breakX >= 0 && gs.breakY >= 0) {
+          const bx = (gs.breakX - gs.camX) * GRID;
+          const by = (gs.breakY - gs.camY) * GRID;
+          const target = gs.grid[gs.breakY]?.[gs.breakX];
+          if (target && target !== "air") {
+            const pct = gs.breakProgress / BLOCK_DEFS[target].breakTime;
+            g.rect(bx + 1, by + 1, GRID - 2, GRID - 2).stroke({ color: 0xffffff, width: 2, alpha: 0.6 });
+            // Crack overlay
+            g.rect(bx, by, GRID, GRID).fill({ color: 0x000000, alpha: pct * 0.5 });
+            // Progress bar
+            g.rect(bx, by - 4, GRID * pct, 3).fill({ color: 0x3ea6ff });
           }
         }
-      }
 
-      // Break progress indicator
-      if (gs.breakX >= 0 && gs.breakY >= 0) {
-        const bx = (gs.breakX - gs.camX) * GRID;
-        const by = (gs.breakY - gs.camY) * GRID;
-        const target = gs.grid[gs.breakY]?.[gs.breakX];
-        if (target && target !== "air") {
-          const pct = gs.breakProgress / BLOCK_DEFS[target].breakTime;
-          ctx.strokeStyle = "rgba(255,255,255,0.6)";
-          ctx.lineWidth = 2;
-          ctx.strokeRect(bx + 1, by + 1, GRID - 2, GRID - 2);
-          // Crack overlay
-          ctx.fillStyle = `rgba(0,0,0,${pct * 0.5})`;
-          ctx.fillRect(bx, by, GRID, GRID);
-          // Progress bar
-          ctx.fillStyle = "#3ea6ff";
-          ctx.fillRect(bx, by - 4, GRID * pct, 3);
+        // Cursor highlight
+        if (worldX >= 0 && worldX < COLS && worldY >= 0 && worldY < ROWS) {
+          const cx = (worldX - gs.camX) * GRID;
+          const cy = (worldY - gs.camY) * GRID;
+          g.rect(cx, cy, GRID, GRID).stroke({ color: 0x3ea6ff, width: 1.5, alpha: 0.6 });
         }
-      }
 
-      // Cursor highlight
-      if (worldX >= 0 && worldX < COLS && worldY >= 0 && worldY < ROWS) {
-        const cx = (worldX - gs.camX) * GRID;
-        const cy = (worldY - gs.camY) * GRID;
-        ctx.strokeStyle = "rgba(62,166,255,0.6)";
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(cx, cy, GRID, GRID);
-      }
+        // Particles
+        for (const p of gs.particles) {
+          const alpha = p.life / p.maxLife;
+          g.rect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size).fill({ color: hexToNum(p.color), alpha });
+        }
 
-      // Particles
-      for (const p of gs.particles) {
-        const alpha = p.life / p.maxLife;
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = p.color;
-        ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
-      }
-      ctx.globalAlpha = 1;
+        // Night overlay
+        if (nightFactor > 0) {
+          g.rect(0, 0, W, H).fill({ color: 0x000014, alpha: nightFactor * 0.5 });
+        }
 
-      // Night overlay
-      if (nightFactor > 0) {
-        ctx.fillStyle = `rgba(0,0,20,${nightFactor * 0.5})`;
-        ctx.fillRect(0, 0, W, H);
-      }
+        // HUD
+        if (gs.mode === "survival") {
+          // HP bar
+          g.rect(8, 8, 104, 14).fill({ color: 0x000000, alpha: 0.6 });
+          const hpColor = gs.hp > gs.hpMax * 0.3 ? 0xe74c3c : 0xff0000;
+          g.rect(10, 10, (gs.hp / gs.hpMax) * 100, 10).fill({ color: hpColor });
+          nextText(`HP ${Math.ceil(gs.hp)}/${gs.hpMax}`, 12, 18, { fontSize: 9, fill: "#ffffff", fontWeight: "normal" });
 
-      // HUD
-      if (gs.mode === "survival") {
-        // HP bar
-        ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.fillRect(8, 8, 104, 14);
-        ctx.fillStyle = gs.hp > gs.hpMax * 0.3 ? "#e74c3c" : "#ff0000";
-        ctx.fillRect(10, 10, (gs.hp / gs.hpMax) * 100, 10);
-        ctx.fillStyle = "#fff";
-        ctx.font = "9px monospace";
-        ctx.fillText(`HP ${Math.ceil(gs.hp)}/${gs.hpMax}`, 12, 18);
+          // Hunger bar
+          g.rect(8, 26, 104, 14).fill({ color: 0x000000, alpha: 0.6 });
+          const hungerColor = gs.hunger > 30 ? 0xf39c12 : 0xe67e22;
+          g.rect(10, 28, gs.hunger, 10).fill({ color: hungerColor });
+          nextText(`饥饿 ${Math.ceil(gs.hunger)}%`, 12, 36, { fontSize: 9, fill: "#ffffff", fontWeight: "normal" });
+        }
 
-        // Hunger bar
-        ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.fillRect(8, 26, 104, 14);
-        ctx.fillStyle = gs.hunger > 30 ? "#f39c12" : "#e67e22";
-        ctx.fillRect(10, 28, gs.hunger, 10);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(`饥饿 ${Math.ceil(gs.hunger)}%`, 12, 36);
-      }
+        // Score
+        g.rect(W - 100, 8, 92, 16).fill({ color: 0x000000, alpha: 0.6 });
+        nextText(`分数: ${gs.score}`, W - 96, 20, { fontSize: 10, fill: "#3ea6ff", fontWeight: "bold" });
 
-      // Score
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(W - 100, 8, 92, 16);
-      ctx.fillStyle = "#3ea6ff";
-      ctx.font = "bold 10px monospace";
-      ctx.fillText(`分数: ${gs.score}`, W - 96, 20);
+        // Day/night indicator
+        const timeIcon = isNight ? "夜" : "昼";
+        g.rect(W - 100, 28, 92, 16).fill({ color: 0x000000, alpha: 0.6 });
+        nextText(`${timeIcon} ${Math.floor(dayProgress * 24)}:00`, W - 96, 40, { fontSize: 10, fill: isNight ? "#7f8fa6" : "#FFD700", fontWeight: "bold" });
 
-      // Day/night indicator
-      const timeIcon = isNight ? "夜" : "昼";
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(W - 100, 28, 92, 16);
-      ctx.fillStyle = isNight ? "#7f8fa6" : "#FFD700";
-      ctx.fillText(`${timeIcon} ${Math.floor(dayProgress * 24)}:00`, W - 96, 40);
+        // Selected block indicator
+        g.rect(W / 2 - 60, H - 28, 120, 24).fill({ color: 0x000000, alpha: 0.6 });
+        g.rect(W / 2 - 54, H - 24, 16, 16).fill({ color: hexToNum(BLOCK_DEFS[gs.selectedBlock].color) });
+        nextText(BLOCK_DEFS[gs.selectedBlock].name, W / 2 - 34, H - 12, { fontSize: 10, fill: "#ffffff" });
 
-      // Selected block indicator
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(W / 2 - 60, H - 28, 120, 24);
-      ctx.fillStyle = BLOCK_DEFS[gs.selectedBlock].color;
-      ctx.fillRect(W / 2 - 54, H - 24, 16, 16);
-      ctx.fillStyle = "#fff";
-      ctx.font = "10px sans-serif";
-      ctx.fillText(BLOCK_DEFS[gs.selectedBlock].name, W / 2 - 34, H - 12);
+        // Mini inventory count for survival
+        if (gs.mode === "survival") {
+          const cnt = gs.inventory[gs.selectedBlock] || 0;
+          nextText(`x${cnt}`, W / 2 + 30, H - 12, { fontSize: 10, fill: "#aaaaaa" });
+        }
 
-      // Mini inventory count for survival
-      if (gs.mode === "survival") {
-        const cnt = gs.inventory[gs.selectedBlock] || 0;
-        ctx.fillStyle = "#aaa";
-        ctx.fillText(`x${cnt}`, W / 2 + 30, H - 12);
-      }
+        // Controls hint
+        g.rect(0, H - 14, W, 14).fill({ color: 0x000000, alpha: 0.4 });
+        const hint = gs.mode === "survival"
+          ? "WASD移动 | 左键放置 | 右键挖掘 | E吃木头 | Q切换方块"
+          : "WASD移动 | 左键放置 | 右键移除 | Q切换方块";
+        nextText(hint, 8, H - 4, { fontSize: 9, fill: "#666666" });
+      }); // end app.ticker.add
+    })(); // end async IIFE
 
-      // Controls hint
-      ctx.fillStyle = "rgba(0,0,0,0.4)";
-      ctx.fillRect(0, H - 14, W, 14);
-      ctx.fillStyle = "#666";
-      ctx.font = "9px sans-serif";
-      const hint = gs.mode === "survival"
-        ? "WASD移动 | 左键放置 | 右键挖掘 | E吃木头 | Q切换方块"
-        : "WASD移动 | 左键放置 | 右键移除 | Q切换方块";
-      ctx.fillText(hint, 8, H - 4);
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(loop);
-    };
-
-    rafRef.current = requestAnimationFrame(loop);
     return () => {
-      cancelAnimationFrame(rafRef.current);
+      destroyed = true;
       lastTimeRef.current = 0;
+      if (app) { app.destroy(true); app = null; }
     };
   }, [phase, physicsTick, spawnParticles, updateParticles, playSound, submitScore, selectedBlock]);
 
@@ -828,6 +842,7 @@ export default function SandboxGame() {
   const restart = useCallback(() => {
     startGame(mode, difficulty);
   }, [startGame, mode, difficulty]);
+
 
   /* ================================================================
      RENDER

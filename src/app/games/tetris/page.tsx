@@ -9,7 +9,8 @@ import { SoundEngine } from "@/lib/game-engine/sound-engine";
 import { ParticleSystem } from "@/lib/game-engine/particle-system";
 import { InputHandler } from "@/lib/game-engine/input-handler";
 import { lerp } from "@/lib/game-engine/animation-utils";
-import { drawRoundedRect, drawGlow, drawGradientBackground } from "@/lib/game-engine/render-utils";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 import VirtualDPad from "@/components/VirtualDPad";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -83,7 +84,6 @@ const INDEX_TO_COLOR: Record<number, string> = {
 };
 
 // ─── Tetromino Shapes (SRS) ──────────────────────────────────────────────────
-// Each piece has 4 rotation states, each state is an array of [row, col] offsets
 const SHAPES: Record<PieceType, number[][][]> = {
   I: [
     [[0,-1],[0,0],[0,1],[0,2]],
@@ -130,7 +130,6 @@ const SHAPES: Record<PieceType, number[][][]> = {
 };
 
 // ─── SRS Wall Kick Data ──────────────────────────────────────────────────────
-// Wall kick offsets for J, L, S, T, Z pieces
 const WALL_KICKS_JLSTZ: Record<string, number[][]> = {
   "0>1": [[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]],
   "1>0": [[0,0],[1,0],[1,-1],[0,2],[1,2]],
@@ -142,7 +141,6 @@ const WALL_KICKS_JLSTZ: Record<string, number[][]> = {
   "0>3": [[0,0],[1,0],[1,1],[0,-2],[1,-2]],
 };
 
-// Wall kick offsets for I piece
 const WALL_KICKS_I: Record<string, number[][]> = {
   "0>1": [[0,0],[-2,0],[1,0],[-2,-1],[1,2]],
   "1>0": [[0,0],[2,0],[-1,0],[2,1],[-1,-2]],
@@ -211,7 +209,7 @@ function removeLines(board: number[][], lines: number[]): void {
 }
 
 function getGhostRow(board: number[][], piece: Piece): number {
-  let ghost = { ...piece };
+  const ghost = { ...piece };
   while (isValid(board, { ...ghost, row: ghost.row + 1 })) {
     ghost.row++;
   }
@@ -232,7 +230,6 @@ function tryRotate(board: number[][], piece: Piece, dir: 1 | -1): Piece | null {
 }
 
 function getDropInterval(level: number): number {
-  // Speed curve: starts at 1000ms, decreases with level
   return Math.max(50, 1000 - (level - 1) * 80);
 }
 
@@ -262,245 +259,18 @@ function canSpawn(board: number[][], type: PieceType): boolean {
   return isValid(board, spawnPiece(type));
 }
 
-
-// ─── Canvas Renderer ─────────────────────────────────────────────────────────
-function renderGame(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  game: GameState,
-  anim: AnimState,
-  particles: ParticleSystem,
-  dpr: number,
-) {
-  const w = canvas.width / dpr;
-  const h = canvas.height / dpr;
-  ctx.save();
-  ctx.scale(dpr, dpr);
-
-  // Screen shake
-  if (anim.shakeTime > 0) {
-    const mag = anim.shakeIntensity * (anim.shakeTime / 500);
-    ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
-  }
-
-  // Background
-  drawGradientBackground(ctx, w, h, anim.bgHue, 10);
-
-  // Layout calculations
-  const cellSize = Math.floor(Math.min((w - 140) / COLS, (h - 20) / ROWS));
-  const boardW = cellSize * COLS;
-  const boardH = cellSize * ROWS;
-  const boardX = Math.floor((w - boardW - 110) / 2);
-  const boardY = Math.floor((h - boardH) / 2);
-  const sideX = boardX + boardW + 12;
-
-  // Board background
-  drawRoundedRect(ctx, boardX - 4, boardY - 4, boardW + 8, boardH + 8, 6);
-  ctx.fillStyle = "#111";
-  ctx.fill();
-  ctx.strokeStyle = "#333";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Grid lines
-  ctx.strokeStyle = "rgba(255,255,255,0.04)";
-  ctx.lineWidth = 0.5;
-  for (let r = 1; r < ROWS; r++) {
-    ctx.beginPath();
-    ctx.moveTo(boardX, boardY + r * cellSize);
-    ctx.lineTo(boardX + boardW, boardY + r * cellSize);
-    ctx.stroke();
-  }
-  for (let c = 1; c < COLS; c++) {
-    ctx.beginPath();
-    ctx.moveTo(boardX + c * cellSize, boardY);
-    ctx.lineTo(boardX + c * cellSize, boardY + boardH);
-    ctx.stroke();
-  }
-
-  // Draw placed blocks
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      const val = game.board[r][c];
-      if (val === 0) continue;
-      const color = INDEX_TO_COLOR[val] || "#888";
-      const x = boardX + c * cellSize;
-      const y = boardY + r * cellSize;
-
-      // Flash effect for clearing rows
-      if (anim.flashRows.includes(r) && anim.flashTime > 0) {
-        const flashT = anim.flashTime / FLASH_DURATION;
-        const alpha = Math.sin(flashT * Math.PI * 3) * 0.5 + 0.5;
-        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-        ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
-        continue;
-      }
-
-      drawBlock(ctx, x, y, cellSize, color, anim.time);
-    }
-  }
-
-  // Draw ghost piece
-  if (!game.over && !game.paused) {
-    const ghostRow = getGhostRow(game.board, game.current);
-    const ghostBlocks = SHAPES[game.current.type][game.current.rotation].map(
-      ([r, c]) => [ghostRow + r, game.current.col + c]
-    );
-    ctx.globalAlpha = 0.2;
-    const ghostColor = PIECE_COLORS[game.current.type];
-    for (const [r, c] of ghostBlocks) {
-      if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
-        const x = boardX + c * cellSize;
-        const y = boardY + r * cellSize;
-        drawRoundedRect(ctx, x + 1, y + 1, cellSize - 2, cellSize - 2, 3);
-        ctx.fillStyle = ghostColor;
-        ctx.fill();
-      }
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  // Draw current piece
-  if (!game.over) {
-    const blocks = getBlocks(game.current);
-    const color = PIECE_COLORS[game.current.type];
-    for (const [r, c] of blocks) {
-      if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
-        const x = boardX + c * cellSize;
-        const y = boardY + r * cellSize;
-        drawBlock(ctx, x, y, cellSize, color, anim.time);
-      }
-    }
-  }
-
-  // Side panel
-  const panelCellSize = Math.floor(cellSize * 0.7);
-
-  // Next piece preview
-  ctx.fillStyle = "#aaa";
-  ctx.font = "bold 11px sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillText("NEXT", sideX, boardY + 12);
-  drawRoundedRect(ctx, sideX, boardY + 18, panelCellSize * 4 + 8, panelCellSize * 4 + 8, 6);
-  ctx.fillStyle = "#1a1a1a";
-  ctx.fill();
-  drawMiniPiece(ctx, game.next, sideX + 4, boardY + 22, panelCellSize);
-
-  // Hold piece
-  ctx.fillStyle = "#aaa";
-  ctx.font = "bold 11px sans-serif";
-  ctx.fillText("HOLD", sideX, boardY + panelCellSize * 4 + 44);
-  drawRoundedRect(ctx, sideX, boardY + panelCellSize * 4 + 50, panelCellSize * 4 + 8, panelCellSize * 4 + 8, 6);
-  ctx.fillStyle = "#1a1a1a";
-  ctx.fill();
-  if (game.hold) {
-    ctx.globalAlpha = game.holdUsed ? 0.4 : 1;
-    drawMiniPiece(ctx, game.hold, sideX + 4, boardY + panelCellSize * 4 + 54, panelCellSize);
-    ctx.globalAlpha = 1;
-  }
-
-  // Stats
-  const statsY = boardY + panelCellSize * 8 + 80;
-  ctx.fillStyle = "#888";
-  ctx.font = "10px sans-serif";
-  ctx.fillText("LEVEL", sideX, statsY);
-  ctx.fillStyle = "#3ea6ff";
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText(String(game.level), sideX, statsY + 18);
-
-  ctx.fillStyle = "#888";
-  ctx.font = "10px sans-serif";
-  ctx.fillText("LINES", sideX, statsY + 38);
-  ctx.fillStyle = "#6bcb77";
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText(String(game.lines), sideX, statsY + 56);
-
-  // Particles
-  particles.render(ctx);
-
-  // Score popups
-  for (const sp of anim.scorePopups) {
-    const alpha = Math.max(0, sp.life);
-    const yOff = (1 - sp.life) * 40;
-    ctx.globalAlpha = alpha;
-    ctx.font = `bold ${sp.combo > 1 ? 18 : 14}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillStyle = sp.combo > 1 ? "#ff6090" : "#ffd93d";
-    ctx.fillText(`+${sp.value}`, sp.x, sp.y - yOff);
-  }
-  ctx.globalAlpha = 1;
-
-  // Pause overlay
-  if (game.paused && !game.over) {
-    ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillRect(boardX, boardY, boardW, boardH);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 24px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("暂停", boardX + boardW / 2, boardY + boardH / 2);
-  }
-
-  // Game over overlay
-  if (game.over) {
-    ctx.fillStyle = "rgba(15,15,15,0.75)";
-    ctx.fillRect(boardX, boardY, boardW, boardH);
-    ctx.fillStyle = "#ff4444";
-    ctx.font = "bold 26px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("游戏结束", boardX + boardW / 2, boardY + boardH / 2 - 14);
-    ctx.fillStyle = "#aaa";
-    ctx.font = "16px sans-serif";
-    ctx.fillText(`得分: ${game.score}`, boardX + boardW / 2, boardY + boardH / 2 + 18);
-  }
-
-  ctx.restore();
+/** Convert "#rrggbb" hex to numeric 0xRRGGBB for PixiJS */
+function hexToNum(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
 }
 
-function drawBlock(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string, time: number) {
-  const s = size - 2;
-  drawRoundedRect(ctx, x + 1, y + 1, s, s, 3);
-  // Gradient fill
-  const grad = ctx.createLinearGradient(x, y, x, y + size);
-  grad.addColorStop(0, lightenColor(color, 30));
-  grad.addColorStop(1, color);
-  ctx.fillStyle = grad;
-  ctx.fill();
-  // Subtle inner highlight
-  ctx.strokeStyle = "rgba(255,255,255,0.15)";
-  ctx.lineWidth = 0.5;
-  ctx.stroke();
-}
-
-function drawMiniPiece(ctx: CanvasRenderingContext2D, type: PieceType, x: number, y: number, cellSize: number) {
-  const blocks = SHAPES[type][0];
-  const color = PIECE_COLORS[type];
-  // Center the piece in the preview box
-  let minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
-  for (const [r, c] of blocks) {
-    minR = Math.min(minR, r); maxR = Math.max(maxR, r);
-    minC = Math.min(minC, c); maxC = Math.max(maxC, c);
-  }
-  const pw = (maxC - minC + 1) * cellSize;
-  const ph = (maxR - minR + 1) * cellSize;
-  const ox = x + (cellSize * 4 - pw) / 2 - minC * cellSize;
-  const oy = y + (cellSize * 4 - ph) / 2 - minR * cellSize;
-  for (const [r, c] of blocks) {
-    const bx = ox + c * cellSize;
-    const by = oy + r * cellSize;
-    drawRoundedRect(ctx, bx + 1, by + 1, cellSize - 2, cellSize - 2, 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-  }
-}
-
-function lightenColor(hex: string, percent: number): string {
+/** Lighten a hex color by adding to each channel */
+function lightenHex(hex: string, amount: number): number {
   const num = parseInt(hex.replace("#", ""), 16);
-  const r = Math.min(255, ((num >> 16) & 0xff) + percent);
-  const g = Math.min(255, ((num >> 8) & 0xff) + percent);
-  const b = Math.min(255, (num & 0xff) + percent);
-  return `rgb(${r},${g},${b})`;
+  const r = Math.min(255, ((num >> 16) & 0xff) + amount);
+  const g = Math.min(255, ((num >> 8) & 0xff) + amount);
+  const b = Math.min(255, (num & 0xff) + amount);
+  return (r << 16) | (g << 8) | b;
 }
 
 
@@ -524,9 +294,14 @@ export default function TetrisPage() {
   const soundRef = useRef<SoundEngine>(null!);
   const particlesRef = useRef<ParticleSystem>(null!);
   const inputRef = useRef<InputHandler>(null!);
-  const rafRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const scoreSubmittedRef = useRef(false);
+
+  // PixiJS refs
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
 
   const [score, setScore] = useState(0);
   const [level, setLevel] = useState(1);
@@ -578,9 +353,8 @@ export default function TetrisPage() {
       // Particles for each cleared row
       const canvas = canvasRef.current;
       if (canvas) {
-        const dpr = window.devicePixelRatio || 1;
-        const cw = canvas.width / dpr;
-        const ch = canvas.height / dpr;
+        const cw = canvas.clientWidth || 480;
+        const ch = canvas.clientHeight || 700;
         const cellSize = Math.floor(Math.min((cw - 140) / COLS, (ch - 20) / ROWS));
         const boardW = cellSize * COLS;
         const boardH = cellSize * ROWS;
@@ -811,14 +585,13 @@ export default function TetrisPage() {
     initGame();
   }, [initGame]);
 
-  // ─── Game Loop ─────────────────────────────────────────────────────────
+  // ─── PixiJS Game Loop ──────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let destroyed = false;
 
-    // Input handler
+    // Input handler (independent of renderer)
     inputRef.current = new InputHandler(canvas);
     inputRef.current.preventDefaults();
     inputRef.current.bindKeys({
@@ -840,93 +613,338 @@ export default function TetrisPage() {
     });
     inputRef.current.onTap(() => rotateCW());
 
+    // Resize canvas to fit parent
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
       const parent = canvas.parentElement;
       if (!parent) return;
       const pw = parent.clientWidth;
       const cw = Math.min(pw, 480);
       const ch = Math.min(cw * 1.6, 700);
-      canvas.width = cw * dpr;
-      canvas.height = ch * dpr;
       canvas.style.width = `${cw}px`;
       canvas.style.height = `${ch}px`;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.renderer.resize(cw, ch);
+      }
     };
     resize();
     window.addEventListener("resize", resize);
 
-    const loop = (timestamp: number) => {
-      if (!lastTimeRef.current) lastTimeRef.current = timestamp;
-      const dt = Math.min(timestamp - lastTimeRef.current, 50);
-      lastTimeRef.current = timestamp;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
 
-      const game = gameRef.current;
-      const anim = animRef.current;
-      if (!game) { rafRef.current = requestAnimationFrame(loop); return; }
+      const pixi = await loadPixi();
+      if (destroyed) return;
 
-      anim.time += dt / 1000;
+      const parent = canvas!.parentElement;
+      const pw = parent ? parent.clientWidth : 480;
+      const cw = Math.min(pw, 480);
+      const ch = Math.min(cw * 1.6, 700);
 
-      // Update shake
-      if (anim.shakeTime > 0) anim.shakeTime = Math.max(0, anim.shakeTime - dt);
+      const app = await createPixiApp({
+        canvas: canvas!,
+        width: cw,
+        height: ch,
+        backgroundColor: 0x0f0f0f,
+        antialias: true,
+      });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      // Smooth bg hue
-      anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.02);
+      // Graphics layer
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
 
-      // Update particles
-      particlesRef.current?.update(dt / 1000);
+      // Text pool container
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-      // Update score popups
-      let i = anim.scorePopups.length;
-      while (i-- > 0) {
-        anim.scorePopups[i].life -= dt / 1000 * 0.8;
-        if (anim.scorePopups[i].life <= 0) {
-          anim.scorePopups.splice(i, 1);
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // Pre-create text pool (70 objects)
+      for (let i = 0; i < 70; i++) makeText(`t${i}`, { fontSize: 12 });
+
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: {
+        fill?: string; fontSize?: number; fontWeight?: string;
+        ax?: number; ay?: number; alpha?: number;
+      }) => {
+        if (textIdx >= 70) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      const cn = hexToNum;
+
+      // ─── Ticker (render loop) ──────────────────────────────────────
+      app.ticker.add((ticker) => {
+        if (destroyed) return;
+
+        const dt = Math.min(ticker.deltaMS, 50);
+        const game = gameRef.current;
+        const anim = animRef.current;
+        if (!game) return;
+
+        // Reset graphics & text pool each frame
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        anim.time += dt / 1000;
+
+        // Update shake
+        if (anim.shakeTime > 0) anim.shakeTime = Math.max(0, anim.shakeTime - dt);
+
+        // Smooth bg hue
+        anim.bgHue = lerp(anim.bgHue, anim.targetBgHue, 0.02);
+
+        // Update particles
+        particlesRef.current?.update(dt / 1000);
+
+        // Update score popups
+        let si = anim.scorePopups.length;
+        while (si-- > 0) {
+          anim.scorePopups[si].life -= dt / 1000 * 0.8;
+          if (anim.scorePopups[si].life <= 0) {
+            anim.scorePopups.splice(si, 1);
+          }
         }
-      }
 
-      // Flash timer
-      if (anim.flashTime > 0) {
-        anim.flashTime = Math.max(0, anim.flashTime - dt);
-      }
+        // Flash timer
+        if (anim.flashTime > 0) {
+          anim.flashTime = Math.max(0, anim.flashTime - dt);
+        }
 
-      // Game logic update (only if not paused/over/flashing)
-      if (!game.over && !game.paused && anim.flashRows.length === 0) {
-        anim.dropTimer += dt;
-        const interval = getDropInterval(game.level);
+        // ─── Game logic update ─────────────────────────────────────
+        if (!game.over && !game.paused && anim.flashRows.length === 0) {
+          anim.dropTimer += dt;
+          const interval = getDropInterval(game.level);
 
-        if (anim.dropTimer >= interval) {
-          anim.dropTimer = 0;
-          const moved = { ...game.current, row: game.current.row + 1 };
-          if (isValid(game.board, moved)) {
-            game.current = moved;
-            anim.locking = false;
-            anim.lockTimer = 0;
-          } else {
-            // Start lock delay
-            if (!anim.locking) {
-              anim.locking = true;
+          if (anim.dropTimer >= interval) {
+            anim.dropTimer = 0;
+            const moved = { ...game.current, row: game.current.row + 1 };
+            if (isValid(game.board, moved)) {
+              game.current = moved;
+              anim.locking = false;
               anim.lockTimer = 0;
+            } else {
+              if (!anim.locking) {
+                anim.locking = true;
+                anim.lockTimer = 0;
+              }
+            }
+          }
+
+          if (anim.locking) {
+            anim.lockTimer += dt;
+            if (anim.lockTimer >= 500) {
+              lockPiece();
             }
           }
         }
 
-        // Lock delay
-        if (anim.locking) {
-          anim.lockTimer += dt;
-          if (anim.lockTimer >= 500) {
-            lockPiece();
+        // ─── Render with PixiJS ────────────────────────────────────
+        const w = app.renderer.width / (app.renderer.resolution || 1);
+        const h = app.renderer.height / (app.renderer.resolution || 1);
+
+        // Screen shake offset
+        let shakeX = 0, shakeY = 0;
+        if (anim.shakeTime > 0) {
+          const mag = anim.shakeIntensity * (anim.shakeTime / 500);
+          shakeX = (Math.random() - 0.5) * mag;
+          shakeY = (Math.random() - 0.5) * mag;
+        }
+        app.stage.x = shakeX;
+        app.stage.y = shakeY;
+
+        // Background gradient (approximate with two rects)
+        const hue = anim.bgHue;
+        const bgTop = hslToNum(hue, 10, 12);
+        const bgBot = hslToNum(hue, 10, 6);
+        g.rect(0, 0, w, h / 2).fill({ color: bgTop });
+        g.rect(0, h / 2, w, h / 2).fill({ color: bgBot });
+
+        // Layout calculations
+        const cellSize = Math.floor(Math.min((w - 140) / COLS, (h - 20) / ROWS));
+        const boardW = cellSize * COLS;
+        const boardH = cellSize * ROWS;
+        const boardX = Math.floor((w - boardW - 110) / 2);
+        const boardY = Math.floor((h - boardH) / 2);
+        const sideX = boardX + boardW + 12;
+
+        // Board background
+        g.roundRect(boardX - 4, boardY - 4, boardW + 8, boardH + 8, 6).fill({ color: 0x111111 });
+        g.roundRect(boardX - 4, boardY - 4, boardW + 8, boardH + 8, 6).stroke({ color: 0x333333, width: 1 });
+
+        // Grid lines
+        for (let r = 1; r < ROWS; r++) {
+          g.moveTo(boardX, boardY + r * cellSize)
+           .lineTo(boardX + boardW, boardY + r * cellSize)
+           .stroke({ color: 0xffffff, width: 0.5, alpha: 0.04 });
+        }
+        for (let c = 1; c < COLS; c++) {
+          g.moveTo(boardX + c * cellSize, boardY)
+           .lineTo(boardX + c * cellSize, boardY + boardH)
+           .stroke({ color: 0xffffff, width: 0.5, alpha: 0.04 });
+        }
+
+        // Draw placed blocks
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            const val = game.board[r][c];
+            if (val === 0) continue;
+            const color = INDEX_TO_COLOR[val] || "#888";
+            const bx = boardX + c * cellSize;
+            const by = boardY + r * cellSize;
+
+            // Flash effect for clearing rows
+            if (anim.flashRows.includes(r) && anim.flashTime > 0) {
+              const flashT = anim.flashTime / FLASH_DURATION;
+              const alpha = Math.sin(flashT * Math.PI * 3) * 0.5 + 0.5;
+              g.roundRect(bx + 1, by + 1, cellSize - 2, cellSize - 2, 3)
+               .fill({ color: 0xffffff, alpha });
+              continue;
+            }
+
+            // Block with lighter top
+            const lightColor = lightenHex(color, 30);
+            g.roundRect(bx + 1, by + 1, cellSize - 2, (cellSize - 2) / 2, 3)
+             .fill({ color: lightColor });
+            g.roundRect(bx + 1, by + 1 + (cellSize - 2) / 2, cellSize - 2, (cellSize - 2) / 2, 3)
+             .fill({ color: cn(color) });
+            g.roundRect(bx + 1, by + 1, cellSize - 2, cellSize - 2, 3)
+             .stroke({ color: 0xffffff, width: 0.5, alpha: 0.15 });
           }
         }
-      }
 
-      // Render
-      const dpr = window.devicePixelRatio || 1;
-      renderGame(ctx, canvas, game, anim, particlesRef.current, dpr);
+        // Draw ghost piece
+        if (!game.over && !game.paused) {
+          const ghostRow = getGhostRow(game.board, game.current);
+          const ghostBlocks = SHAPES[game.current.type][game.current.rotation].map(
+            ([r, c]) => [ghostRow + r, game.current.col + c]
+          );
+          const ghostColor = cn(PIECE_COLORS[game.current.type]);
+          for (const [r, c] of ghostBlocks) {
+            if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+              g.roundRect(boardX + c * cellSize + 1, boardY + r * cellSize + 1, cellSize - 2, cellSize - 2, 3)
+               .fill({ color: ghostColor, alpha: 0.2 });
+            }
+          }
+        }
 
-      rafRef.current = requestAnimationFrame(loop);
-    };
+        // Draw current piece
+        if (!game.over) {
+          const blocks = getBlocks(game.current);
+          const color = PIECE_COLORS[game.current.type];
+          for (const [r, c] of blocks) {
+            if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+              const bx = boardX + c * cellSize;
+              const by = boardY + r * cellSize;
+              const lightColor = lightenHex(color, 30);
+              g.roundRect(bx + 1, by + 1, cellSize - 2, (cellSize - 2) / 2, 3)
+               .fill({ color: lightColor });
+              g.roundRect(bx + 1, by + 1 + (cellSize - 2) / 2, cellSize - 2, (cellSize - 2) / 2, 3)
+               .fill({ color: cn(color) });
+              g.roundRect(bx + 1, by + 1, cellSize - 2, cellSize - 2, 3)
+               .stroke({ color: 0xffffff, width: 0.5, alpha: 0.15 });
+            }
+          }
+        }
 
-    rafRef.current = requestAnimationFrame(loop);
+        // ─── Side panel ────────────────────────────────────────────
+        const panelCellSize = Math.floor(cellSize * 0.7);
+
+        // Next piece preview
+        showText("NEXT", sideX, boardY + 4, { fill: "#aaaaaa", fontSize: 11, fontWeight: "bold" });
+        g.roundRect(sideX, boardY + 18, panelCellSize * 4 + 8, panelCellSize * 4 + 8, 6)
+         .fill({ color: 0x1a1a1a });
+        drawMiniPiecePixi(g, game.next, sideX + 4, boardY + 22, panelCellSize);
+
+        // Hold piece
+        showText("HOLD", sideX, boardY + panelCellSize * 4 + 36, { fill: "#aaaaaa", fontSize: 11, fontWeight: "bold" });
+        g.roundRect(sideX, boardY + panelCellSize * 4 + 50, panelCellSize * 4 + 8, panelCellSize * 4 + 8, 6)
+         .fill({ color: 0x1a1a1a });
+        if (game.hold) {
+          drawMiniPiecePixi(g, game.hold, sideX + 4, boardY + panelCellSize * 4 + 54, panelCellSize, game.holdUsed ? 0.4 : 1);
+        }
+
+        // Stats
+        const statsY = boardY + panelCellSize * 8 + 80;
+        showText("LEVEL", sideX, statsY, { fill: "#888888", fontSize: 10 });
+        showText(String(game.level), sideX, statsY + 14, { fill: "#3ea6ff", fontSize: 16, fontWeight: "bold" });
+        showText("LINES", sideX, statsY + 38, { fill: "#888888", fontSize: 10 });
+        showText(String(game.lines), sideX, statsY + 52, { fill: "#6bcb77", fontSize: 16, fontWeight: "bold" });
+
+        // ─── Particles (rendered as PixiJS rects) ──────────────────
+        const particles = particlesRef.current;
+        if (particles) {
+          const active = (particles as unknown as { active: { x: number; y: number; life: number; maxLife: number; color: string; size: number; rotation?: number; fadeMode?: string }[] }).active;
+          for (let pi = 0; pi < active.length; pi++) {
+            const p = active[pi];
+            const t = p.maxLife > 0 ? p.life / p.maxLife : 0;
+            const alpha = p.fadeMode === "ease" ? t * t : t;
+            if (alpha <= 0) continue;
+            g.rect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
+             .fill({ color: cn(p.color), alpha });
+          }
+        }
+
+        // Score popups
+        for (const sp of anim.scorePopups) {
+          const alpha = Math.max(0, sp.life);
+          const yOff = (1 - sp.life) * 40;
+          showText(`+${sp.value}`, sp.x, sp.y - yOff, {
+            fill: sp.combo > 1 ? "#ff6090" : "#ffd93d",
+            fontSize: sp.combo > 1 ? 18 : 14,
+            fontWeight: "bold",
+            ax: 0.5, ay: 0.5,
+            alpha,
+          });
+        }
+
+        // Pause overlay
+        if (game.paused && !game.over) {
+          g.rect(boardX, boardY, boardW, boardH).fill({ color: 0x000000, alpha: 0.6 });
+          showText("暂停", boardX + boardW / 2, boardY + boardH / 2, {
+            fill: "#ffffff", fontSize: 24, fontWeight: "bold", ax: 0.5, ay: 0.5,
+          });
+        }
+
+        // Game over overlay
+        if (game.over) {
+          g.rect(boardX, boardY, boardW, boardH).fill({ color: 0x0f0f0f, alpha: 0.75 });
+          showText("游戏结束", boardX + boardW / 2, boardY + boardH / 2 - 14, {
+            fill: "#ff4444", fontSize: 26, fontWeight: "bold", ax: 0.5, ay: 0.5,
+          });
+          showText(`得分: ${game.score}`, boardX + boardW / 2, boardY + boardH / 2 + 18, {
+            fill: "#aaaaaa", fontSize: 16, ax: 0.5, ay: 0.5,
+          });
+        }
+      });
+    }
+
+    initPixi();
 
     // Visibility change - auto pause
     const handleVisibility = () => {
@@ -938,10 +956,17 @@ export default function TetrisPage() {
     document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
+      destroyed = true;
       window.removeEventListener("resize", resize);
       document.removeEventListener("visibilitychange", handleVisibility);
       inputRef.current?.dispose();
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+      }
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
   }, [moveLeft, moveRight, softDrop, hardDrop, rotateCW, holdPiece, togglePause, lockPiece]);
 
@@ -1045,4 +1070,42 @@ export default function TetrisPage() {
       </main>
     </>
   );
+}
+
+// ─── PixiJS Helper: Draw mini piece in preview box ───────────────────────────
+function drawMiniPiecePixi(
+  g: PixiGraphics, type: PieceType, x: number, y: number, cellSize: number, alpha: number = 1,
+) {
+  const blocks = SHAPES[type][0];
+  const color = hexToNum(PIECE_COLORS[type]);
+  let minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+  for (const [r, c] of blocks) {
+    minR = Math.min(minR, r); maxR = Math.max(maxR, r);
+    minC = Math.min(minC, c); maxC = Math.max(maxC, c);
+  }
+  const pw = (maxC - minC + 1) * cellSize;
+  const ph = (maxR - minR + 1) * cellSize;
+  const ox = x + (cellSize * 4 - pw) / 2 - minC * cellSize;
+  const oy = y + (cellSize * 4 - ph) / 2 - minR * cellSize;
+  for (const [r, c] of blocks) {
+    const bx = ox + c * cellSize;
+    const by = oy + r * cellSize;
+    g.roundRect(bx + 1, by + 1, cellSize - 2, cellSize - 2, 2)
+     .fill({ color, alpha });
+  }
+}
+
+// ─── HSL to numeric color ────────────────────────────────────────────────────
+function hslToNum(h: number, s: number, l: number): number {
+  const sl = s / 100;
+  const ll = l / 100;
+  const a = sl * Math.min(ll, 1 - ll);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    return ll - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+  };
+  const r = Math.round(f(0) * 255);
+  const g = Math.round(f(8) * 255);
+  const b = Math.round(f(4) * 255);
+  return (r << 16) | (g << 8) | b;
 }

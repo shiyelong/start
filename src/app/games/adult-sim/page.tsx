@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { ageGate } from "@/lib/age-gate";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "adult-sim";
@@ -73,6 +75,21 @@ const ROLE_NAMES: Record<string, string> = {
 const ROLE_COLORS: Record<string, string> = {
   bartender: "#ff6b6b", waiter: "#51cf66", dj: "#845ef7", bouncer: "#339af0"
 };
+
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
+function hslToNum(h: number, s: number, l: number): number {
+  s /= 100; l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+  const r = Math.round(f(0) * 255);
+  const g = Math.round(f(8) * 255);
+  const b = Math.round(f(4) * 255);
+  return (r << 16) | (g << 8) | b;
+}
 
 function makeEmployeePool(): Employee[] {
   const names: Record<string, string[]> = {
@@ -166,9 +183,12 @@ function spawnGuest(state: GameState): Guest {
 export default function AdultSim() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
   const frameRef = useRef(0);
   const stateRef = useRef<GameState>(initState("normal"));
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
 
   const [blocked, setBlocked] = useState(false);
   const [phase, setPhase] = useState<Phase>("title");
@@ -281,7 +301,6 @@ export default function AdultSim() {
         const income = Math.floor(g.spending * (g.satisfaction / 50));
         s.dailyIncome += income;
         s.gold += income;
-        // Particle effect
         for (let p = 0; p < 3; p++) {
           s.particles.push({
             x: g.x, y: g.y,
@@ -311,7 +330,6 @@ export default function AdultSim() {
   // ─── End Day ───────────────────────────────────────────────────────────────
   const endDay = useCallback(() => {
     const s = stateRef.current;
-    // Calculate expenses
     const salaryTotal = s.employees.filter(e => e.hired).reduce((a, e) => a + e.salary, 0);
     const upkeep = s.upgrades.reduce((a, u) => a + u.level * 10, 0);
     s.dailyExpense = salaryTotal + upkeep;
@@ -319,7 +337,6 @@ export default function AdultSim() {
     s.totalIncome += s.dailyIncome;
     s.totalExpense += s.dailyExpense;
 
-    // Update reputation
     const avgSat = s.satisfaction;
     const hiredSkill = s.employees.filter(e => e.hired).reduce((a, e) => a + e.skill, 0);
     const upgLevel = s.upgrades.reduce((a, u) => a + u.level, 0);
@@ -327,7 +344,6 @@ export default function AdultSim() {
       s.reputation + Math.floor((avgSat - 50) / 10) + Math.floor(hiredSkill / 50) + Math.floor(upgLevel / 3) - 1
     ));
 
-    // Update satisfaction
     const satBase = 40;
     const satFromStaff = s.employees.filter(e => e.hired).reduce((a, e) => a + e.charm * 0.2 + e.skill * 0.15, 0);
     const satFromUpg = s.upgrades.reduce((a, u) => a + u.level * u.satisfactionBonus, 0);
@@ -335,7 +351,6 @@ export default function AdultSim() {
 
     s.score += s.dailyIncome + s.reputation;
 
-    // Random event
     if (Math.random() < 0.4) {
       const evt = EVENTS[Math.floor(Math.random() * EVENTS.length)];
       s.currentEvent = evt;
@@ -346,14 +361,12 @@ export default function AdultSim() {
 
     s.gameLog.push(`第${s.day}天结算: 收入+${s.dailyIncome} 支出-${s.dailyExpense}`);
 
-    // Check game over
     if (s.gold < -200) {
       setPhase("gameover");
       playSound("gameOver");
       return;
     }
 
-    // Check win (day 30)
     if (s.day >= 30) {
       setPhase("result");
       playSound("combo");
@@ -454,7 +467,6 @@ export default function AdultSim() {
     if (phaseRef.current === "title") return;
     if (phaseRef.current === "gameover" || phaseRef.current === "result") return;
 
-    // During night, click on guests for bonus
     if (phaseRef.current === "playing" && s.timeOfDay === "night") {
       for (let i = s.guests.length - 1; i >= 0; i--) {
         const g = s.guests[i];
@@ -515,180 +527,175 @@ export default function AdultSim() {
     }
   }, [playSound]);
 
-  // ─── Canvas Render Loop ────────────────────────────────────────────────────
+  // ─── PixiJS Render Loop ────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = CW * dpr;
-    canvas.height = CH * dpr;
-    canvas.style.width = `${CW}px`;
-    canvas.style.height = `${CH}px`;
+    let destroyed = false;
 
-    let lastTime = 0;
-    const targetInterval = 1000 / 60;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: CW, height: CH, backgroundColor: 0x0f0f0f, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-    const render = (timestamp: number) => {
-      const delta = timestamp - lastTime;
-      if (delta < targetInterval * 0.8) {
-        rafRef.current = requestAnimationFrame(render);
-        return;
-      }
-      lastTime = timestamp;
-      frameRef.current++;
+      const g = new pixi.Graphics();
+      app.stage.addChild(g);
+      pixiGfxRef.current = g;
 
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = BG;
-      ctx.fillRect(0, 0, CW, CH);
-      const s = stateRef.current;
-      const f = frameRef.current;
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
 
-      if (phaseRef.current === "title") {
-        drawTitle(ctx, f);
-      } else if (phaseRef.current === "playing") {
-        if (s.timeOfDay === "night") {
-          processNight();
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // Pre-create text pool (80 objects)
+      for (let i = 0; i < 80; i++) makeText(`t${i}`, { fontSize: 12 });
+
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => {
+        if (textIdx >= 80) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      const cn = hexToNum;
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        frameRef.current++;
+        g.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const s = stateRef.current;
+        const f = frameRef.current;
+        const p = phaseRef.current;
+
+        if (p === "title") {
+          drawTitle(g, showText, cn, f);
+        } else if (p === "playing") {
+          if (s.timeOfDay === "night") {
+            processNight();
+          }
+          drawPlaying(g, showText, cn, s, f);
+        } else if (p === "dayEnd") {
+          drawDayEnd(g, showText, cn, s, f);
+        } else if (p === "gameover") {
+          drawGameOver(g, showText, cn, s, f);
+        } else if (p === "result") {
+          drawResult(g, showText, cn, s, f);
         }
-        drawPlaying(ctx, s, f);
-      } else if (phaseRef.current === "dayEnd") {
-        drawDayEnd(ctx, s, f);
-      } else if (phaseRef.current === "gameover") {
-        drawGameOver(ctx, s, f);
-      } else if (phaseRef.current === "result") {
-        drawResult(ctx, s, f);
+      });
+    }
+
+    initPixi();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
       }
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(render);
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
+  }, [processNight]);
 
-    rafRef.current = requestAnimationFrame(render);
-    return () => { cancelAnimationFrame(rafRef.current); };
-  }, [phase, processNight]);
+  // ─── Draw Functions (PixiJS) ───────────────────────────────────────────────
+  type ShowTextFn = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => void;
+  type CnFn = (hex: string) => number;
 
-  // ─── Draw Functions ────────────────────────────────────────────────────────
-  function drawTitle(ctx: CanvasRenderingContext2D, f: number) {
-    // Background gradient effect
-    const grad = ctx.createLinearGradient(0, 0, 0, CH);
-    grad.addColorStop(0, "#0a0a1a");
-    grad.addColorStop(0.5, "#1a0a2e");
-    grad.addColorStop(1, "#0a0a1a");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, CW, CH);
+  function drawTitle(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, f: number) {
+    // Background gradient approximation
+    g.rect(0, 0, CW, CH).fill({ color: 0x0a0a1a });
+    g.rect(0, CH * 0.3, CW, CH * 0.4).fill({ color: 0x1a0a2e, alpha: 0.5 });
 
     // Animated stars
     for (let i = 0; i < 30; i++) {
       const sx = (i * 73 + f * 0.3) % CW;
       const sy = (i * 47 + f * 0.1) % CH;
       const alpha = 0.3 + 0.3 * Math.sin(f * 0.03 + i);
-      ctx.fillStyle = `rgba(62, 166, 255, ${alpha})`;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
-      ctx.fill();
+      g.circle(sx, sy, 1.5).fill({ color: cn(PRIMARY), alpha });
     }
 
     // Title
-    ctx.fillStyle = PRIMARY;
-    ctx.font = "bold 36px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("夜色酒吧", CW / 2, 160);
-
-    ctx.fillStyle = ACCENT;
-    ctx.font = "14px sans-serif";
-    ctx.fillText("NC-17 成人模拟经营", CW / 2, 190);
-
-    ctx.fillStyle = "#888";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("雇佣员工 / 装修升级 / 经营夜店 / 事件挑战", CW / 2, 215);
+    showText("夜色酒吧", CW / 2, 160, { fill: PRIMARY, fontSize: 36, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+    showText("NC-17 成人模拟经营", CW / 2, 190, { fill: ACCENT, fontSize: 14, ax: 0.5, ay: 0.5 });
+    showText("雇佣员工 / 装修升级 / 经营夜店 / 事件挑战", CW / 2, 215, { fill: "#888888", fontSize: 12, ax: 0.5, ay: 0.5 });
 
     // Pulsing prompt
     const glow = 0.5 + 0.5 * Math.sin(f * 0.05);
-    ctx.fillStyle = `rgba(62, 166, 255, ${glow})`;
-    ctx.font = "16px sans-serif";
-    ctx.fillText("选择难度开始经营", CW / 2, 280);
+    showText("选择难度开始经营", CW / 2, 280, { fill: PRIMARY, fontSize: 16, ax: 0.5, ay: 0.5, alpha: glow });
 
     // Difficulty buttons
-    const diffs: { label: string; key: Difficulty; y: number; color: string }[] = [
-      { label: "简单模式", key: "easy", y: 320, color: GREEN },
-      { label: "普通模式", key: "normal", y: 360, color: PRIMARY },
-      { label: "困难模式", key: "hard", y: 400, color: RED },
+    const diffs: { label: string; y: number; color: string }[] = [
+      { label: "简单模式", y: 320, color: GREEN },
+      { label: "普通模式", y: 360, color: PRIMARY },
+      { label: "困难模式", y: 400, color: RED },
     ];
     for (const d of diffs) {
-      ctx.fillStyle = "#1a1a2e";
-      ctx.beginPath();
-      ctx.roundRect(CW / 2 - 70, d.y, 140, 32, 8);
-      ctx.fill();
-      ctx.strokeStyle = d.color;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(CW / 2 - 70, d.y, 140, 32, 8);
-      ctx.stroke();
-      ctx.fillStyle = d.color;
-      ctx.font = "bold 14px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(d.label, CW / 2, d.y + 21);
+      g.roundRect(CW / 2 - 70, d.y, 140, 32, 8).fill({ color: 0x1a1a2e });
+      g.roundRect(CW / 2 - 70, d.y, 140, 32, 8).stroke({ color: cn(d.color), width: 1 });
+      showText(d.label, CW / 2, d.y + 16, { fill: d.color, fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5 });
     }
   }
 
-  function drawPlaying(ctx: CanvasRenderingContext2D, s: GameState, f: number) {
+  function drawPlaying(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, f: number) {
     // Top stats bar
-    ctx.fillStyle = PANEL_BG;
-    ctx.beginPath();
-    ctx.roundRect(8, 8, CW - 16, 44, 8);
-    ctx.fill();
+    g.roundRect(8, 8, CW - 16, 44, 8).fill({ color: cn(PANEL_BG) });
 
-    ctx.font = "bold 12px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillStyle = GOLD_COLOR;
-    ctx.fillText(`金币: ${s.gold}`, 16, 26);
-    ctx.fillStyle = PRIMARY;
-    ctx.fillText(`第${s.day}天`, 120, 26);
-    ctx.fillStyle = "#ff6b6b";
-    ctx.fillText(`声望: ${s.reputation}`, 190, 26);
-    ctx.fillStyle = GREEN;
-    ctx.fillText(`满意: ${s.satisfaction}%`, 280, 26);
-    ctx.fillStyle = "#aaa";
-    ctx.font = "11px sans-serif";
-    ctx.fillText(`分数: ${s.score}`, 380, 26);
+    showText(`金币: ${s.gold}`, 16, 26, { fill: GOLD_COLOR, fontSize: 12, fontWeight: "bold", ay: 0.5 });
+    showText(`第${s.day}天`, 120, 26, { fill: PRIMARY, fontSize: 12, fontWeight: "bold", ay: 0.5 });
+    showText(`声望: ${s.reputation}`, 190, 26, { fill: "#ff6b6b", fontSize: 12, fontWeight: "bold", ay: 0.5 });
+    showText(`满意: ${s.satisfaction}%`, 280, 26, { fill: GREEN, fontSize: 12, fontWeight: "bold", ay: 0.5 });
+    showText(`分数: ${s.score}`, 380, 26, { fill: "#aaaaaa", fontSize: 11, ay: 0.5 });
 
     // Time indicator
-    ctx.fillStyle = s.timeOfDay === "night" ? "#845ef7" : "#ffa94d";
-    ctx.font = "bold 11px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(s.timeOfDay === "night" ? "夜间营业中" : "白天准备中", 16, 44);
+    showText(s.timeOfDay === "night" ? "夜间营业中" : "白天准备中", 16, 44, {
+      fill: s.timeOfDay === "night" ? "#845ef7" : "#ffa94d", fontSize: 11, fontWeight: "bold", ay: 0.5
+    });
 
     if (s.timeOfDay === "night") {
       // Night progress bar
-      ctx.fillStyle = "#333";
-      ctx.beginPath();
-      ctx.roundRect(130, 36, 200, 10, 4);
-      ctx.fill();
-      ctx.fillStyle = ACCENT;
-      ctx.beginPath();
-      ctx.roundRect(130, 36, s.nightProgress * 2, 10, 4);
-      ctx.fill();
-      ctx.fillStyle = "#aaa";
-      ctx.font = "10px sans-serif";
-      ctx.fillText(`${Math.floor(s.nightProgress)}%`, 340, 45);
-
-      ctx.fillStyle = GOLD_COLOR;
-      ctx.font = "11px sans-serif";
-      ctx.textAlign = "right";
-      ctx.fillText(`今日收入: +${s.dailyIncome}`, CW - 16, 44);
+      g.roundRect(130, 36, 200, 10, 4).fill({ color: 0x333333 });
+      g.roundRect(130, 36, s.nightProgress * 2, 10, 4).fill({ color: cn(ACCENT) });
+      showText(`${Math.floor(s.nightProgress)}%`, 340, 41, { fill: "#aaaaaa", fontSize: 10, ay: 0.5 });
+      showText(`今日收入: +${s.dailyIncome}`, CW - 16, 44, { fill: GOLD_COLOR, fontSize: 11, ax: 1, ay: 0.5 });
     }
 
     // Main area
     if (s.timeOfDay === "day") {
-      drawDayPanel(ctx, s, f);
+      drawDayPanel(g, showText, cn, s, f);
     } else {
-      drawNightScene(ctx, s, f);
+      drawNightScene(g, showText, cn, s, f);
     }
   }
 
-  function drawDayPanel(ctx: CanvasRenderingContext2D, s: GameState, f: number) {
+  function drawDayPanel(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, f: number) {
     // Tab buttons
     const tabs: { key: "staff" | "upgrade" | "info"; label: string; x: number }[] = [
       { key: "staff", label: "员工管理", x: 16 },
@@ -697,207 +704,120 @@ export default function AdultSim() {
     ];
     for (const t of tabs) {
       const active = s.selectedTab === t.key;
-      ctx.fillStyle = active ? PRIMARY : "#2a2a4e";
-      ctx.beginPath();
-      ctx.roundRect(t.x, 58, 140, 28, 6);
-      ctx.fill();
-      ctx.fillStyle = active ? "#000" : "#aaa";
-      ctx.font = active ? "bold 12px sans-serif" : "12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(t.label, t.x + 70, 76);
+      g.roundRect(t.x, 58, 140, 28, 6).fill({ color: active ? cn(PRIMARY) : 0x2a2a4e });
+      showText(t.label, t.x + 70, 72, {
+        fill: active ? "#000000" : "#aaaaaa",
+        fontSize: 12, fontWeight: active ? "bold" : "normal", ax: 0.5, ay: 0.5
+      });
     }
 
     const panelY = 94;
-    ctx.fillStyle = CARD_BG;
-    ctx.beginPath();
-    ctx.roundRect(8, panelY, CW - 16, CH - panelY - 50, 8);
-    ctx.fill();
+    g.roundRect(8, panelY, CW - 16, CH - panelY - 50, 8).fill({ color: cn(CARD_BG) });
 
     if (s.selectedTab === "staff") {
-      drawStaffPanel(ctx, s, panelY);
+      drawStaffPanel(g, showText, cn, s, panelY);
     } else if (s.selectedTab === "upgrade") {
-      drawUpgradePanel(ctx, s, panelY);
+      drawUpgradePanel(g, showText, cn, s, panelY);
     } else {
-      drawInfoPanel(ctx, s, panelY, f);
+      drawInfoPanel(g, showText, cn, s, panelY, f);
     }
 
     // Start Night button
-    ctx.fillStyle = s.hiredCount > 0 ? ACCENT : "#333";
-    ctx.beginPath();
-    ctx.roundRect(CW / 2 - 80, CH - 42, 160, 34, 8);
-    ctx.fill();
-    ctx.fillStyle = s.hiredCount > 0 ? "#fff" : "#666";
-    ctx.font = "bold 14px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("开始营业", CW / 2, CH - 20);
+    g.roundRect(CW / 2 - 80, CH - 42, 160, 34, 8).fill({ color: s.hiredCount > 0 ? cn(ACCENT) : 0x333333 });
+    showText("开始营业", CW / 2, CH - 25, {
+      fill: s.hiredCount > 0 ? "#ffffff" : "#666666",
+      fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5
+    });
   }
 
-  function drawStaffPanel(ctx: CanvasRenderingContext2D, s: GameState, panelY: number) {
+  function drawStaffPanel(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, panelY: number) {
     const employees = s.employees;
     const perPage = 6;
     let y = panelY + 10;
 
-    ctx.fillStyle = "#aaa";
-    ctx.font = "11px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(`已雇佣: ${s.hiredCount}/16  |  点击下方按钮雇佣/查看`, 20, y + 8);
+    showText(`已雇佣: ${s.hiredCount}/16  |  点击下方按钮雇佣/查看`, 20, y + 8, { fill: "#aaaaaa", fontSize: 11, ay: 0.5 });
     y += 22;
 
     for (let i = 0; i < Math.min(perPage, employees.length); i++) {
       const emp = employees[i];
       const ey = y + i * 56;
-      const roleColor = ROLE_COLORS[emp.role] || "#aaa";
+      const roleColor = ROLE_COLORS[emp.role] || "#aaaaaa";
 
-      ctx.fillStyle = emp.hired ? "#1a2a1a" : PANEL_BG;
-      ctx.beginPath();
-      ctx.roundRect(16, ey, CW - 32, 50, 6);
-      ctx.fill();
-      ctx.strokeStyle = emp.hired ? GREEN : "#333";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(16, ey, CW - 32, 50, 6);
-      ctx.stroke();
+      g.roundRect(16, ey, CW - 32, 50, 6).fill({ color: emp.hired ? 0x1a2a1a : cn(PANEL_BG) });
+      g.roundRect(16, ey, CW - 32, 50, 6).stroke({ color: emp.hired ? cn(GREEN) : 0x333333, width: 1 });
 
       // Role badge
-      ctx.fillStyle = roleColor;
-      ctx.beginPath();
-      ctx.roundRect(24, ey + 6, 50, 16, 4);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 10px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(ROLE_NAMES[emp.role], 49, ey + 18);
+      g.roundRect(24, ey + 6, 50, 16, 4).fill({ color: cn(roleColor) });
+      showText(ROLE_NAMES[emp.role], 49, ey + 14, { fill: "#ffffff", fontSize: 10, fontWeight: "bold", ax: 0.5, ay: 0.5 });
 
       // Name
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 12px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(emp.name, 82, ey + 18);
+      showText(emp.name, 82, ey + 18, { fill: "#ffffff", fontSize: 12, fontWeight: "bold", ay: 0.5 });
 
       // Stats
-      ctx.fillStyle = "#888";
-      ctx.font = "10px sans-serif";
-      ctx.fillText(`魅力:${emp.charm} 技能:${emp.skill} 体力:${emp.stamina}`, 24, ey + 38);
+      showText(`魅力:${emp.charm} 技能:${emp.skill} 体力:${emp.stamina}`, 24, ey + 38, { fill: "#888888", fontSize: 10, ay: 0.5 });
 
       // Salary / hire button
       if (emp.hired) {
-        ctx.fillStyle = GREEN;
-        ctx.font = "bold 11px sans-serif";
-        ctx.textAlign = "right";
-        ctx.fillText("已雇佣", CW - 28, ey + 18);
-        ctx.fillStyle = "#888";
-        ctx.font = "10px sans-serif";
-        ctx.fillText(`日薪: ${emp.salary}`, CW - 28, ey + 36);
+        showText("已雇佣", CW - 28, ey + 18, { fill: GREEN, fontSize: 11, fontWeight: "bold", ax: 1, ay: 0.5 });
+        showText(`日薪: ${emp.salary}`, CW - 28, ey + 36, { fill: "#888888", fontSize: 10, ax: 1, ay: 0.5 });
       } else {
         const cost = Math.floor(emp.salary * 3 * diffCostMult(s.difficulty));
-        ctx.fillStyle = s.gold >= cost ? "#2a4a2a" : "#3a2a2a";
-        ctx.beginPath();
-        ctx.roundRect(CW - 90, ey + 8, 56, 30, 6);
-        ctx.fill();
-        ctx.fillStyle = s.gold >= cost ? GREEN : RED;
-        ctx.font = "bold 10px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("雇佣", CW - 62, ey + 20);
-        ctx.fillStyle = GOLD_COLOR;
-        ctx.font = "9px sans-serif";
-        ctx.fillText(`${cost}G`, CW - 62, ey + 33);
+        g.roundRect(CW - 90, ey + 8, 56, 30, 6).fill({ color: s.gold >= cost ? 0x2a4a2a : 0x3a2a2a });
+        showText("雇佣", CW - 62, ey + 17, { fill: s.gold >= cost ? GREEN : RED, fontSize: 10, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+        showText(`${cost}G`, CW - 62, ey + 30, { fill: GOLD_COLOR, fontSize: 9, ax: 0.5, ay: 0.5 });
       }
     }
   }
 
-  function drawUpgradePanel(ctx: CanvasRenderingContext2D, s: GameState, panelY: number) {
+  function drawUpgradePanel(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, panelY: number) {
     let y = panelY + 12;
-    ctx.fillStyle = "#aaa";
-    ctx.font = "11px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("升级设施提升客人满意度和收入", 20, y + 8);
+    showText("升级设施提升客人满意度和收入", 20, y + 8, { fill: "#aaaaaa", fontSize: 11, ay: 0.5 });
     y += 24;
 
-    const catIcons: Record<string, string> = {
-      lighting: "灯", sound: "音", vip: "V", stage: "台"
-    };
-    const catColors: Record<string, string> = {
-      lighting: "#ffa94d", sound: "#845ef7", vip: "#ff6b6b", stage: "#51cf66"
-    };
+    const catIcons: Record<string, string> = { lighting: "灯", sound: "音", vip: "V", stage: "台" };
+    const catColors: Record<string, string> = { lighting: "#ffa94d", sound: "#845ef7", vip: "#ff6b6b", stage: "#51cf66" };
 
     for (let i = 0; i < s.upgrades.length; i++) {
       const upg = s.upgrades[i];
       const uy = y + i * 80;
-      const catColor = catColors[upg.category] || "#aaa";
+      const catColor = catColors[upg.category] || "#aaaaaa";
 
-      ctx.fillStyle = PANEL_BG;
-      ctx.beginPath();
-      ctx.roundRect(16, uy, CW - 32, 72, 6);
-      ctx.fill();
-      ctx.strokeStyle = catColor;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(16, uy, CW - 32, 72, 6);
-      ctx.stroke();
+      g.roundRect(16, uy, CW - 32, 72, 6).fill({ color: cn(PANEL_BG) });
+      g.roundRect(16, uy, CW - 32, 72, 6).stroke({ color: cn(catColor), width: 1 });
 
       // Category icon
-      ctx.fillStyle = catColor;
-      ctx.beginPath();
-      ctx.arc(42, uy + 24, 14, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(catIcons[upg.category] || "?", 42, uy + 28);
+      g.circle(42, uy + 24, 14).fill({ color: cn(catColor) });
+      showText(catIcons[upg.category] || "?", 42, uy + 24, { fill: "#ffffff", fontSize: 12, fontWeight: "bold", ax: 0.5, ay: 0.5 });
 
       // Name and level
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 13px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(upg.name, 66, uy + 20);
+      showText(upg.name, 66, uy + 20, { fill: "#ffffff", fontSize: 13, fontWeight: "bold", ay: 0.5 });
 
       // Level bar
       for (let l = 0; l < upg.maxLevel; l++) {
-        ctx.fillStyle = l < upg.level ? catColor : "#333";
-        ctx.beginPath();
-        ctx.roundRect(66 + l * 24, uy + 28, 18, 8, 3);
-        ctx.fill();
+        g.roundRect(66 + l * 24, uy + 28, 18, 8, 3).fill({ color: l < upg.level ? cn(catColor) : 0x333333 });
       }
-      ctx.fillStyle = "#888";
-      ctx.font = "10px sans-serif";
-      ctx.fillText(`Lv.${upg.level}/${upg.maxLevel}`, 66 + upg.maxLevel * 24 + 8, uy + 36);
+      showText(`Lv.${upg.level}/${upg.maxLevel}`, 66 + upg.maxLevel * 24 + 8, uy + 32, { fill: "#888888", fontSize: 10, ay: 0.5 });
 
       // Desc
-      ctx.fillStyle = "#666";
-      ctx.font = "10px sans-serif";
-      ctx.fillText(`${upg.desc} | 满意+${upg.satisfactionBonus} 收入+${upg.incomeBonus}/级`, 24, uy + 58);
+      showText(`${upg.desc} | 满意+${upg.satisfactionBonus} 收入+${upg.incomeBonus}/级`, 24, uy + 58, { fill: "#666666", fontSize: 10, ay: 0.5 });
 
       // Upgrade button
       if (upg.level < upg.maxLevel) {
         const cost = Math.floor(upg.cost * (1 + upg.level * 0.5) * diffCostMult(s.difficulty));
-        ctx.fillStyle = s.gold >= cost ? "#2a2a5e" : "#3a2a2a";
-        ctx.beginPath();
-        ctx.roundRect(CW - 90, uy + 12, 56, 44, 6);
-        ctx.fill();
-        ctx.fillStyle = s.gold >= cost ? PRIMARY : RED;
-        ctx.font = "bold 10px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("升级", CW - 62, uy + 30);
-        ctx.fillStyle = GOLD_COLOR;
-        ctx.font = "9px sans-serif";
-        ctx.fillText(`${cost}G`, CW - 62, uy + 46);
+        g.roundRect(CW - 90, uy + 12, 56, 44, 6).fill({ color: s.gold >= cost ? 0x2a2a5e : 0x3a2a2a });
+        showText("升级", CW - 62, uy + 27, { fill: s.gold >= cost ? PRIMARY : RED, fontSize: 10, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+        showText(`${cost}G`, CW - 62, uy + 43, { fill: GOLD_COLOR, fontSize: 9, ax: 0.5, ay: 0.5 });
       } else {
-        ctx.fillStyle = GREEN;
-        ctx.font = "bold 11px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("满级", CW - 62, uy + 38);
+        showText("满级", CW - 62, uy + 34, { fill: GREEN, fontSize: 11, fontWeight: "bold", ax: 0.5, ay: 0.5 });
       }
     }
   }
 
-  function drawInfoPanel(ctx: CanvasRenderingContext2D, s: GameState, panelY: number, f: number) {
+  function drawInfoPanel(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, panelY: number, _f: number) {
     let y = panelY + 16;
     const lx = 24, rx = 260;
 
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 13px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("经营概况", lx, y);
+    showText("经营概况", lx, y, { fill: "#ffffff", fontSize: 13, fontWeight: "bold", ay: 0.5 });
     y += 24;
 
     const info = [
@@ -914,54 +834,33 @@ export default function AdultSim() {
     for (let i = 0; i < info.length; i++) {
       const ix = i % 2 === 0 ? lx : rx;
       const iy = y + Math.floor(i / 2) * 30;
-      ctx.fillStyle = "#888";
-      ctx.font = "11px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(info[i].label, ix, iy);
-      ctx.fillStyle = info[i].color;
-      ctx.font = "bold 12px sans-serif";
-      ctx.fillText(info[i].value, ix + 80, iy);
+      showText(info[i].label, ix, iy, { fill: "#888888", fontSize: 11, ay: 0.5 });
+      showText(info[i].value, ix + 80, iy, { fill: info[i].color, fontSize: 12, fontWeight: "bold", ay: 0.5 });
     }
 
     // Game log
     y += Math.ceil(info.length / 2) * 30 + 16;
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 12px sans-serif";
-    ctx.fillText("经营日志", lx, y);
+    showText("经营日志", lx, y, { fill: "#ffffff", fontSize: 12, fontWeight: "bold", ay: 0.5 });
     y += 16;
 
     const logs = s.gameLog.slice(-8);
     for (let i = 0; i < logs.length; i++) {
-      ctx.fillStyle = logs[i].startsWith("[事件]") ? "#ffa94d" : "#666";
-      ctx.font = "10px sans-serif";
-      ctx.fillText(logs[i].length > 40 ? logs[i].slice(0, 40) + "..." : logs[i], lx, y + i * 14);
+      const logText = logs[i].length > 40 ? logs[i].slice(0, 40) + "..." : logs[i];
+      showText(logText, lx, y + i * 14, { fill: logs[i].startsWith("[事件]") ? "#ffa94d" : "#666666", fontSize: 10, ay: 0.5 });
     }
   }
 
-  function drawNightScene(ctx: CanvasRenderingContext2D, s: GameState, f: number) {
+  function drawNightScene(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, f: number) {
     // Night background
-    const nightGrad = ctx.createLinearGradient(0, 56, 0, CH);
-    nightGrad.addColorStop(0, "#0a0a2e");
-    nightGrad.addColorStop(1, "#1a0a3e");
-    ctx.fillStyle = nightGrad;
-    ctx.fillRect(0, 56, CW, CH - 56);
+    g.rect(0, 56, CW, CH - 56).fill({ color: 0x0a0a2e });
+    g.rect(0, CH * 0.5, CW, CH * 0.5).fill({ color: 0x1a0a3e, alpha: 0.5 });
 
     // Bar counter
-    ctx.fillStyle = "#2a1a3e";
-    ctx.beginPath();
-    ctx.roundRect(20, 60, CW - 40, 90, 8);
-    ctx.fill();
-    ctx.strokeStyle = ACCENT;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect(20, 60, CW - 40, 90, 8);
-    ctx.stroke();
+    g.roundRect(20, 60, CW - 40, 90, 8).fill({ color: 0x2a1a3e });
+    g.roundRect(20, 60, CW - 40, 90, 8).stroke({ color: cn(ACCENT), width: 1 });
 
     // Bar label
-    ctx.fillStyle = ACCENT;
-    ctx.font = "bold 12px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("吧台区域", CW / 2, 80);
+    showText("吧台区域", CW / 2, 80, { fill: ACCENT, fontSize: 12, fontWeight: "bold", ax: 0.5, ay: 0.5 });
 
     // Hired staff icons on bar
     const hired = s.employees.filter(e => e.hired);
@@ -969,21 +868,12 @@ export default function AdultSim() {
       const ex = 50 + (i % 8) * 52;
       const ey = 95 + Math.floor(i / 8) * 28;
       const roleColor = ROLE_COLORS[hired[i].role];
-      ctx.fillStyle = roleColor;
-      ctx.beginPath();
-      ctx.arc(ex, ey, 10, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 8px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(ROLE_NAMES[hired[i].role][0], ex, ey + 3);
+      g.circle(ex, ey, 10).fill({ color: cn(roleColor) });
+      showText(ROLE_NAMES[hired[i].role][0], ex, ey, { fill: "#ffffff", fontSize: 8, fontWeight: "bold", ax: 0.5, ay: 0.5 });
     }
 
     // Dance floor area
-    ctx.fillStyle = "#1a0a2e";
-    ctx.beginPath();
-    ctx.roundRect(20, 155, CW - 40, CH - 210, 8);
-    ctx.fill();
+    g.roundRect(20, 155, CW - 40, CH - 210, 8).fill({ color: 0x1a0a2e });
 
     // Animated floor lights
     const lightUpg = s.upgrades.find(u => u.id === "light");
@@ -993,10 +883,7 @@ export default function AdultSim() {
         const lx = 40 + (i * 67 + f * 2) % (CW - 80);
         const ly = 170 + (i * 43 + f) % (CH - 240);
         const hue = (f * 2 + i * 60) % 360;
-        ctx.fillStyle = `hsla(${hue}, 80%, 60%, 0.15)`;
-        ctx.beginPath();
-        ctx.arc(lx, ly, 20 + lightLevel * 5, 0, Math.PI * 2);
-        ctx.fill();
+        g.circle(lx, ly, 20 + lightLevel * 5).fill({ color: hslToNum(hue, 80, 60), alpha: 0.15 });
       }
     }
 
@@ -1006,110 +893,64 @@ export default function AdultSim() {
     if (soundLevel > 0) {
       for (let i = 0; i < soundLevel; i++) {
         const wave = (f * 0.05 + i * 0.5) % 3;
-        ctx.strokeStyle = `rgba(132, 94, 247, ${0.3 - wave * 0.1})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(CW / 2, CH - 80, 30 + wave * 40, 0, Math.PI * 2);
-        ctx.stroke();
+        const alpha = 0.3 - wave * 0.1;
+        if (alpha > 0) {
+          g.circle(CW / 2, CH - 80, 30 + wave * 40).stroke({ color: 0x845ef7, width: 1, alpha });
+        }
       }
     }
 
     // VIP area indicator
     const vipUpg = s.upgrades.find(u => u.id === "vip");
     if (vipUpg && vipUpg.level > 0) {
-      ctx.fillStyle = "rgba(255, 107, 107, 0.1)";
-      ctx.beginPath();
-      ctx.roundRect(CW - 120, 160, 95, 60, 6);
-      ctx.fill();
-      ctx.strokeStyle = "#ff6b6b";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(CW - 120, 160, 95, 60, 6);
-      ctx.stroke();
-      ctx.fillStyle = "#ff6b6b";
-      ctx.font = "bold 9px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(`VIP Lv.${vipUpg.level}`, CW - 72, 178);
+      g.roundRect(CW - 120, 160, 95, 60, 6).fill({ color: 0xff6b6b, alpha: 0.1 });
+      g.roundRect(CW - 120, 160, 95, 60, 6).stroke({ color: 0xff6b6b, width: 1 });
+      showText(`VIP Lv.${vipUpg.level}`, CW - 72, 178, { fill: "#ff6b6b", fontSize: 9, fontWeight: "bold", ax: 0.5, ay: 0.5 });
     }
 
     // Stage indicator
     const stageUpg = s.upgrades.find(u => u.id === "stage");
     if (stageUpg && stageUpg.level > 0) {
-      ctx.fillStyle = "rgba(81, 207, 102, 0.1)";
-      ctx.beginPath();
-      ctx.roundRect(25, 160, 95, 60, 6);
-      ctx.fill();
-      ctx.strokeStyle = "#51cf66";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(25, 160, 95, 60, 6);
-      ctx.stroke();
-      ctx.fillStyle = "#51cf66";
-      ctx.font = "bold 9px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(`舞台 Lv.${stageUpg.level}`, 72, 178);
+      g.roundRect(25, 160, 95, 60, 6).fill({ color: 0x51cf66, alpha: 0.1 });
+      g.roundRect(25, 160, 95, 60, 6).stroke({ color: 0x51cf66, width: 1 });
+      showText(`舞台 Lv.${stageUpg.level}`, 72, 178, { fill: "#51cf66", fontSize: 9, fontWeight: "bold", ax: 0.5, ay: 0.5 });
     }
 
     // Draw guests
-    for (const g of s.guests) {
-      // Guest body
-      ctx.fillStyle = g.color;
-      ctx.beginPath();
-      ctx.arc(g.x, g.y, g.isVIP ? 10 : 7, 0, Math.PI * 2);
-      ctx.fill();
+    for (const guest of s.guests) {
+      const guestColor = guest.color.startsWith("#") ? cn(guest.color) : hslToNum(
+        parseInt(guest.color.match(/\d+/)?.[0] || "0"), 60, 65
+      );
+      g.circle(guest.x, guest.y, guest.isVIP ? 10 : 7).fill({ color: guestColor });
 
-      if (g.isVIP) {
-        // VIP crown
-        ctx.fillStyle = GOLD_COLOR;
-        ctx.font = "bold 8px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("V", g.x, g.y - 14);
-        // Glow
-        ctx.strokeStyle = `rgba(255, 215, 0, ${0.3 + 0.2 * Math.sin(f * 0.1)})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(g.x, g.y, 14, 0, Math.PI * 2);
-        ctx.stroke();
+      if (guest.isVIP) {
+        showText("V", guest.x, guest.y - 14, { fill: GOLD_COLOR, fontSize: 8, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+        const glowAlpha = 0.3 + 0.2 * Math.sin(f * 0.1);
+        g.circle(guest.x, guest.y, 14).stroke({ color: cn(GOLD_COLOR), width: 2, alpha: glowAlpha });
       }
 
       // Satisfaction indicator
-      const satColor = g.satisfaction > 70 ? GREEN : g.satisfaction > 40 ? "#ffa94d" : RED;
-      ctx.fillStyle = satColor;
-      ctx.fillRect(g.x - 6, g.y + 10, (g.satisfaction / 100) * 12, 2);
+      const satColor = guest.satisfaction > 70 ? GREEN : guest.satisfaction > 40 ? "#ffa94d" : RED;
+      g.rect(guest.x - 6, guest.y + 10, (guest.satisfaction / 100) * 12, 2).fill({ color: cn(satColor) });
     }
 
     // Draw particles
-    for (const p of s.particles) {
-      const alpha = p.life / p.maxLife;
-      ctx.fillStyle = p.color.startsWith("#")
-        ? p.color + Math.floor(alpha * 255).toString(16).padStart(2, "0")
-        : p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
-      ctx.fill();
+    for (const pt of s.particles) {
+      const alpha = pt.life / pt.maxLife;
+      g.circle(pt.x, pt.y, pt.size * alpha).fill({ color: cn(pt.color), alpha });
     }
 
     // Guest count
-    ctx.fillStyle = "#aaa";
-    ctx.font = "11px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(`客人: ${s.guests.length}/${s.maxGuests}`, 24, CH - 42);
+    showText(`客人: ${s.guests.length}/${s.maxGuests}`, 24, CH - 42, { fill: "#aaaaaa", fontSize: 11, ay: 0.5 });
 
     // Hint
-    ctx.fillStyle = "#555";
-    ctx.font = "10px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("点击客人可获得额外小费", CW / 2, CH - 10);
+    showText("点击客人可获得额外小费", CW / 2, CH - 10, { fill: "#555555", fontSize: 10, ax: 0.5, ay: 0.5 });
   }
 
-  function drawDayEnd(ctx: CanvasRenderingContext2D, s: GameState, f: number) {
-    ctx.fillStyle = "#0a0a1a";
-    ctx.fillRect(0, 0, CW, CH);
+  function drawDayEnd(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, f: number) {
+    g.rect(0, 0, CW, CH).fill({ color: 0x0a0a1a });
 
-    ctx.fillStyle = PRIMARY;
-    ctx.font = "bold 24px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(`第${s.day}天 结算`, CW / 2, 80);
+    showText(`第${s.day}天 结算`, CW / 2, 80, { fill: PRIMARY, fontSize: 24, fontWeight: "bold", ax: 0.5, ay: 0.5 });
 
     const items = [
       { label: "今日收入", value: `+${s.dailyIncome}G`, color: GREEN },
@@ -1123,106 +964,55 @@ export default function AdultSim() {
 
     for (let i = 0; i < items.length; i++) {
       const iy = 120 + i * 36;
-      ctx.fillStyle = PANEL_BG;
-      ctx.beginPath();
-      ctx.roundRect(80, iy, CW - 160, 28, 6);
-      ctx.fill();
-      ctx.fillStyle = "#aaa";
-      ctx.font = "12px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(items[i].label, 96, iy + 19);
-      ctx.fillStyle = items[i].color;
-      ctx.font = "bold 13px sans-serif";
-      ctx.textAlign = "right";
-      ctx.fillText(items[i].value, CW - 96, iy + 19);
+      g.roundRect(80, iy, CW - 160, 28, 6).fill({ color: cn(PANEL_BG) });
+      showText(items[i].label, 96, iy + 14, { fill: "#aaaaaa", fontSize: 12, ay: 0.5 });
+      showText(items[i].value, CW - 96, iy + 14, { fill: items[i].color, fontSize: 13, fontWeight: "bold", ax: 1, ay: 0.5 });
     }
 
     // Event
     if (s.currentEvent) {
       const ey = 120 + items.length * 36 + 16;
-      ctx.fillStyle = "#2a1a0a";
-      ctx.beginPath();
-      ctx.roundRect(40, ey, CW - 80, 60, 8);
-      ctx.fill();
-      ctx.strokeStyle = "#ffa94d";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(40, ey, CW - 80, 60, 8);
-      ctx.stroke();
-      ctx.fillStyle = "#ffa94d";
-      ctx.font = "bold 12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(`[事件] ${s.currentEvent.title}`, CW / 2, ey + 20);
-      ctx.fillStyle = "#ccc";
-      ctx.font = "11px sans-serif";
-      ctx.fillText(s.currentEvent.desc, CW / 2, ey + 38);
-      ctx.fillStyle = s.currentEvent.goldChange >= 0 ? GREEN : RED;
-      ctx.font = "bold 11px sans-serif";
-      ctx.fillText(s.currentEvent.effect, CW / 2, ey + 54);
+      g.roundRect(40, ey, CW - 80, 60, 8).fill({ color: 0x2a1a0a });
+      g.roundRect(40, ey, CW - 80, 60, 8).stroke({ color: 0xffa94d, width: 1 });
+      showText(`[事件] ${s.currentEvent.title}`, CW / 2, ey + 16, { fill: "#ffa94d", fontSize: 12, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+      showText(s.currentEvent.desc, CW / 2, ey + 34, { fill: "#cccccc", fontSize: 11, ax: 0.5, ay: 0.5 });
+      showText(s.currentEvent.effect, CW / 2, ey + 50, {
+        fill: s.currentEvent.goldChange >= 0 ? GREEN : RED,
+        fontSize: 11, fontWeight: "bold", ax: 0.5, ay: 0.5
+      });
     }
 
     // Next day button
     const glow = 0.7 + 0.3 * Math.sin(f * 0.06);
-    ctx.fillStyle = `rgba(62, 166, 255, ${glow})`;
-    ctx.beginPath();
-    ctx.roundRect(CW / 2 - 70, CH - 60, 140, 36, 8);
-    ctx.fill();
-    ctx.fillStyle = "#000";
-    ctx.font = "bold 14px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("进入下一天", CW / 2, CH - 36);
+    g.roundRect(CW / 2 - 70, CH - 60, 140, 36, 8).fill({ color: cn(PRIMARY), alpha: glow });
+    showText("进入下一天", CW / 2, CH - 42, { fill: "#000000", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5 });
   }
 
-  function drawGameOver(ctx: CanvasRenderingContext2D, s: GameState, f: number) {
-    ctx.fillStyle = "rgba(10, 0, 0, 0.95)";
-    ctx.fillRect(0, 0, CW, CH);
+  function drawGameOver(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, f: number) {
+    g.rect(0, 0, CW, CH).fill({ color: 0x0a0000, alpha: 0.95 });
 
-    ctx.fillStyle = RED;
-    ctx.font = "bold 32px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("经营失败", CW / 2, CH / 2 - 60);
-
-    ctx.fillStyle = "#aaa";
-    ctx.font = "14px sans-serif";
-    ctx.fillText("酒吧资金链断裂，被迫关门！", CW / 2, CH / 2 - 25);
-
-    ctx.fillStyle = GOLD_COLOR;
-    ctx.font = "bold 16px sans-serif";
-    ctx.fillText(`最终分数: ${s.score}`, CW / 2, CH / 2 + 10);
-
-    ctx.fillStyle = "#888";
-    ctx.font = "12px sans-serif";
-    ctx.fillText(`经营了 ${s.day} 天 | 累计收入 ${s.totalIncome}G`, CW / 2, CH / 2 + 40);
+    showText("经营失败", CW / 2, CH / 2 - 60, { fill: RED, fontSize: 32, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+    showText("酒吧资金链断裂，被迫关门！", CW / 2, CH / 2 - 25, { fill: "#aaaaaa", fontSize: 14, ax: 0.5, ay: 0.5 });
+    showText(`最终分数: ${s.score}`, CW / 2, CH / 2 + 10, { fill: GOLD_COLOR, fontSize: 16, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+    showText(`经营了 ${s.day} 天 | 累计收入 ${s.totalIncome}G`, CW / 2, CH / 2 + 40, { fill: "#888888", fontSize: 12, ax: 0.5, ay: 0.5 });
 
     const glow = 0.5 + 0.5 * Math.sin(f * 0.05);
-    ctx.fillStyle = `rgba(62, 166, 255, ${glow})`;
-    ctx.font = "14px sans-serif";
-    ctx.fillText("点击重新开始", CW / 2, CH / 2 + 80);
+    showText("点击重新开始", CW / 2, CH / 2 + 80, { fill: PRIMARY, fontSize: 14, ax: 0.5, ay: 0.5, alpha: glow });
   }
 
-  function drawResult(ctx: CanvasRenderingContext2D, s: GameState, f: number) {
-    ctx.fillStyle = "#0a0a1a";
-    ctx.fillRect(0, 0, CW, CH);
+  function drawResult(g: PixiGraphics, showText: ShowTextFn, cn: CnFn, s: GameState, f: number) {
+    g.rect(0, 0, CW, CH).fill({ color: 0x0a0a1a });
 
     // Stars
     for (let i = 0; i < 40; i++) {
       const sx = (i * 73 + f * 0.5) % CW;
       const sy = (i * 47 + f * 0.2) % CH;
       const alpha = 0.3 + 0.3 * Math.sin(f * 0.03 + i);
-      ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
-      ctx.fill();
+      g.circle(sx, sy, 1.5).fill({ color: cn(GOLD_COLOR), alpha });
     }
 
-    ctx.fillStyle = GOLD_COLOR;
-    ctx.font = "bold 28px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("经营成功！", CW / 2, 100);
-
-    ctx.fillStyle = PRIMARY;
-    ctx.font = "16px sans-serif";
-    ctx.fillText("你成功经营了30天！", CW / 2, 135);
+    showText("经营成功！", CW / 2, 100, { fill: GOLD_COLOR, fontSize: 28, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+    showText("你成功经营了30天！", CW / 2, 135, { fill: PRIMARY, fontSize: 16, ax: 0.5, ay: 0.5 });
 
     const results = [
       { label: "最终分数", value: `${s.score}`, color: GOLD_COLOR },
@@ -1230,40 +1020,24 @@ export default function AdultSim() {
       { label: "累计支出", value: `${s.totalExpense}G`, color: RED },
       { label: "最终声望", value: `${s.reputation}/100`, color: "#ff6b6b" },
       { label: "员工数量", value: `${s.hiredCount}人`, color: "#845ef7" },
-      { label: "难度", value: s.difficulty === "easy" ? "简单" : s.difficulty === "hard" ? "困难" : "普通", color: "#aaa" },
+      { label: "难度", value: s.difficulty === "easy" ? "简单" : s.difficulty === "hard" ? "困难" : "普通", color: "#aaaaaa" },
     ];
 
     for (let i = 0; i < results.length; i++) {
       const iy = 170 + i * 34;
-      ctx.fillStyle = PANEL_BG;
-      ctx.beginPath();
-      ctx.roundRect(100, iy, CW - 200, 28, 6);
-      ctx.fill();
-      ctx.fillStyle = "#aaa";
-      ctx.font = "12px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(results[i].label, 116, iy + 19);
-      ctx.fillStyle = results[i].color;
-      ctx.font = "bold 13px sans-serif";
-      ctx.textAlign = "right";
-      ctx.fillText(results[i].value, CW - 116, iy + 19);
+      g.roundRect(100, iy, CW - 200, 28, 6).fill({ color: cn(PANEL_BG) });
+      showText(results[i].label, 116, iy + 14, { fill: "#aaaaaa", fontSize: 12, ay: 0.5 });
+      showText(results[i].value, CW - 116, iy + 14, { fill: results[i].color, fontSize: 13, fontWeight: "bold", ax: 1, ay: 0.5 });
     }
 
     // Rating
     const rating = s.score > 3000 ? "S" : s.score > 2000 ? "A" : s.score > 1000 ? "B" : "C";
-    const ratingColor = rating === "S" ? GOLD_COLOR : rating === "A" ? GREEN : rating === "B" ? PRIMARY : "#888";
-    ctx.fillStyle = ratingColor;
-    ctx.font = "bold 48px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(rating, CW / 2, CH - 80);
-    ctx.fillStyle = "#aaa";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("评级", CW / 2, CH - 60);
+    const ratingColor = rating === "S" ? GOLD_COLOR : rating === "A" ? GREEN : rating === "B" ? PRIMARY : "#888888";
+    showText(rating, CW / 2, CH - 80, { fill: ratingColor, fontSize: 48, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+    showText("评级", CW / 2, CH - 52, { fill: "#aaaaaa", fontSize: 12, ax: 0.5, ay: 0.5 });
 
     const glow = 0.5 + 0.5 * Math.sin(f * 0.05);
-    ctx.fillStyle = `rgba(62, 166, 255, ${glow})`;
-    ctx.font = "14px sans-serif";
-    ctx.fillText("点击重新开始", CW / 2, CH - 25);
+    showText("点击重新开始", CW / 2, CH - 25, { fill: PRIMARY, fontSize: 14, ax: 0.5, ay: 0.5, alpha: glow });
   }
 
   // ─── HTML Button Handlers ──────────────────────────────────────────────────
