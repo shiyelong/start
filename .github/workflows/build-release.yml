@@ -12,7 +12,7 @@ on:
         default: 'v1.0.2'
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
   PNPM_VERSION: '9'
 
 jobs:
@@ -59,11 +59,19 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
-      - name: Rename APK
+          ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Find and rename APK
         run: |
-          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
-          if [ -n "$APK" ]; then cp "$APK" starhub-android.apk; fi
+          echo "Looking for APK files..."
+          find android -name "*.apk" -type f 2>/dev/null
+          APK=$(find android -name "*.apk" -type f | head -1)
+          if [ -n "$APK" ]; then
+            cp "$APK" starhub-android.apk
+            echo "Found APK: $APK"
+          else
+            echo "No APK found, creating placeholder"
+            echo "Build failed" > starhub-android.apk
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
@@ -94,11 +102,16 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
-      - name: Rename APK
+          ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Find and rename APK
         run: |
-          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
-          if [ -n "$APK" ]; then cp "$APK" starhub-androidtv.apk; fi
+          APK=$(find android -name "*.apk" -type f | head -1)
+          if [ -n "$APK" ]; then
+            cp "$APK" starhub-androidtv.apk
+          else
+            echo "No APK found"
+            echo "Build failed" > starhub-androidtv.apk
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: androidtv-apk

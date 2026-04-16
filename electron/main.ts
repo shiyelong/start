@@ -76,7 +76,7 @@ function createMainWindow(): BrowserWindow {
 
   // Minimize to tray instead of closing (Windows behavior)
   win.on('close', (e) => {
-    if (!app.isQuitting) {
+    if (!isQuitting) {
       e.preventDefault();
       win.hide();
     }
@@ -135,7 +135,7 @@ function createTray(): Tray {
     {
       label: '退出',
       click: () => {
-        app.isQuitting = true;
+        isQuitting = true;
         app.quit();
       },
     },
@@ -232,13 +232,7 @@ async function checkForUpdates(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 // Extend the App type to include our custom property
-declare module 'electron' {
-  interface App {
-    isQuitting: boolean;
-  }
-}
-
-app.isQuitting = false;
+let isQuitting = false;
 
 app.whenReady().then(() => {
   mainWindow = createMainWindow();
@@ -268,7 +262,7 @@ app.on('window-all-closed', () => {
 
 // Clean up before quit
 app.on('before-quit', () => {
-  app.isQuitting = true;
+  isQuitting = true;
   globalShortcut.unregisterAll();
 });
 
