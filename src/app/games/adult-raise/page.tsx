@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { ageGate } from "@/lib/age-gate";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "adult-raise";
@@ -177,7 +179,6 @@ function getEndingText(char: CharacterDef, ending: EndingType): string {
 export default function AdultRaise() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
   const frameRef = useRef(0);
 
   const [blocked, setBlocked] = useState(false);
@@ -447,44 +448,302 @@ export default function AdultRaise() {
     return () => window.removeEventListener("keydown", onKey);
   }, [performAction, dismissEvent, selectChar]);
 
-  // ─── Canvas Render ─────────────────────────────────────────────────────────
+  // ─── Canvas Render (PixiJS) ─────────────────────────────────────────────────
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
+    let destroyed = false;
 
-    const render = () => {
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = BG;
-      ctx.fillRect(0, 0, W, H);
-      const s = stateRef.current;
-      frameRef.current++;
-      const f = frameRef.current;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0f0f0f, antialias: true });
+      if (destroyed) { app.destroy(); return; }
+      pixiAppRef.current = app;
 
-      if (s.phase === "title") {
-        renderTitle(ctx, f);
-      } else if (s.phase === "playing") {
-        renderPlaying(ctx, s.gameState, f);
-      } else if (s.phase === "event" && s.currentEvent) {
-        renderPlaying(ctx, s.gameState, f);
-        renderEvent(ctx, s.currentEvent, s.gameState, f);
-      } else if (s.phase === "ending") {
-        renderEnding(ctx, s.endingChar, s.endingType, s.gameState, f);
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
+
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
+
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // 预创建文字对象
+      for (let i = 0; i < 60; i++) makeText(`t${i}`, { fontSize: 12 });
+
+      const colorToNum = (hex: string): number => {
+        if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+        return 0xffffff;
+      };
+
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => {
+        if (textIdx >= 60) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      const gfxRect = (color: string | number, x: number, y: number, w: number, h: number, alpha = 1) => {
+        gfx.rect(x, y, w, h).fill({ color: typeof color === "string" ? colorToNum(color) : color, alpha });
+      };
+
+      const gfxRoundRect = (color: string | number, x: number, y: number, w: number, h: number, r: number, alpha = 1) => {
+        gfx.roundRect(x, y, w, h, r).fill({ color: typeof color === "string" ? colorToNum(color) : color, alpha });
+      };
+
+      const gfxCircle = (color: string | number, x: number, y: number, radius: number, alpha = 1) => {
+        gfx.circle(x, y, radius).fill({ color: typeof color === "string" ? colorToNum(color) : color, alpha });
+      };
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        frameRef.current++;
+        const f = frameRef.current;
+        const s = stateRef.current;
+        gfx.clear();
+        texts.forEach(t => { t.visible = false; });
+        textIdx = 0;
+
+        // 背景
+        gfxRect(BG, 0, 0, W, H);
+
+        if (s.phase === "title") {
+          // Title screen
+          gfxRect("#1a0a2e", 0, 0, W, H * 0.5);
+          gfxRect(BG, 0, H * 0.5, W, H * 0.5);
+
+          // Floating hearts (simplified)
+          for (let i = 0; i < 8; i++) {
+            const hx = (W * 0.1 + i * W * 0.12 + Math.sin(f * 0.02 + i) * 20) % W;
+            const hy = (H * 0.2 + Math.sin(f * 0.015 + i * 1.5) * 40 + i * 30) % H;
+            const size = 6 + Math.sin(f * 0.03 + i) * 3;
+            gfxCircle("#ff6b9d", hx, hy, size, 0.15 + 0.1 * Math.sin(f * 0.04 + i));
+          }
+
+          const glow = 0.7 + 0.3 * Math.sin(f * 0.04);
+          showText("心动物语", W / 2, H / 2 - 95, { fill: "#ff6b9d", fontSize: 36, fontWeight: "bold", ax: 0.5, alpha: glow });
+          showText("NC-17 成人养成", W / 2, H / 2 - 58, { fill: "#ff4757", fontSize: 12, ax: 0.5 });
+          showText("30天恋爱养成 / 3位可攻略角色 / 多结局", W / 2, H / 2 - 33, { fill: "#aaaaaa", fontSize: 13, ax: 0.5 });
+
+          for (let i = 0; i < 3; i++) {
+            const ch = CHARACTERS[i];
+            const cx = W / 2 - 100 + i * 100;
+            const cy = H / 2 + 40;
+            const bob = Math.sin(f * 0.03 + i * 2) * 4;
+            gfxCircle(ch.color, cx, cy + bob, 28, 0.13);
+            gfx.circle(cx, cy + bob, 28).stroke({ color: colorToNum(ch.color), width: 1.5, alpha: 0.4 });
+            showText(ch.name, cx, cy + bob, { fill: ch.color, fontSize: 20, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            showText(ch.personality, cx, cy + bob + 25, { fill: "#888888", fontSize: 10, ax: 0.5, ay: 0.5 });
+          }
+
+          const promptAlpha = 0.5 + 0.5 * Math.sin(f * 0.06);
+          showText("选择难度开始游戏", W / 2, H / 2 + 110, { fill: "#3ea6ff", fontSize: 14, ax: 0.5, alpha: promptAlpha });
+        }
+
+        if (s.phase === "playing" || (s.phase === "event" && s.currentEvent)) {
+          const gs = s.gameState;
+          const char = CHARACTERS[gs.selectedChar];
+
+          // Top bar
+          gfxRect("#1a1a2e", 0, 0, W, 42);
+          showText(`第 ${gs.day}/${MAX_DAYS} 天`, 15, 4, { fontWeight: "bold", fontSize: 13 });
+          const timeLabel = gs.timeOfDay === "morning" ? "早晨" : gs.timeOfDay === "afternoon" ? "下午" : "夜晚";
+          const timeColor = gs.timeOfDay === "morning" ? "#ffa502" : gs.timeOfDay === "afternoon" ? "#3ea6ff" : "#a55eea";
+          showText(timeLabel, 15, 22, { fill: timeColor, fontSize: 12 });
+          showText(`${gs.score} 分`, W - 15, 4, { fill: "#f0b90b", fontSize: 12, fontWeight: "bold", ax: 1 });
+          const diffLabel = gs.difficulty === "easy" ? "简单" : gs.difficulty === "normal" ? "普通" : "困难";
+          const diffColor = gs.difficulty === "easy" ? "#20bf6b" : gs.difficulty === "normal" ? "#3ea6ff" : "#ff4757";
+          showText(diffLabel, W - 15, 22, { fill: diffColor, fontSize: 10, ax: 1 });
+
+          // Character tabs
+          const tabW = (W - 40) / 3;
+          for (let i = 0; i < 3; i++) {
+            const ch = CHARACTERS[i];
+            const tx = 20 + i * tabW;
+            const selected = i === gs.selectedChar;
+            gfxRoundRect(selected ? ch.color : "#151515", tx, 50, tabW - 4, 24, 6, selected ? 0.2 : 1);
+            if (selected) gfx.roundRect(tx, 50, tabW - 4, 24, 6).stroke({ color: colorToNum(ch.color), width: 1.5 });
+            showText(ch.name, tx + (tabW - 4) / 2, 58, { fill: selected ? ch.color : "#666666", fontSize: 11, fontWeight: selected ? "bold" : "normal", ax: 0.5, ay: 0.5 });
+          }
+
+          // Character display area
+          const charY = 85;
+          gfxRoundRect(char.color, 15, charY, W - 30, 100, 8, 0.04);
+          gfx.roundRect(15, charY, W - 30, 100, 8).stroke({ color: colorToNum(char.color), width: 1, alpha: 0.19 });
+
+          const bob = Math.sin(f * 0.03) * 3;
+          gfxCircle(char.color, 60, charY + 45 + bob, 30, 0.19);
+          showText(char.name, 60, charY + 45 + bob, { fill: char.color, fontSize: 24, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText(`性格: ${char.personality}`, 105, charY + 14, { fill: "#cccccc", fontSize: 12 });
+          showText(char.desc, 105, charY + 32, { fill: "#888888", fontSize: 11 });
+
+          // Affection bar
+          const aff = gs.affection[gs.selectedChar];
+          showText("亲密度", 105, charY + 50, { fill: "#666666", fontSize: 10 });
+          gfxRoundRect("#222222", 155, charY + 52, 150, 10, 5);
+          if (aff > 0) gfxRoundRect(char.color, 155, charY + 52, 150 * (aff / MAX_AFFECTION), 10, 5);
+          showText(`${aff}/${MAX_AFFECTION}`, W - 25, charY + 52, { fontSize: 10, fontWeight: "bold", ax: 1 });
+
+          const stageLabel = aff >= 80 ? "热恋" : aff >= 60 ? "暧昧" : aff >= 40 ? "好感" : aff >= 20 ? "认识" : "陌生";
+          const stageColor = aff >= 80 ? "#ff4757" : aff >= 60 ? "#ff6b9d" : aff >= 40 ? "#ffa502" : aff >= 20 ? "#3ea6ff" : "#666666";
+          showText(stageLabel, 105, charY + 72, { fill: stageColor, fontSize: 10 });
+
+          // Stats bar
+          const statsY = 195;
+          gfxRoundRect("#1a1a1a", 15, statsY, W - 30, 40, 6);
+          const statItems = [
+            { label: "魅力", value: gs.stats.charm, color: "#ffa502" },
+            { label: "智慧", value: gs.stats.wisdom, color: "#3ea6ff" },
+            { label: "体力", value: gs.stats.stamina, color: "#20bf6b" },
+            { label: "金钱", value: gs.stats.money, color: "#f0b90b" },
+          ];
+          const statW = (W - 50) / 4;
+          for (let i = 0; i < 4; i++) {
+            const sx = 25 + i * statW;
+            showText(`${statItems[i].value}`, sx + statW / 2, statsY + 6, { fill: statItems[i].color, fontSize: 13, fontWeight: "bold", ax: 0.5 });
+            showText(statItems[i].label, sx + statW / 2, statsY + 22, { fill: "#666666", fontSize: 9, ax: 0.5 });
+          }
+
+          // Day progress
+          const progY = 245;
+          gfxRoundRect("#222222", 15, progY, W - 30, 6, 3);
+          if (gs.day > 0) gfxRoundRect(ACCENT, 15, progY, (W - 30) * (gs.day / MAX_DAYS), 6, 3);
+          showText(`剩余 ${MAX_DAYS - gs.day + 1} 天 / 键盘 1-4 选择行动`, W / 2, progY + 12, { fill: "#555555", fontSize: 10, ax: 0.5 });
+
+          // Action section
+          showText("选择行动", 15, 275, { fill: "#888888", fontSize: 11, fontWeight: "bold" });
+          const actionColors = ["#ff6b9d", "#a55eea", "#3ea6ff", "#f0b90b"];
+          for (let i = 0; i < ACTIONS.length; i++) {
+            const a = ACTIONS[i];
+            const mult = DIFF_MULT[gs.difficulty];
+            const staCost = Math.floor(a.staminaCost * mult.stamina);
+            const monCost = Math.floor(a.moneyCost * mult.cost);
+            const canDo = a.type === "work" || (gs.stats.stamina >= staCost && gs.stats.money >= monCost);
+            const bx = 15, by = 295 + i * 38;
+            gfxRoundRect(canDo ? "#1a1a2e" : "#111111", bx, by, W - 30, 32, 6);
+            gfx.roundRect(bx, by, W - 30, 32, 6).stroke({ color: colorToNum(canDo ? actionColors[i] : "#222222"), width: 1, alpha: canDo ? 0.33 : 1 });
+            gfxCircle(canDo ? actionColors[i] : "#444444", bx + 18, by + 16, 8);
+            showText(`${i + 1}`, bx + 18, by + 16, { fill: "#0f0f0f", fontSize: 9, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            showText(a.label, bx + 34, by + 6, { fill: canDo ? "#ffffff" : "#555555", fontSize: 12, fontWeight: "bold" });
+            if (a.type === "work") {
+              showText(`体力-${staCost}  金钱+${a.statGain.money}`, bx + 34, by + 20, { fill: canDo ? "#888888" : "#444444", fontSize: 10 });
+            } else {
+              const isFav = a.type === char.favoriteAction;
+              const affGain = Math.floor(a.baseAffection * (isFav ? 1.5 : 1) * mult.affection);
+              showText(`体力-${staCost}${monCost > 0 ? `  金钱-${monCost}` : ""}  亲密+${affGain}${isFav ? " (喜欢!)" : ""}`, bx + 34, by + 20, { fill: canDo ? "#888888" : "#444444", fontSize: 10 });
+            }
+            if (!canDo) gfxRoundRect(0x000000, bx, by, W - 30, 32, 6, 0.3);
+          }
+
+          // Event log
+          const logY = 460;
+          for (let i = 0; i < Math.min(3, gs.eventLog.length); i++) {
+            showText(gs.eventLog[i], 15, logY + i * 14, { fill: "#444444", fontSize: 10 });
+          }
+
+          // Event overlay
+          if (s.phase === "event" && s.currentEvent) {
+            const ev = s.currentEvent;
+            const evChar = CHARACTERS[ev.charId];
+            gfxRect(0x000000, 0, 0, W, H, 0.8);
+            const cardX = 30, cardY = 80, cardW = W - 60, cardH = 320;
+            gfxRoundRect("#1a1a2e", cardX, cardY, cardW, cardH, 12);
+            gfx.roundRect(cardX, cardY, cardW, cardH, 12).stroke({ color: colorToNum(evChar.color), width: 2, alpha: 0.53 });
+            showText(ev.title, W / 2, cardY + 58, { fill: evChar.color, fontSize: 18, fontWeight: "bold", ax: 0.5 });
+            showText(`与 ${evChar.name} 的特别事件`, W / 2, cardY + 83, { fill: "#aaaaaa", fontSize: 12, ax: 0.5 });
+            // Simplified text (no word wrap in PixiJS text objects)
+            showText(ev.text.slice(0, 30), W / 2, cardY + 118, { fill: "#dddddd", fontSize: 13, ax: 0.5 });
+            if (ev.text.length > 30) showText(ev.text.slice(30, 60), W / 2, cardY + 140, { fill: "#dddddd", fontSize: 13, ax: 0.5 });
+            if (ev.text.length > 60) showText(ev.text.slice(60, 90), W / 2, cardY + 162, { fill: "#dddddd", fontSize: 13, ax: 0.5 });
+            showText(`亲密度 +${ev.affectionBonus}`, W / 2, cardY + 210, { fill: evChar.color, fontSize: 12, fontWeight: "bold", ax: 0.5 });
+            const contAlpha = 0.5 + 0.5 * Math.sin(f * 0.06);
+            showText("点击继续", W / 2, cardY + cardH - 28, { fill: "#aaaaaa", fontSize: 12, ax: 0.5, alpha: contAlpha });
+          }
+        }
+
+        if (s.phase === "ending") {
+          const gs = s.gameState;
+          const char = s.endingChar;
+          const ending = s.endingType;
+          const bgColor = ending === "good" ? "#1a0a2e" : ending === "normal" ? "#151515" : "#0a0a0a";
+          gfxRect(bgColor, 0, 0, W, H);
+
+          if (ending === "good") {
+            for (let i = 0; i < 15; i++) {
+              const px = (i * 37 + f * 0.5) % W;
+              const py = (i * 23 + f * 0.3) % H;
+              gfxCircle(char.color, px, py, 4 + Math.sin(f * 0.03 + i) * 2, 0.12);
+            }
+          }
+
+          const endLabel = ending === "good" ? "完美结局" : ending === "normal" ? "普通结局" : "遗憾结局";
+          const endColor = ending === "good" ? "#ff6b9d" : ending === "normal" ? "#ffa502" : "#666666";
+          showText(endLabel, W / 2, 62, { fill: endColor, fontSize: 28, fontWeight: "bold", ax: 0.5 });
+
+          const bob = Math.sin(f * 0.03) * 5;
+          gfxCircle(char.color, W / 2, 150 + bob, 40, 0.19);
+          showText(char.name, W / 2, 150 + bob, { fill: char.color, fontSize: 30, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+          const text = getEndingText(char, ending);
+          showText(text.slice(0, 25), W / 2, 210, { fill: "#cccccc", fontSize: 14, ax: 0.5 });
+          if (text.length > 25) showText(text.slice(25, 50), W / 2, 234, { fill: "#cccccc", fontSize: 14, ax: 0.5 });
+          if (text.length > 50) showText(text.slice(50, 75), W / 2, 258, { fill: "#cccccc", fontSize: 14, ax: 0.5 });
+
+          const sumY = 310;
+          gfxRoundRect("#1a1a2e", 40, sumY, W - 80, 120, 8);
+          gfx.roundRect(40, sumY, W - 80, 120, 8).stroke({ color: colorToNum(char.color), width: 1, alpha: 0.27 });
+          showText("游戏总结", W / 2, sumY + 10, { fill: "#aaaaaa", fontSize: 12, fontWeight: "bold", ax: 0.5 });
+          showText(`最终亲密度: ${gs.affection[char.id]}/${MAX_AFFECTION}`, W / 2, sumY + 35, { fill: "#888888", fontSize: 11, ax: 0.5 });
+          showText(`总分: ${gs.score}`, W / 2, sumY + 55, { fill: "#888888", fontSize: 11, ax: 0.5 });
+          showText(`魅力${gs.stats.charm} / 智慧${gs.stats.wisdom}`, W / 2, sumY + 75, { fill: "#888888", fontSize: 11, ax: 0.5 });
+
+          const pa = 0.5 + 0.5 * Math.sin(f * 0.06);
+          showText("点击下方按钮重新开始", W / 2, H - 38, { fill: "#3ea6ff", fontSize: 13, ax: 0.5, alpha: pa });
+        }
+      });
+    }
+
+    initPixi();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+        pixiGfxRef.current = null;
+        pixiTextsRef.current.clear();
+        pixiInitRef.current = false;
       }
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(render);
     };
-
-    rafRef.current = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
   // ─── Canvas Click ──────────────────────────────────────────────────────────
@@ -665,513 +924,3 @@ export default function AdultRaise() {
   );
 }
 
-// ─── Canvas Render Functions ─────────────────────────────────────────────────
-
-function renderTitle(ctx: CanvasRenderingContext2D, f: number) {
-  // Background gradient effect
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, "#1a0a2e");
-  grad.addColorStop(1, BG);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
-
-  // Floating hearts
-  for (let i = 0; i < 8; i++) {
-    const x = (W * 0.1 + i * W * 0.12 + Math.sin(f * 0.02 + i) * 20) % W;
-    const y = (H * 0.2 + Math.sin(f * 0.015 + i * 1.5) * 40 + i * 30) % H;
-    const size = 6 + Math.sin(f * 0.03 + i) * 3;
-    const alpha = 0.15 + 0.1 * Math.sin(f * 0.04 + i);
-    ctx.fillStyle = `rgba(255, 107, 157, ${alpha})`;
-    drawHeart(ctx, x, y, size);
-  }
-
-  // Title
-  ctx.textAlign = "center";
-  const glow = 0.7 + 0.3 * Math.sin(f * 0.04);
-  ctx.fillStyle = `rgba(255, 107, 157, ${glow})`;
-  ctx.font = "bold 36px sans-serif";
-  ctx.fillText("心动物语", W / 2, H / 2 - 80);
-
-  ctx.fillStyle = "#ff4757";
-  ctx.font = "12px sans-serif";
-  ctx.fillText("NC-17 成人养成", W / 2, H / 2 - 50);
-
-  ctx.fillStyle = "#aaa";
-  ctx.font = "13px sans-serif";
-  ctx.fillText("30天恋爱养成 / 3位可攻略角色 / 多结局", W / 2, H / 2 - 25);
-
-  // Character previews
-  for (let i = 0; i < 3; i++) {
-    const ch = CHARACTERS[i];
-    const cx = W / 2 - 100 + i * 100;
-    const cy = H / 2 + 40;
-    const bob = Math.sin(f * 0.03 + i * 2) * 4;
-
-    // Character circle
-    ctx.fillStyle = `${ch.color}22`;
-    ctx.beginPath();
-    ctx.arc(cx, cy + bob, 28, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = `${ch.color}66`;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Character initial
-    ctx.fillStyle = ch.color;
-    ctx.font = "bold 20px sans-serif";
-    ctx.fillText(ch.name, cx, cy + bob + 7);
-
-    // Personality
-    ctx.fillStyle = "#888";
-    ctx.font = "10px sans-serif";
-    ctx.fillText(ch.personality, cx, cy + bob + 25);
-  }
-
-  // Prompt
-  const promptAlpha = 0.5 + 0.5 * Math.sin(f * 0.06);
-  ctx.fillStyle = `rgba(62, 166, 255, ${promptAlpha})`;
-  ctx.font = "14px sans-serif";
-  ctx.fillText("选择难度开始游戏", W / 2, H / 2 + 110);
-}
-
-function renderPlaying(ctx: CanvasRenderingContext2D, gs: GameState, f: number) {
-  const char = CHARACTERS[gs.selectedChar];
-
-  // Top bar: Day / Time
-  ctx.fillStyle = "#1a1a2e";
-  ctx.fillRect(0, 0, W, 42);
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 13px sans-serif";
-  ctx.fillText(`第 ${gs.day}/${MAX_DAYS} 天`, 15, 18);
-
-  const timeLabel = gs.timeOfDay === "morning" ? "早晨" : gs.timeOfDay === "afternoon" ? "下午" : "夜晚";
-  const timeColor = gs.timeOfDay === "morning" ? "#ffa502" : gs.timeOfDay === "afternoon" ? "#3ea6ff" : "#a55eea";
-  ctx.fillStyle = timeColor;
-  ctx.font = "12px sans-serif";
-  ctx.fillText(timeLabel, 15, 34);
-
-  // Score
-  ctx.textAlign = "right";
-  ctx.fillStyle = "#f0b90b";
-  ctx.font = "bold 12px sans-serif";
-  ctx.fillText(`${gs.score} 分`, W - 15, 18);
-
-  // Difficulty badge
-  const diffLabel = gs.difficulty === "easy" ? "简单" : gs.difficulty === "normal" ? "普通" : "困难";
-  const diffColor = gs.difficulty === "easy" ? "#20bf6b" : gs.difficulty === "normal" ? "#3ea6ff" : "#ff4757";
-  ctx.fillStyle = diffColor;
-  ctx.font = "10px sans-serif";
-  ctx.fillText(diffLabel, W - 15, 34);
-
-  // Character tabs
-  ctx.textAlign = "center";
-  const tabW = (W - 40) / 3;
-  for (let i = 0; i < 3; i++) {
-    const ch = CHARACTERS[i];
-    const tx = 20 + i * tabW;
-    const selected = i === gs.selectedChar;
-    ctx.fillStyle = selected ? `${ch.color}33` : "#151515";
-    roundRect(ctx, tx, 50, tabW - 4, 24, 6);
-    ctx.fill();
-    if (selected) {
-      ctx.strokeStyle = ch.color;
-      ctx.lineWidth = 1.5;
-      roundRect(ctx, tx, 50, tabW - 4, 24, 6);
-      ctx.stroke();
-    }
-    ctx.fillStyle = selected ? ch.color : "#666";
-    ctx.font = selected ? "bold 11px sans-serif" : "11px sans-serif";
-    ctx.fillText(ch.name, tx + (tabW - 4) / 2, 66);
-  }
-
-  // Character display area
-  const charY = 85;
-  ctx.fillStyle = `${char.color}0a`;
-  roundRect(ctx, 15, charY, W - 30, 100, 8);
-  ctx.fill();
-  ctx.strokeStyle = `${char.color}30`;
-  ctx.lineWidth = 1;
-  roundRect(ctx, 15, charY, W - 30, 100, 8);
-  ctx.stroke();
-
-  // Character avatar
-  const bob = Math.sin(f * 0.03) * 3;
-  ctx.fillStyle = `${char.color}30`;
-  ctx.beginPath();
-  ctx.arc(60, charY + 45 + bob, 30, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = char.color;
-  ctx.font = "bold 24px sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(char.name, 60, charY + 52 + bob);
-
-  // Character info
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#ccc";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`性格: ${char.personality}`, 105, charY + 22);
-  ctx.fillStyle = "#888";
-  ctx.font = "11px sans-serif";
-  ctx.fillText(char.desc, 105, charY + 40);
-
-  // Affection bar
-  const aff = gs.affection[gs.selectedChar];
-  ctx.fillStyle = "#666";
-  ctx.font = "10px sans-serif";
-  ctx.fillText("亲密度", 105, charY + 60);
-  ctx.fillStyle = "#222";
-  roundRect(ctx, 155, charY + 52, 150, 10, 5);
-  ctx.fill();
-  ctx.fillStyle = char.color;
-  roundRect(ctx, 155, charY + 52, 150 * (aff / MAX_AFFECTION), 10, 5);
-  ctx.fill();
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 10px sans-serif";
-  ctx.textAlign = "right";
-  ctx.fillText(`${aff}/${MAX_AFFECTION}`, W - 25, charY + 62);
-
-  // Affection stage label
-  ctx.textAlign = "left";
-  ctx.font = "10px sans-serif";
-  const stageLabel = aff >= 80 ? "热恋" : aff >= 60 ? "暧昧" : aff >= 40 ? "好感" : aff >= 20 ? "认识" : "陌生";
-  const stageColor = aff >= 80 ? "#ff4757" : aff >= 60 ? "#ff6b9d" : aff >= 40 ? "#ffa502" : aff >= 20 ? "#3ea6ff" : "#666";
-  ctx.fillStyle = stageColor;
-  ctx.fillText(stageLabel, 105, charY + 82);
-
-  // Favorite hint
-  ctx.fillStyle = "#555";
-  ctx.font = "10px sans-serif";
-  const favAction = ACTIONS.find(a => a.type === char.favoriteAction);
-  ctx.fillText(`喜欢: ${favAction?.label || ""}`, 160, charY + 82);
-
-  // All characters affection mini display
-  ctx.textAlign = "center";
-  for (let i = 0; i < 3; i++) {
-    const ch = CHARACTERS[i];
-    const mx = W - 80 + i * 22;
-    const my = charY + 85;
-    ctx.fillStyle = i === gs.selectedChar ? ch.color : "#444";
-    ctx.font = "9px sans-serif";
-    ctx.fillText(`${gs.affection[i]}`, mx, my);
-  }
-
-  // Stats bar area
-  const statsY = 195;
-  ctx.fillStyle = "#1a1a1a";
-  roundRect(ctx, 15, statsY, W - 30, 40, 6);
-  ctx.fill();
-
-  const statItems = [
-    { label: "魅力", value: gs.stats.charm, color: "#ffa502" },
-    { label: "智慧", value: gs.stats.wisdom, color: "#3ea6ff" },
-    { label: "体力", value: gs.stats.stamina, color: "#20bf6b" },
-    { label: "金钱", value: gs.stats.money, color: "#f0b90b" },
-  ];
-  const statW = (W - 50) / 4;
-  for (let i = 0; i < 4; i++) {
-    const sx = 25 + i * statW;
-    ctx.textAlign = "center";
-    ctx.fillStyle = statItems[i].color;
-    ctx.font = "bold 13px sans-serif";
-    ctx.fillText(`${statItems[i].value}`, sx + statW / 2, statsY + 18);
-    ctx.fillStyle = "#666";
-    ctx.font = "9px sans-serif";
-    ctx.fillText(statItems[i].label, sx + statW / 2, statsY + 32);
-  }
-
-  // Day progress bar
-  const progY = 245;
-  ctx.fillStyle = "#222";
-  roundRect(ctx, 15, progY, W - 30, 6, 3);
-  ctx.fill();
-  ctx.fillStyle = ACCENT;
-  roundRect(ctx, 15, progY, (W - 30) * (gs.day / MAX_DAYS), 6, 3);
-  ctx.fill();
-
-  // Hint text
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#555";
-  ctx.font = "10px sans-serif";
-  ctx.fillText(`剩余 ${MAX_DAYS - gs.day + 1} 天 / 键盘 1-4 选择行动 / Q W E 切换角色`, W / 2, progY + 20);
-
-  // Action section header
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#888";
-  ctx.font = "bold 11px sans-serif";
-  ctx.fillText("选择行动", 15, 285);
-
-  // Time bonus indicator
-  ctx.textAlign = "right";
-  ctx.fillStyle = timeColor;
-  ctx.font = "10px sans-serif";
-  const timeBonus = gs.timeOfDay === "morning" ? char.morningBonus : gs.timeOfDay === "evening" ? char.eveningBonus : 1.0;
-  if (timeBonus > 1.0) ctx.fillText(`${char.name} ${timeLabel}加成 x${timeBonus.toFixed(1)}`, W - 15, 285);
-
-  // Action buttons
-  const actionIcons = ["heart", "gift", "chat", "work"];
-  const actionColors = ["#ff6b9d", "#a55eea", "#3ea6ff", "#f0b90b"];
-  for (let i = 0; i < ACTIONS.length; i++) {
-    const a = ACTIONS[i];
-    const mult = DIFF_MULT[gs.difficulty];
-    const staCost = Math.floor(a.staminaCost * mult.stamina);
-    const monCost = Math.floor(a.moneyCost * mult.cost);
-    const canDo = a.type === "work" || (gs.stats.stamina >= staCost && gs.stats.money >= monCost);
-
-    const bx = 15, by = 295 + i * 38;
-    ctx.fillStyle = canDo ? "#1a1a2e" : "#111";
-    roundRect(ctx, bx, by, W - 30, 32, 6);
-    ctx.fill();
-    ctx.strokeStyle = canDo ? `${actionColors[i]}55` : "#222";
-    ctx.lineWidth = 1;
-    roundRect(ctx, bx, by, W - 30, 32, 6);
-    ctx.stroke();
-
-    // Icon placeholder
-    ctx.fillStyle = canDo ? actionColors[i] : "#444";
-    ctx.beginPath();
-    ctx.arc(bx + 18, by + 16, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#0f0f0f";
-    ctx.font = "bold 9px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(`${i + 1}`, bx + 18, by + 19);
-
-    // Label
-    ctx.textAlign = "left";
-    ctx.fillStyle = canDo ? "#fff" : "#555";
-    ctx.font = "bold 12px sans-serif";
-    ctx.fillText(a.label, bx + 34, by + 14);
-
-    // Details
-    ctx.fillStyle = canDo ? "#888" : "#444";
-    ctx.font = "10px sans-serif";
-    if (a.type === "work") {
-      ctx.fillText(`体力-${staCost}  金钱+${a.statGain.money}`, bx + 34, by + 27);
-    } else {
-      const isFav = a.type === char.favoriteAction;
-      const affText = isFav ? `亲密+${Math.floor(a.baseAffection * 1.5 * mult.affection)}` : `亲密+${Math.floor(a.baseAffection * mult.affection)}`;
-      ctx.fillText(`体力-${staCost}${monCost > 0 ? `  金钱-${monCost}` : ""}  ${affText}${isFav ? " (喜欢!)" : ""}`, bx + 34, by + 27);
-    }
-
-    // Disabled overlay
-    if (!canDo) {
-      ctx.fillStyle = "rgba(0,0,0,0.3)";
-      roundRect(ctx, bx, by, W - 30, 32, 6);
-      ctx.fill();
-    }
-  }
-
-  // Event log at bottom
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#444";
-  ctx.font = "10px sans-serif";
-  const logY = 460;
-  for (let i = 0; i < Math.min(3, gs.eventLog.length); i++) {
-    ctx.fillText(gs.eventLog[i], 15, logY + i * 14);
-  }
-}
-
-function renderEvent(ctx: CanvasRenderingContext2D, ev: EventDef, gs: GameState, f: number) {
-  // Overlay
-  ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
-  ctx.fillRect(0, 0, W, H);
-
-  const char = CHARACTERS[ev.charId];
-  const pulse = 0.8 + 0.2 * Math.sin(f * 0.05);
-
-  // Event card
-  const cardX = 30, cardY = 80, cardW = W - 60, cardH = 320;
-  ctx.fillStyle = "#1a1a2e";
-  roundRect(ctx, cardX, cardY, cardW, cardH, 12);
-  ctx.fill();
-  ctx.strokeStyle = `${char.color}88`;
-  ctx.lineWidth = 2;
-  roundRect(ctx, cardX, cardY, cardW, cardH, 12);
-  ctx.stroke();
-
-  // Decorative hearts
-  for (let i = 0; i < 5; i++) {
-    const hx = cardX + 20 + i * (cardW - 40) / 4;
-    const hy = cardY + 30 + Math.sin(f * 0.04 + i) * 8;
-    ctx.fillStyle = `${char.color}${Math.floor(pulse * 40).toString(16).padStart(2, "0")}`;
-    drawHeart(ctx, hx, hy, 8);
-  }
-
-  // Title
-  ctx.textAlign = "center";
-  ctx.fillStyle = char.color;
-  ctx.font = "bold 18px sans-serif";
-  ctx.fillText(ev.title, W / 2, cardY + 70);
-
-  // Character name
-  ctx.fillStyle = "#aaa";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`与 ${char.name} 的特别事件`, W / 2, cardY + 95);
-
-  // Event text (word wrap)
-  ctx.fillStyle = "#ddd";
-  ctx.font = "13px sans-serif";
-  const words = ev.text;
-  const maxLineW = cardW - 40;
-  let line = "";
-  let lineY = cardY + 130;
-  for (let i = 0; i < words.length; i++) {
-    const testLine = line + words[i];
-    const metrics = ctx.measureText(testLine);
-    if (metrics.width > maxLineW && line.length > 0) {
-      ctx.fillText(line, W / 2, lineY);
-      line = words[i];
-      lineY += 22;
-    } else {
-      line = testLine;
-    }
-  }
-  if (line) ctx.fillText(line, W / 2, lineY);
-
-  // Bonuses
-  const bonusY = cardY + 220;
-  ctx.fillStyle = char.color;
-  ctx.font = "bold 12px sans-serif";
-  ctx.fillText(`亲密度 +${ev.affectionBonus}`, W / 2, bonusY);
-
-  if (ev.statBonus) {
-    ctx.fillStyle = "#ffa502";
-    ctx.font = "11px sans-serif";
-    const bonuses: string[] = [];
-    if (ev.statBonus.charm) bonuses.push(`魅力+${ev.statBonus.charm}`);
-    if (ev.statBonus.wisdom) bonuses.push(`智慧+${ev.statBonus.wisdom}`);
-    if (ev.statBonus.stamina) bonuses.push(`体力+${ev.statBonus.stamina}`);
-    ctx.fillText(bonuses.join("  "), W / 2, bonusY + 20);
-  }
-
-  // Continue prompt
-  const contAlpha = 0.5 + 0.5 * Math.sin(f * 0.06);
-  ctx.fillStyle = `rgba(170, 170, 170, ${contAlpha})`;
-  ctx.font = "12px sans-serif";
-  ctx.fillText("点击继续", W / 2, cardY + cardH - 20);
-}
-
-function renderEnding(ctx: CanvasRenderingContext2D, char: CharacterDef, ending: EndingType, gs: GameState, f: number) {
-  // Background
-  const bgColor = ending === "good" ? "#1a0a2e" : ending === "normal" ? "#151515" : "#0a0a0a";
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, W, H);
-
-  // Particles
-  if (ending === "good") {
-    for (let i = 0; i < 15; i++) {
-      const px = (i * 37 + f * 0.5) % W;
-      const py = (i * 23 + f * 0.3) % H;
-      const size = 4 + Math.sin(f * 0.03 + i) * 2;
-      ctx.fillStyle = `${char.color}${Math.floor(20 + Math.sin(f * 0.04 + i) * 15).toString(16).padStart(2, "0")}`;
-      drawHeart(ctx, px, py, size);
-    }
-  }
-
-  ctx.textAlign = "center";
-
-  // Ending type label
-  const endLabel = ending === "good" ? "完美结局" : ending === "normal" ? "普通结局" : "遗憾结局";
-  const endColor = ending === "good" ? "#ff6b9d" : ending === "normal" ? "#ffa502" : "#666";
-  ctx.fillStyle = endColor;
-  ctx.font = "bold 28px sans-serif";
-  ctx.fillText(endLabel, W / 2, 80);
-
-  // Character
-  const bob = Math.sin(f * 0.03) * 5;
-  ctx.fillStyle = `${char.color}30`;
-  ctx.beginPath();
-  ctx.arc(W / 2, 150 + bob, 40, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = char.color;
-  ctx.font = "bold 30px sans-serif";
-  ctx.fillText(char.name, W / 2, 158 + bob);
-
-  // Ending text (word wrap)
-  const text = getEndingText(char, ending);
-  ctx.fillStyle = "#ccc";
-  ctx.font = "14px sans-serif";
-  const maxW = W - 60;
-  let line = "";
-  let ly = 220;
-  for (let i = 0; i < text.length; i++) {
-    const test = line + text[i];
-    if (ctx.measureText(test).width > maxW && line.length > 0) {
-      ctx.fillText(line, W / 2, ly);
-      line = text[i];
-      ly += 24;
-    } else {
-      line = test;
-    }
-  }
-  if (line) ctx.fillText(line, W / 2, ly);
-
-  // Stats summary
-  const sumY = 310;
-  ctx.fillStyle = "#1a1a2e";
-  roundRect(ctx, 40, sumY, W - 80, 120, 8);
-  ctx.fill();
-  ctx.strokeStyle = `${char.color}44`;
-  ctx.lineWidth = 1;
-  roundRect(ctx, 40, sumY, W - 80, 120, 8);
-  ctx.stroke();
-
-  ctx.fillStyle = "#aaa";
-  ctx.font = "bold 12px sans-serif";
-  ctx.fillText("游戏总结", W / 2, sumY + 22);
-
-  ctx.font = "11px sans-serif";
-  ctx.fillStyle = "#888";
-  const summaryItems = [
-    `最终亲密度: ${gs.affection[char.id]}/${MAX_AFFECTION}`,
-    `解锁事件: ${gs.eventsUnlocked.size}/${EVENTS.filter(e => e.charId === char.id).length}`,
-    `最终属性: 魅力${gs.stats.charm} / 智慧${gs.stats.wisdom}`,
-    `总分: ${gs.score}`,
-  ];
-  for (let i = 0; i < summaryItems.length; i++) {
-    ctx.fillText(summaryItems[i], W / 2, sumY + 45 + i * 20);
-  }
-
-  // All characters final affection
-  ctx.fillStyle = "#555";
-  ctx.font = "10px sans-serif";
-  for (let i = 0; i < 3; i++) {
-    const ch = CHARACTERS[i];
-    ctx.fillText(`${ch.name}: ${gs.affection[i]}`, W / 2 - 80 + i * 80, sumY + 110);
-  }
-
-  // Prompt
-  const pa = 0.5 + 0.5 * Math.sin(f * 0.06);
-  ctx.fillStyle = `rgba(62, 166, 255, ${pa})`;
-  ctx.font = "13px sans-serif";
-  ctx.fillText("点击下方按钮重新开始", W / 2, H - 30);
-}
-
-// ─── Utility Drawing Functions ───────────────────────────────────────────────
-
-function drawHeart(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.beginPath();
-  ctx.moveTo(0, size * 0.3);
-  ctx.bezierCurveTo(-size, -size * 0.3, -size, size * 0.6, 0, size);
-  ctx.bezierCurveTo(size, size * 0.6, size, -size * 0.3, 0, size * 0.3);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}

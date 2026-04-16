@@ -6,9 +6,11 @@ import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import { fetchWithAuth } from "@/lib/auth";
 import {
-  ChevronLeft, RotateCcw, Layers, Play, Trophy, Volume2, VolumeX,
-  Swords, Shield, Sparkles, Star, Zap, Heart, Target, Eye
+  ChevronLeft, RotateCcw, Layers, Play, Volume2, VolumeX,
+  Swords, Shield, Star, Zap
 } from "lucide-react";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 /* ========== 常量 ========== */
 const GAME_ID = "card-battle";
@@ -100,6 +102,7 @@ class CardSoundEngine {
   dispose() { this.ctx?.close(); this.ctx = null; }
 }
 
+
 /* ========== 战斗状态 ========== */
 interface BattleState {
   playerHp: number; playerArmor: number; playerMana: number;
@@ -142,7 +145,6 @@ function aiSelectCard(hand: BattleCard[], mana: number, diff: Difficulty, enemyH
   if (playable.length === 0) return -1;
   if (diff === "easy") return playable[Math.floor(Math.random() * playable.length)].i;
   if (diff === "normal") {
-    // Prefer attack if player low HP, defense if self low HP
     if (playerHp <= 8) {
       const atks = playable.filter(x => x.c.type === "attack" || x.c.atk > 0);
       if (atks.length > 0) return atks.reduce((a, b) => a.c.atk > b.c.atk ? a : b).i;
@@ -153,7 +155,6 @@ function aiSelectCard(hand: BattleCard[], mana: number, diff: Difficulty, enemyH
     }
     return playable[Math.floor(Math.random() * playable.length)].i;
   }
-  // Hard: maximize value
   let best = playable[0], bestVal = -999;
   for (const p of playable) {
     let val = p.c.atk * 1.5 + p.c.def;
@@ -172,10 +173,8 @@ function aiSelectCard(hand: BattleCard[], mana: number, diff: Difficulty, enemyH
 }
 
 function getAIDeck(diff: Difficulty): CardDef[] {
-  // AI gets a deck based on difficulty
   const pool = [...ALL_CARDS];
   if (diff === "easy") {
-    // Only common cards
     const commons = pool.filter(c => c.rarity === "common");
     const deck: CardDef[] = [];
     while (deck.length < DECK_SIZE) deck.push(commons[Math.floor(Math.random() * commons.length)]);
@@ -187,114 +186,143 @@ function getAIDeck(diff: Difficulty): CardDef[] {
     while (deck.length < DECK_SIZE) deck.push(eligible[Math.floor(Math.random() * eligible.length)]);
     return deck;
   }
-  // Hard: best cards
   const sorted = [...pool].sort((a, b) => (b.atk + b.def) - (a.atk + a.def));
   return sorted.slice(0, DECK_SIZE);
 }
 
-/* ========== Canvas 绘制工具 ========== */
-function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
-  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
-  ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
-  ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
-  ctx.closePath();
+/* ========== PixiJS 绘制工具 ========== */
+function hexToNum(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
 }
 
-function drawCardOnCanvas(ctx: CanvasRenderingContext2D, card: CardDef | BattleCard, x: number, y: number, w: number, h: number, selected: boolean, dimmed: boolean, faceDown: boolean) {
+function drawCardPixi(
+  g: PixiGraphics, card: CardDef | BattleCard, x: number, y: number, w: number, h: number,
+  selected: boolean, dimmed: boolean, faceDown: boolean,
+  texts: PixiText[], textIdx: { i: number }
+) {
   if (faceDown) {
-    drawRoundRect(ctx, x, y, w, h, 6);
-    const grad = ctx.createLinearGradient(x, y, x + w, y + h);
-    grad.addColorStop(0, "#1a1a3e"); grad.addColorStop(1, "#0a0a2e");
-    ctx.fillStyle = grad; ctx.fill();
-    ctx.strokeStyle = "#3ea6ff"; ctx.lineWidth = 1; ctx.stroke();
-    // Pattern
-    ctx.fillStyle = "#3ea6ff20";
+    // Card back
+    g.roundRect(x, y, w, h, 6).fill({ color: 0x1a1a3e });
+    g.roundRect(x, y, w, h, 6).stroke({ color: 0x3ea6ff, width: 1 });
+    // Pattern dots
     for (let py = y + 8; py < y + h - 8; py += 12) {
       for (let px = x + 8; px < x + w - 8; px += 12) {
-        ctx.fillRect(px, py, 4, 4);
+        g.rect(px, py, 4, 4).fill({ color: 0x3ea6ff, alpha: 0.12 });
       }
     }
     return;
   }
-  // Card background gradient
-  drawRoundRect(ctx, x, y, w, h, 6);
-  const grad = ctx.createLinearGradient(x, y, x, y + h);
-  grad.addColorStop(0, "#1e1e3a"); grad.addColorStop(1, "#0e0e1e");
-  ctx.fillStyle = grad; ctx.fill();
+  // Card background
+  g.roundRect(x, y, w, h, 6).fill({ color: 0x1e1e3a });
   // Border
-  const borderColor = selected ? "#fff" : RARITY_COLORS[card.rarity];
-  ctx.strokeStyle = borderColor; ctx.lineWidth = selected ? 2.5 : 1.5; ctx.stroke();
-  // Rarity glow for legendary
+  const borderColor = selected ? 0xffffff : hexToNum(RARITY_COLORS[card.rarity]);
+  g.roundRect(x, y, w, h, 6).stroke({ color: borderColor, width: selected ? 2.5 : 1.5 });
+  // Legendary glow
   if (card.rarity === "legendary") {
-    ctx.shadowColor = "#ffd700"; ctx.shadowBlur = 8;
-    ctx.strokeStyle = "#ffd70080"; ctx.lineWidth = 1; ctx.stroke();
-    ctx.shadowBlur = 0;
+    g.roundRect(x, y, w, h, 6).stroke({ color: 0xffd700, width: 1, alpha: 0.5 });
   }
-  // Type color bar at top
-  ctx.fillStyle = TYPE_COLORS[card.type]; ctx.fillRect(x + 4, y + 4, w - 8, 3);
+  // Type color bar
+  g.rect(x + 4, y + 4, w - 8, 3).fill({ color: hexToNum(TYPE_COLORS[card.type]) });
   // Cost circle
-  ctx.beginPath(); ctx.arc(x + w - 14, y + 16, 10, 0, Math.PI * 2);
-  ctx.fillStyle = "#1a1a4e"; ctx.fill();
-  ctx.strokeStyle = "#a55eea"; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.fillStyle = "#fff"; ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(`${card.cost}`, x + w - 14, y + 16);
+  g.circle(x + w - 14, y + 16, 10).fill({ color: 0x1a1a4e });
+  g.circle(x + w - 14, y + 16, 10).stroke({ color: 0xa55eea, width: 1.5 });
+
+  // Cost text
+  if (textIdx.i < texts.length) {
+    const t = texts[textIdx.i++];
+    t.text = `${card.cost}`; t.style.fontSize = 11; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+    t.anchor.set(0.5, 0.5); t.x = x + w - 14; t.y = y + 16; t.visible = true;
+  }
   // Name
-  ctx.fillStyle = "#fff"; ctx.font = "bold 11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
-  const nameW = w - 34;
-  ctx.save(); ctx.beginPath(); ctx.rect(x + 6, y + 10, nameW, 16); ctx.clip();
-  ctx.fillText(card.name, x + 6, y + 11);
-  ctx.restore();
+  if (textIdx.i < texts.length) {
+    const t = texts[textIdx.i++];
+    t.text = card.name; t.style.fontSize = 11; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+    t.anchor.set(0, 0); t.x = x + 6; t.y = y + 11; t.visible = true;
+  }
   // Type label
-  ctx.fillStyle = TYPE_COLORS[card.type]; ctx.font = "9px sans-serif"; ctx.textAlign = "left";
-  ctx.fillText(TYPE_LABELS[card.type], x + 6, y + 28);
+  if (textIdx.i < texts.length) {
+    const t = texts[textIdx.i++];
+    t.text = TYPE_LABELS[card.type]; t.style.fontSize = 9; t.style.fontWeight = "normal"; t.style.fill = hexToNum(TYPE_COLORS[card.type]);
+    t.anchor.set(0, 0); t.x = x + 6; t.y = y + 28; t.visible = true;
+  }
   // Rarity label
-  ctx.fillStyle = RARITY_COLORS[card.rarity]; ctx.textAlign = "right";
-  ctx.fillText(RARITY_LABELS[card.rarity], x + w - 6, y + 28);
-  // Stats area
+  if (textIdx.i < texts.length) {
+    const t = texts[textIdx.i++];
+    t.text = RARITY_LABELS[card.rarity]; t.style.fontSize = 9; t.style.fontWeight = "normal"; t.style.fill = hexToNum(RARITY_COLORS[card.rarity]);
+    t.anchor.set(1, 0); t.x = x + w - 6; t.y = y + 28; t.visible = true;
+  }
+  // Stats
   const sy = y + 40;
   if (card.atk > 0) {
-    ctx.fillStyle = "#ff4757"; ctx.font = "bold 16px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(`${card.atk}`, x + w * 0.3, sy + 10);
-    ctx.fillStyle = "#ff475799"; ctx.font = "8px sans-serif";
-    ctx.fillText("攻击", x + w * 0.3, sy + 24);
+    if (textIdx.i < texts.length) {
+      const t = texts[textIdx.i++];
+      t.text = `${card.atk}`; t.style.fontSize = 16; t.style.fontWeight = "bold"; t.style.fill = 0xff4757;
+      t.anchor.set(0.5, 0); t.x = x + w * 0.3; t.y = sy + 2; t.visible = true;
+    }
+    if (textIdx.i < texts.length) {
+      const t = texts[textIdx.i++];
+      t.text = "攻击"; t.style.fontSize = 8; t.style.fontWeight = "normal"; t.style.fill = 0xff4757;
+      t.anchor.set(0.5, 0); t.x = x + w * 0.3; t.y = sy + 20; t.visible = true; t.alpha = 0.6;
+    }
   }
   if (card.def > 0) {
-    ctx.fillStyle = "#3ea6ff"; ctx.font = "bold 16px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(`${card.def}`, x + w * 0.7, sy + 10);
-    ctx.fillStyle = "#3ea6ff99"; ctx.font = "8px sans-serif";
-    ctx.fillText("防御", x + w * 0.7, sy + 24);
+    if (textIdx.i < texts.length) {
+      const t = texts[textIdx.i++];
+      t.text = `${card.def}`; t.style.fontSize = 16; t.style.fontWeight = "bold"; t.style.fill = 0x3ea6ff;
+      t.anchor.set(0.5, 0); t.x = x + w * 0.7; t.y = sy + 2; t.visible = true;
+    }
+    if (textIdx.i < texts.length) {
+      const t = texts[textIdx.i++];
+      t.text = "防御"; t.style.fontSize = 8; t.style.fontWeight = "normal"; t.style.fill = 0x3ea6ff;
+      t.anchor.set(0.5, 0); t.x = x + w * 0.7; t.y = sy + 20; t.visible = true; t.alpha = 0.6;
+    }
   }
   // Effect description
-  ctx.fillStyle = "#aaa"; ctx.font = "8px sans-serif"; ctx.textAlign = "center";
   const desc = card.effectDesc;
   if (desc.length > 10) {
-    ctx.fillText(desc.slice(0, 10), x + w / 2, sy + 40);
-    ctx.fillText(desc.slice(10), x + w / 2, sy + 50);
+    if (textIdx.i < texts.length) {
+      const t = texts[textIdx.i++];
+      t.text = desc.slice(0, 10); t.style.fontSize = 8; t.style.fontWeight = "normal"; t.style.fill = 0xaaaaaa;
+      t.anchor.set(0.5, 0); t.x = x + w / 2; t.y = sy + 36; t.visible = true; t.alpha = 1;
+    }
+    if (textIdx.i < texts.length) {
+      const t = texts[textIdx.i++];
+      t.text = desc.slice(10); t.style.fontSize = 8; t.style.fontWeight = "normal"; t.style.fill = 0xaaaaaa;
+      t.anchor.set(0.5, 0); t.x = x + w / 2; t.y = sy + 46; t.visible = true; t.alpha = 1;
+    }
   } else {
-    ctx.fillText(desc, x + w / 2, sy + 45);
+    if (textIdx.i < texts.length) {
+      const t = texts[textIdx.i++];
+      t.text = desc; t.style.fontSize = 8; t.style.fontWeight = "normal"; t.style.fill = 0xaaaaaa;
+      t.anchor.set(0.5, 0); t.x = x + w / 2; t.y = sy + 41; t.visible = true; t.alpha = 1;
+    }
   }
   // Dimmed overlay
   if (dimmed) {
-    drawRoundRect(ctx, x, y, w, h, 6);
-    ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fill();
-    ctx.fillStyle = "#ff4757"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText("魔力不足", x + w / 2, y + h / 2);
+    g.roundRect(x, y, w, h, 6).fill({ color: 0x000000, alpha: 0.55 });
+    if (textIdx.i < texts.length) {
+      const t = texts[textIdx.i++];
+      t.text = "魔力不足"; t.style.fontSize = 9; t.style.fontWeight = "bold"; t.style.fill = 0xff4757;
+      t.anchor.set(0.5, 0.5); t.x = x + w / 2; t.y = y + h / 2; t.visible = true; t.alpha = 1;
+    }
   }
 }
 
-function drawHpBar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, hp: number, maxHp: number, color: string) {
-  drawRoundRect(ctx, x, y, w, h, 3);
-  ctx.fillStyle = "#222"; ctx.fill();
+function drawHpBarPixi(
+  g: PixiGraphics, x: number, y: number, w: number, h: number,
+  hp: number, maxHp: number, color: number,
+  texts: PixiText[], textIdx: { i: number }
+) {
+  g.roundRect(x, y, w, h, 3).fill({ color: 0x222222 });
   const ratio = Math.max(0, hp / maxHp);
   if (ratio > 0) {
-    drawRoundRect(ctx, x, y, w * ratio, h, 3);
-    ctx.fillStyle = color; ctx.fill();
+    g.roundRect(x, y, w * ratio, h, 3).fill({ color });
   }
-  ctx.fillStyle = "#fff"; ctx.font = "bold 10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(`${Math.max(0, hp)}/${maxHp}`, x + w / 2, y + h / 2);
+  if (textIdx.i < texts.length) {
+    const t = texts[textIdx.i++];
+    t.text = `${Math.max(0, hp)}/${maxHp}`; t.style.fontSize = 10; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+    t.anchor.set(0.5, 0.5); t.x = x + w / 2; t.y = y + h / 2; t.visible = true; t.alpha = 1;
+  }
 }
 
 
@@ -312,8 +340,14 @@ export default function CardBattlePage() {
 
   const soundRef = useRef<CardSoundEngine | null>(null);
   const battleRef = useRef<BattleState | null>(null);
-  const rafRef = useRef(0);
-  const mouseRef = useRef({ x: 0, y: 0 });
+  const screenRef = useRef(screen);
+  const scoreRef = useRef(score);
+  const difficultyRef = useRef(difficulty);
+
+  // Keep refs in sync
+  useEffect(() => { screenRef.current = screen; }, [screen]);
+  useEffect(() => { scoreRef.current = score; }, [score]);
+  useEffect(() => { difficultyRef.current = difficulty; }, [difficulty]);
 
   // Init sound
   useEffect(() => {
@@ -370,19 +404,19 @@ export default function CardBattlePage() {
     soundRef.current?.playClick();
   }, [playerDeckIds]);
 
+
   /* ========== 出牌逻辑 ========== */
   const applyCardEffect = useCallback((card: BattleCard, isPlayer: boolean, state: BattleState): string[] => {
     const msgs: string[] = [];
     const attacker = isPlayer ? "你" : "对手";
     const defender = isPlayer ? "对手" : "你";
-    let atkTarget = isPlayer ? "enemy" : "player";
-    let dmg = card.atk;
-    let armor = card.def;
+    const atkTarget = isPlayer ? "enemy" : "player";
+    const dmg = card.atk;
+    const armor = card.def;
 
     // Apply damage
     if (dmg > 0) {
       if (card.effect === "double") {
-        // Hit twice — doesn't pierce armor
         for (let i = 0; i < 2; i++) {
           let actualDmg = dmg;
           if (atkTarget === "enemy") {
@@ -399,7 +433,6 @@ export default function CardBattlePage() {
       } else {
         let actualDmg = dmg;
         if (card.effect === "pierce") {
-          // Ignore armor
           if (atkTarget === "enemy") state.enemyHp -= actualDmg;
           else state.playerHp -= actualDmg;
           msgs.push(`${attacker}使用${card.name}，无视护甲造成${actualDmg}点伤害!`);
@@ -423,13 +456,11 @@ export default function CardBattlePage() {
       }
     }
 
-    // Apply armor
     if (armor > 0) {
       if (isPlayer) state.playerArmor += armor; else state.enemyArmor += armor;
       msgs.push(`${attacker}获得${armor}点护甲`);
     }
 
-    // Special effects
     switch (card.effect) {
       case "burn":
         if (isPlayer) state.enemyBurn += 2; else state.playerBurn += 2;
@@ -453,11 +484,12 @@ export default function CardBattlePage() {
         if (isPlayer) state.playerMana += 2;
         msgs.push(`${attacker}获得2点额外魔力`);
         break;
-      case "thorns":
+      case "thorns": {
         const thornDmg = 2;
         if (isPlayer) state.enemyHp -= thornDmg; else state.playerHp -= thornDmg;
         msgs.push(`荆棘反弹${thornDmg}点伤害!`);
         break;
+      }
       case "draw2": {
         if (isPlayer) {
           const r = drawFromDeck(state.playerDeck, state.playerHand, 2);
@@ -485,7 +517,6 @@ export default function CardBattlePage() {
         break;
     }
 
-    // Clamp HP
     state.playerHp = Math.max(0, Math.min(PLAYER_MAX_HP, state.playerHp));
     state.enemyHp = Math.max(0, Math.min(PLAYER_MAX_HP, state.enemyHp));
     state.playerArmor = Math.max(0, state.playerArmor);
@@ -494,6 +525,7 @@ export default function CardBattlePage() {
     return msgs;
   }, []);
 
+
   const playPlayerCard = useCallback((idx: number) => {
     const s = battleRef.current;
     if (!s || s.gameOver || s.turn !== "player" || s.playerFreeze > 0) return;
@@ -501,7 +533,6 @@ export default function CardBattlePage() {
     const card = s.playerHand[idx];
     if (card.cost > s.playerMana) return;
 
-    // Save prev state for restore
     s.prevState = {
       playerHp: s.playerHp, playerArmor: s.playerArmor, playerMana: s.playerMana,
       enemyHp: s.enemyHp, enemyArmor: s.enemyArmor,
@@ -518,14 +549,12 @@ export default function CardBattlePage() {
     else if (card.type === "magic") soundRef.current?.playSpecial();
     else soundRef.current?.playCard();
 
-    // Check win
     if (s.enemyHp <= 0) {
       s.gameOver = true; s.winner = "player";
       const sc = s.turnNum * 10 + s.playerHp * 5 + (difficulty === "hard" ? 200 : difficulty === "normal" ? 100 : 50);
       setScore(sc);
       setWins(w => w + 1);
       soundRef.current?.playWin();
-      // Unlock new card
       const unowned = ALL_CARDS.filter(c => !collection.includes(c.id));
       if (unowned.length > 0) {
         const newCard = unowned[Math.floor(Math.random() * unowned.length)];
@@ -533,7 +562,6 @@ export default function CardBattlePage() {
         s.log.push(`解锁新卡牌: ${newCard.name}!`);
       }
       setScreen("result");
-      // Submit score
       fetchWithAuth("/api/games/scores", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game_id: GAME_ID, score: sc }),
@@ -554,22 +582,18 @@ export default function CardBattlePage() {
     if (!s || s.gameOver || s.turn !== "player") return;
     soundRef.current?.playClick();
 
-    // Apply burn to player
     if (s.playerBurn > 0) {
       s.playerHp -= 2; s.playerBurn--;
       s.log.push("灼烧造成2点伤害!");
     }
 
-    // Enemy turn
     s.turn = "enemy";
     s.revealEnemy = false;
 
-    // Enemy freeze check
     if (s.enemyFreeze > 0) {
       s.enemyFreeze--;
       s.log = ["对手被冻结，跳过回合!"];
     } else {
-      // AI plays cards
       let aiMana = MANA_PER_TURN + (difficulty === "hard" ? 1 : 0);
       let plays = 0;
       const maxPlays = difficulty === "hard" ? 3 : 2;
@@ -584,18 +608,15 @@ export default function CardBattlePage() {
         plays++;
         if (s.playerHp <= 0 || s.enemyHp <= 0) break;
       }
-      // Enemy draw
       const r = drawFromDeck(s.enemyDeck, s.enemyHand, DRAW_PER_TURN);
       s.enemyDeck = r.deck; s.enemyHand = r.hand;
     }
 
-    // Apply burn to enemy
     if (s.enemyBurn > 0) {
       s.enemyHp -= 2; s.enemyBurn--;
       s.log.push("灼烧对对手造成2点伤害!");
     }
 
-    // Check game over
     if (s.playerHp <= 0) {
       s.gameOver = true; s.winner = "enemy";
       setLosses(l => l + 1);
@@ -617,16 +638,13 @@ export default function CardBattlePage() {
       return;
     }
 
-    // New player turn
     s.turn = "player"; s.turnNum++;
     s.playerMana = MANA_PER_TURN;
     s.selectedCard = -1;
-    // Player freeze check
     if (s.playerFreeze > 0) {
       s.playerFreeze--;
       s.log = ["你被冻结，本回合无法出牌!"];
     }
-    // Player draw
     const pr = drawFromDeck(s.playerDeck, s.playerHand, DRAW_PER_TURN);
     s.playerDeck = pr.deck; s.playerHand = pr.hand;
     soundRef.current?.playDraw();
@@ -644,197 +662,310 @@ export default function CardBattlePage() {
   }, []);
 
 
-  /* ========== Canvas 渲染 ========== */
+  /* ========== PixiJS 渲染 ========== */
   useEffect(() => {
     if (screen !== "battle" && screen !== "result") return;
     const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext("2d"); if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr; canvas.height = H * dpr;
-    canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
 
-    let frame = 0;
-    const render = () => {
-      ctx.save(); ctx.scale(dpr, dpr);
-      // Background
-      const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-      bgGrad.addColorStop(0, "#0a0a1a"); bgGrad.addColorStop(1, "#0f0f0f");
-      ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
-      frame++;
+    let destroyed = false;
+    let app: Application | null = null;
+    let g: PixiGraphics | null = null;
+    const texts: PixiText[] = [];
 
-      const s = battleRef.current;
-      if (!s) { ctx.restore(); rafRef.current = requestAnimationFrame(render); return; }
+    async function init() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
 
-      // ---- Enemy area (top) ----
-      drawRoundRect(ctx, 10, 8, W - 20, 90, 8);
-      ctx.fillStyle = "#12122a"; ctx.fill();
-      ctx.strokeStyle = "#333"; ctx.lineWidth = 1; ctx.stroke();
+      app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0a0a1a, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
 
-      // Enemy HP
-      ctx.fillStyle = "#ff4757"; ctx.font = "bold 13px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
-      ctx.fillText(`对手 HP`, 20, 14);
-      drawHpBar(ctx, 90, 12, 200, 16, s.enemyHp, PLAYER_MAX_HP, "#ff4757");
-      // Enemy armor
-      if (s.enemyArmor > 0) {
-        ctx.fillStyle = "#3ea6ff"; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "left";
-        ctx.fillText(`护甲: ${s.enemyArmor}`, 300, 16);
-      }
-      // Status effects
-      let sx = 400;
-      if (s.enemyBurn > 0) { ctx.fillStyle = "#ff6b35"; ctx.font = "10px sans-serif"; ctx.fillText(`灼烧x${s.enemyBurn}`, sx, 16); sx += 60; }
-      if (s.enemyFreeze > 0) { ctx.fillStyle = "#00d2ff"; ctx.font = "10px sans-serif"; ctx.fillText(`冻结x${s.enemyFreeze}`, sx, 16); sx += 60; }
+      g = new pixi.Graphics();
+      app.stage.addChild(g);
 
-      // Enemy hand (face down or revealed)
-      const eCardW = 50, eCardH = 70;
-      const eStartX = (W - s.enemyHand.length * (eCardW + 4)) / 2;
-      for (let i = 0; i < s.enemyHand.length; i++) {
-        const ex = eStartX + i * (eCardW + 4);
-        drawCardOnCanvas(ctx, s.enemyHand[i], ex, 34, eCardW, eCardH, false, false, !s.revealEnemy);
+      // Pre-create text pool (80 texts)
+      for (let i = 0; i < 80; i++) {
+        const t = new pixi.Text({ text: "", style: { fontSize: 12, fill: 0xffffff, fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif" } });
+        t.visible = false;
+        app.stage.addChild(t);
+        texts.push(t);
       }
 
-      // ---- Battle log (middle) ----
-      drawRoundRect(ctx, 10, 106, W - 20, 50, 6);
-      ctx.fillStyle = "#0d0d20"; ctx.fill();
-      ctx.strokeStyle = "#222"; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = "#ccc"; ctx.font = "11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
-      for (let i = 0; i < Math.min(s.log.length, 2); i++) {
-        ctx.fillText(s.log[s.log.length - 1 - i] || "", W / 2, 112 + i * 16);
-      }
+      app.ticker.add(() => {
+        if (destroyed || !g) return;
+        const curScreen = screenRef.current;
+        const curScore = scoreRef.current;
+        const curDiff = difficultyRef.current;
 
-      // Anim message
-      if (s.animTimer > 0) {
-        s.animTimer--;
-        const alpha = Math.min(1, s.animTimer / 30);
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = "#ffd700"; ctx.font = "bold 16px sans-serif"; ctx.textAlign = "center";
-        ctx.fillText(s.animMsg, W / 2, 90 - (60 - s.animTimer) * 0.3);
-        ctx.globalAlpha = 1;
-      }
+        g.clear();
+        // Hide all texts
+        for (const t of texts) { t.visible = false; t.alpha = 1; }
+        const textIdx = { i: 0 };
 
-      // ---- Turn info ----
-      ctx.fillStyle = "#888"; ctx.font = "11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
-      ctx.fillText(`回合 ${s.turnNum}`, 16, 162);
-      ctx.fillStyle = s.turn === "player" ? "#3ea6ff" : "#ff4757";
-      ctx.fillText(s.turn === "player" ? "你的回合" : "对手回合", 70, 162);
-      ctx.fillStyle = "#888";
-      ctx.fillText(`难度: ${DIFF_LABELS[difficulty]}`, W - 100, 162);
+        // Background
+        g.rect(0, 0, W, H).fill({ color: 0x0a0a1a });
 
-      // ---- Player hand (bottom) ----
-      const cardW = 90, cardH = 120;
-      const gap = 6;
-      const totalW = s.playerHand.length * (cardW + gap) - gap;
-      const startX = Math.max(10, (W - totalW) / 2);
-      const cardY = 260;
+        const s = battleRef.current;
+        if (!s) return;
 
-      for (let i = 0; i < s.playerHand.length; i++) {
-        const c = s.playerHand[i];
-        const cx = startX + i * (cardW + gap);
-        const sel = i === s.selectedCard;
-        const dimmed = c.cost > s.playerMana || s.turn !== "player" || s.playerFreeze > 0;
-        const yOff = sel ? -12 : 0;
-        drawCardOnCanvas(ctx, c, cx, cardY + yOff, cardW, cardH, sel, dimmed, false);
-      }
+        // ---- Enemy area (top) ----
+        g.roundRect(10, 8, W - 20, 90, 8).fill({ color: 0x12122a });
+        g.roundRect(10, 8, W - 20, 90, 8).stroke({ color: 0x333333, width: 1 });
 
-      // ---- Player stats (bottom bar) ----
-      drawRoundRect(ctx, 10, 180, W - 20, 70, 8);
-      ctx.fillStyle = "#12122a"; ctx.fill();
-      ctx.strokeStyle = "#333"; ctx.lineWidth = 1; ctx.stroke();
+        // Enemy HP label
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = "对手 HP"; t.style.fontSize = 13; t.style.fontWeight = "bold"; t.style.fill = 0xff4757;
+          t.anchor.set(0, 0); t.x = 20; t.y = 14; t.visible = true;
+        }
+        drawHpBarPixi(g, 90, 12, 200, 16, s.enemyHp, PLAYER_MAX_HP, 0xff4757, texts, textIdx);
 
-      // Player HP
-      ctx.fillStyle = "#3ea6ff"; ctx.font = "bold 13px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
-      ctx.fillText(`你 HP`, 20, 186);
-      drawHpBar(ctx, 70, 184, 200, 16, s.playerHp, PLAYER_MAX_HP, "#3ea6ff");
-      // Player armor
-      if (s.playerArmor > 0) {
-        ctx.fillStyle = "#3ea6ff"; ctx.font = "bold 12px sans-serif";
-        ctx.fillText(`护甲: ${s.playerArmor}`, 280, 188);
-      }
-      // Mana
-      ctx.fillStyle = "#a55eea"; ctx.font = "bold 13px sans-serif";
-      ctx.fillText(`魔力: ${s.playerMana}/${MANA_PER_TURN}`, 20, 210);
-      // Mana dots
-      for (let i = 0; i < MANA_PER_TURN; i++) {
-        ctx.beginPath(); ctx.arc(120 + i * 18, 218, 6, 0, Math.PI * 2);
-        ctx.fillStyle = i < s.playerMana ? "#a55eea" : "#333"; ctx.fill();
-        ctx.strokeStyle = "#555"; ctx.lineWidth = 1; ctx.stroke();
-      }
-      // Status effects
-      let psx = 280;
-      if (s.playerBurn > 0) { ctx.fillStyle = "#ff6b35"; ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.fillText(`灼烧x${s.playerBurn}`, psx, 214); psx += 60; }
-      if (s.playerFreeze > 0) { ctx.fillStyle = "#00d2ff"; ctx.font = "10px sans-serif"; ctx.fillText(`冻结x${s.playerFreeze}`, psx, 214); psx += 60; }
-      // Deck count
-      ctx.fillStyle = "#666"; ctx.font = "10px sans-serif"; ctx.textAlign = "right";
-      ctx.fillText(`牌库: ${s.playerDeck.length}张`, W - 20, 236);
+        // Enemy armor
+        if (s.enemyArmor > 0 && textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `护甲: ${s.enemyArmor}`; t.style.fontSize = 12; t.style.fontWeight = "bold"; t.style.fill = 0x3ea6ff;
+          t.anchor.set(0, 0); t.x = 300; t.y = 16; t.visible = true;
+        }
 
-      // ---- Action buttons ----
-      const btnY = 400;
-      // End turn button
-      drawRoundRect(ctx, W / 2 - 160, btnY, 100, 36, 6);
-      ctx.fillStyle = s.turn === "player" && !s.gameOver ? "#3ea6ff" : "#333"; ctx.fill();
-      ctx.fillStyle = "#fff"; ctx.font = "bold 13px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText("结束回合", W / 2 - 110, btnY + 18);
+        // Status effects
+        let sx = 400;
+        if (s.enemyBurn > 0 && textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `灼烧x${s.enemyBurn}`; t.style.fontSize = 10; t.style.fontWeight = "normal"; t.style.fill = 0xff6b35;
+          t.anchor.set(0, 0); t.x = sx; t.y = 16; t.visible = true; sx += 60;
+        }
+        if (s.enemyFreeze > 0 && textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `冻结x${s.enemyFreeze}`; t.style.fontSize = 10; t.style.fontWeight = "normal"; t.style.fill = 0x00d2ff;
+          t.anchor.set(0, 0); t.x = sx; t.y = 16; t.visible = true;
+        }
 
-      // Play card button
-      drawRoundRect(ctx, W / 2 - 50, btnY, 100, 36, 6);
-      const canPlay = s.turn === "player" && s.selectedCard >= 0 && s.selectedCard < s.playerHand.length && s.playerHand[s.selectedCard].cost <= s.playerMana && s.playerFreeze <= 0;
-      ctx.fillStyle = canPlay ? "#ff4757" : "#333"; ctx.fill();
-      ctx.fillStyle = "#fff"; ctx.font = "bold 13px sans-serif";
-      ctx.fillText("出牌", W / 2, btnY + 18);
+        // Enemy hand
+        const eCardW = 50, eCardH = 70;
+        const eStartX = (W - s.enemyHand.length * (eCardW + 4)) / 2;
+        for (let i = 0; i < s.enemyHand.length; i++) {
+          const ex = eStartX + i * (eCardW + 4);
+          drawCardPixi(g, s.enemyHand[i], ex, 34, eCardW, eCardH, false, false, !s.revealEnemy, texts, textIdx);
+        }
 
-      // Draw card button
-      drawRoundRect(ctx, W / 2 + 60, btnY, 100, 36, 6);
-      ctx.fillStyle = s.turn === "player" && s.playerMana >= 1 && s.playerDeck.length > 0 && !s.gameOver ? "#a55eea" : "#333"; ctx.fill();
-      ctx.fillStyle = "#fff"; ctx.font = "bold 13px sans-serif";
-      ctx.fillText("抽牌 (1)", W / 2 + 110, btnY + 18);
+        // ---- Battle log (middle) ----
+        g.roundRect(10, 106, W - 20, 50, 6).fill({ color: 0x0d0d20 });
+        g.roundRect(10, 106, W - 20, 50, 6).stroke({ color: 0x222222, width: 1 });
+        for (let i = 0; i < Math.min(s.log.length, 2); i++) {
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = s.log[s.log.length - 1 - i] || ""; t.style.fontSize = 11; t.style.fontWeight = "normal"; t.style.fill = 0xcccccc;
+            t.anchor.set(0.5, 0); t.x = W / 2; t.y = 112 + i * 16; t.visible = true;
+          }
+        }
 
-      // ---- Tooltip for selected card ----
-      if (s.selectedCard >= 0 && s.selectedCard < s.playerHand.length) {
-        const sc = s.playerHand[s.selectedCard];
-        drawRoundRect(ctx, 10, 450, W - 20, 40, 6);
-        ctx.fillStyle = "#1a1a3a"; ctx.fill();
-        ctx.strokeStyle = TYPE_COLORS[sc.type]; ctx.lineWidth = 1; ctx.stroke();
-        ctx.fillStyle = "#fff"; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-        ctx.fillText(`${sc.name} [${TYPE_LABELS[sc.type]}/${RARITY_LABELS[sc.rarity]}]`, 20, 465);
-        ctx.fillStyle = "#ccc"; ctx.font = "11px sans-serif"; ctx.textAlign = "left";
-        ctx.fillText(sc.effectDesc, 320, 465);
-        ctx.fillStyle = "#a55eea"; ctx.textAlign = "right";
-        ctx.fillText(`消耗: ${sc.cost} 魔力`, W - 20, 465);
-      }
+        // Anim message
+        if (s.animTimer > 0) {
+          s.animTimer--;
+          const alpha = Math.min(1, s.animTimer / 30);
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = s.animMsg; t.style.fontSize = 16; t.style.fontWeight = "bold"; t.style.fill = 0xffd700;
+            t.anchor.set(0.5, 0.5); t.x = W / 2; t.y = 90 - (60 - s.animTimer) * 0.3;
+            t.visible = true; t.alpha = alpha;
+          }
+        }
 
-      // ---- Score display ----
-      ctx.fillStyle = "#ffd700"; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "top";
-      ctx.fillText(`得分: ${score}`, W - 16, 162);
+        // ---- Turn info ----
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `回合 ${s.turnNum}`; t.style.fontSize = 11; t.style.fontWeight = "normal"; t.style.fill = 0x888888;
+          t.anchor.set(0, 0); t.x = 16; t.y = 162; t.visible = true;
+        }
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = s.turn === "player" ? "你的回合" : "对手回合";
+          t.style.fontSize = 11; t.style.fontWeight = "normal";
+          t.style.fill = s.turn === "player" ? 0x3ea6ff : 0xff4757;
+          t.anchor.set(0, 0); t.x = 70; t.y = 162; t.visible = true;
+        }
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `难度: ${DIFF_LABELS[curDiff]}`; t.style.fontSize = 11; t.style.fontWeight = "normal"; t.style.fill = 0x888888;
+          t.anchor.set(0, 0); t.x = W - 100; t.y = 162; t.visible = true;
+        }
 
-      // ---- Result overlay ----
-      if (screen === "result" && s.gameOver) {
-        ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 0, W, H);
-        const isWin = s.winner === "player";
-        ctx.fillStyle = isWin ? "#ffd700" : "#ff4757";
-        ctx.font = "bold 36px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(isWin ? "胜利!" : "失败!", W / 2, H / 2 - 60);
-        ctx.fillStyle = "#fff"; ctx.font = "20px sans-serif";
-        ctx.fillText(`得分: ${score}`, W / 2, H / 2 - 15);
-        ctx.fillStyle = "#aaa"; ctx.font = "14px sans-serif";
-        ctx.fillText(`回合数: ${s.turnNum}  剩余HP: ${Math.max(0, s.playerHp)}`, W / 2, H / 2 + 15);
-        ctx.fillText(`难度: ${DIFF_LABELS[difficulty]}`, W / 2, H / 2 + 38);
-        // Buttons
-        drawRoundRect(ctx, W / 2 - 130, H / 2 + 60, 120, 40, 8);
-        ctx.fillStyle = "#3ea6ff"; ctx.fill();
-        ctx.fillStyle = "#fff"; ctx.font = "bold 14px sans-serif";
-        ctx.fillText("再来一局", W / 2 - 70, H / 2 + 80);
+        // ---- Player hand (bottom) ----
+        const cardW = 90, cardH = 120;
+        const gap = 6;
+        const totalW = s.playerHand.length * (cardW + gap) - gap;
+        const startX = Math.max(10, (W - totalW) / 2);
+        const cardY = 260;
 
-        drawRoundRect(ctx, W / 2 + 10, H / 2 + 60, 120, 40, 8);
-        ctx.fillStyle = "#333"; ctx.fill(); ctx.strokeStyle = "#555"; ctx.stroke();
-        ctx.fillStyle = "#fff"; ctx.font = "bold 14px sans-serif";
-        ctx.fillText("返回标题", W / 2 + 70, H / 2 + 80);
-      }
+        for (let i = 0; i < s.playerHand.length; i++) {
+          const c = s.playerHand[i];
+          const cx = startX + i * (cardW + gap);
+          const sel = i === s.selectedCard;
+          const dimmed = c.cost > s.playerMana || s.turn !== "player" || s.playerFreeze > 0;
+          const yOff = sel ? -12 : 0;
+          drawCardPixi(g, c, cx, cardY + yOff, cardW, cardH, sel, dimmed, false, texts, textIdx);
+        }
 
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(render);
+        // ---- Player stats (bottom bar) ----
+        g.roundRect(10, 180, W - 20, 70, 8).fill({ color: 0x12122a });
+        g.roundRect(10, 180, W - 20, 70, 8).stroke({ color: 0x333333, width: 1 });
+
+        // Player HP label
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = "你 HP"; t.style.fontSize = 13; t.style.fontWeight = "bold"; t.style.fill = 0x3ea6ff;
+          t.anchor.set(0, 0); t.x = 20; t.y = 186; t.visible = true;
+        }
+        drawHpBarPixi(g, 70, 184, 200, 16, s.playerHp, PLAYER_MAX_HP, 0x3ea6ff, texts, textIdx);
+
+        // Player armor
+        if (s.playerArmor > 0 && textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `护甲: ${s.playerArmor}`; t.style.fontSize = 12; t.style.fontWeight = "bold"; t.style.fill = 0x3ea6ff;
+          t.anchor.set(0, 0); t.x = 280; t.y = 188; t.visible = true;
+        }
+
+        // Mana label
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `魔力: ${s.playerMana}/${MANA_PER_TURN}`; t.style.fontSize = 13; t.style.fontWeight = "bold"; t.style.fill = 0xa55eea;
+          t.anchor.set(0, 0); t.x = 20; t.y = 210; t.visible = true;
+        }
+        // Mana dots
+        for (let i = 0; i < MANA_PER_TURN; i++) {
+          g.circle(120 + i * 18, 218, 6).fill({ color: i < s.playerMana ? 0xa55eea : 0x333333 });
+          g.circle(120 + i * 18, 218, 6).stroke({ color: 0x555555, width: 1 });
+        }
+
+        // Player status effects
+        let psx = 280;
+        if (s.playerBurn > 0 && textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `灼烧x${s.playerBurn}`; t.style.fontSize = 10; t.style.fontWeight = "normal"; t.style.fill = 0xff6b35;
+          t.anchor.set(0, 0); t.x = psx; t.y = 214; t.visible = true; psx += 60;
+        }
+        if (s.playerFreeze > 0 && textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `冻结x${s.playerFreeze}`; t.style.fontSize = 10; t.style.fontWeight = "normal"; t.style.fill = 0x00d2ff;
+          t.anchor.set(0, 0); t.x = psx; t.y = 214; t.visible = true;
+        }
+
+        // Deck count
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `牌库: ${s.playerDeck.length}张`; t.style.fontSize = 10; t.style.fontWeight = "normal"; t.style.fill = 0x666666;
+          t.anchor.set(1, 0); t.x = W - 20; t.y = 236; t.visible = true;
+        }
+
+        // ---- Action buttons ----
+        const btnY = 400;
+        // End turn
+        g.roundRect(W / 2 - 160, btnY, 100, 36, 6).fill({ color: s.turn === "player" && !s.gameOver ? 0x3ea6ff : 0x333333 });
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = "结束回合"; t.style.fontSize = 13; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+          t.anchor.set(0.5, 0.5); t.x = W / 2 - 110; t.y = btnY + 18; t.visible = true;
+        }
+
+        // Play card
+        const canPlay = s.turn === "player" && s.selectedCard >= 0 && s.selectedCard < s.playerHand.length && s.playerHand[s.selectedCard].cost <= s.playerMana && s.playerFreeze <= 0;
+        g.roundRect(W / 2 - 50, btnY, 100, 36, 6).fill({ color: canPlay ? 0xff4757 : 0x333333 });
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = "出牌"; t.style.fontSize = 13; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+          t.anchor.set(0.5, 0.5); t.x = W / 2; t.y = btnY + 18; t.visible = true;
+        }
+
+        // Draw card
+        g.roundRect(W / 2 + 60, btnY, 100, 36, 6).fill({ color: s.turn === "player" && s.playerMana >= 1 && s.playerDeck.length > 0 && !s.gameOver ? 0xa55eea : 0x333333 });
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = "抽牌 (1)"; t.style.fontSize = 13; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+          t.anchor.set(0.5, 0.5); t.x = W / 2 + 110; t.y = btnY + 18; t.visible = true;
+        }
+
+        // ---- Tooltip for selected card ----
+        if (s.selectedCard >= 0 && s.selectedCard < s.playerHand.length) {
+          const sc = s.playerHand[s.selectedCard];
+          g.roundRect(10, 450, W - 20, 40, 6).fill({ color: 0x1a1a3a });
+          g.roundRect(10, 450, W - 20, 40, 6).stroke({ color: hexToNum(TYPE_COLORS[sc.type]), width: 1 });
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = `${sc.name} [${TYPE_LABELS[sc.type]}/${RARITY_LABELS[sc.rarity]}]`;
+            t.style.fontSize = 12; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+            t.anchor.set(0, 0.5); t.x = 20; t.y = 465; t.visible = true;
+          }
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = sc.effectDesc; t.style.fontSize = 11; t.style.fontWeight = "normal"; t.style.fill = 0xcccccc;
+            t.anchor.set(0, 0.5); t.x = 320; t.y = 465; t.visible = true;
+          }
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = `消耗: ${sc.cost} 魔力`; t.style.fontSize = 11; t.style.fontWeight = "normal"; t.style.fill = 0xa55eea;
+            t.anchor.set(1, 0.5); t.x = W - 20; t.y = 465; t.visible = true;
+          }
+        }
+
+        // ---- Score display ----
+        if (textIdx.i < texts.length) {
+          const t = texts[textIdx.i++];
+          t.text = `得分: ${curScore}`; t.style.fontSize = 12; t.style.fontWeight = "bold"; t.style.fill = 0xffd700;
+          t.anchor.set(1, 0); t.x = W - 16; t.y = 162; t.visible = true;
+        }
+
+        // ---- Result overlay ----
+        if (curScreen === "result" && s.gameOver) {
+          g.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.75 });
+          const isWin = s.winner === "player";
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = isWin ? "胜利!" : "失败!"; t.style.fontSize = 36; t.style.fontWeight = "bold";
+            t.style.fill = isWin ? 0xffd700 : 0xff4757;
+            t.anchor.set(0.5, 0.5); t.x = W / 2; t.y = H / 2 - 60; t.visible = true;
+          }
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = `得分: ${curScore}`; t.style.fontSize = 20; t.style.fontWeight = "normal"; t.style.fill = 0xffffff;
+            t.anchor.set(0.5, 0.5); t.x = W / 2; t.y = H / 2 - 15; t.visible = true;
+          }
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = `回合数: ${s.turnNum}  剩余HP: ${Math.max(0, s.playerHp)}`;
+            t.style.fontSize = 14; t.style.fontWeight = "normal"; t.style.fill = 0xaaaaaa;
+            t.anchor.set(0.5, 0.5); t.x = W / 2; t.y = H / 2 + 15; t.visible = true;
+          }
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = `难度: ${DIFF_LABELS[curDiff]}`;
+            t.style.fontSize = 14; t.style.fontWeight = "normal"; t.style.fill = 0xaaaaaa;
+            t.anchor.set(0.5, 0.5); t.x = W / 2; t.y = H / 2 + 38; t.visible = true;
+          }
+          // Buttons
+          g.roundRect(W / 2 - 130, H / 2 + 60, 120, 40, 8).fill({ color: 0x3ea6ff });
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = "再来一局"; t.style.fontSize = 14; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+            t.anchor.set(0.5, 0.5); t.x = W / 2 - 70; t.y = H / 2 + 80; t.visible = true;
+          }
+          g.roundRect(W / 2 + 10, H / 2 + 60, 120, 40, 8).fill({ color: 0x333333 });
+          g.roundRect(W / 2 + 10, H / 2 + 60, 120, 40, 8).stroke({ color: 0x555555, width: 1 });
+          if (textIdx.i < texts.length) {
+            const t = texts[textIdx.i++];
+            t.text = "返回标题"; t.style.fontSize = 14; t.style.fontWeight = "bold"; t.style.fill = 0xffffff;
+            t.anchor.set(0.5, 0.5); t.x = W / 2 + 70; t.y = H / 2 + 80; t.visible = true;
+          }
+        }
+      });
+    }
+
+    init();
+
+    return () => {
+      destroyed = true;
+      if (app) { app.destroy(true); app = null; }
     };
-    rafRef.current = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [screen, score, difficulty]);
+  }, [screen]);
+
 
   /* ========== Canvas 点击处理 ========== */
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -874,7 +1005,6 @@ export default function CardBattlePage() {
       const yOff = sel ? -12 : 0;
       if (mx >= cx && mx <= cx + cardW && my >= cardY + yOff && my <= cardY + yOff + 120) {
         if (s.selectedCard === i) {
-          // Double click = play
           playPlayerCard(i);
         } else {
           s.selectedCard = i;
@@ -886,20 +1016,16 @@ export default function CardBattlePage() {
 
     // Button clicks
     const btnY = 400;
-    // End turn
     if (mx >= W / 2 - 160 && mx <= W / 2 - 60 && my >= btnY && my <= btnY + 36) {
       endPlayerTurn(); return;
     }
-    // Play card
     if (mx >= W / 2 - 50 && mx <= W / 2 + 50 && my >= btnY && my <= btnY + 36) {
       if (s.selectedCard >= 0) playPlayerCard(s.selectedCard); return;
     }
-    // Draw card
     if (mx >= W / 2 + 60 && mx <= W / 2 + 160 && my >= btnY && my <= btnY + 36) {
       drawExtraCard(); return;
     }
 
-    // Deselect
     s.selectedCard = -1;
   }, [screen, difficulty, startBattle, playPlayerCard, endPlayerTurn, drawExtraCard]);
 
@@ -944,7 +1070,7 @@ export default function CardBattlePage() {
   const toggleDeckCard = useCallback((cardId: number) => {
     setPlayerDeckIds(prev => {
       if (prev.includes(cardId)) {
-        if (prev.length <= 5) return prev; // Min 5 cards
+        if (prev.length <= 5) return prev;
         return prev.filter(id => id !== cardId);
       }
       if (prev.length >= DECK_SIZE) return prev;
@@ -1004,7 +1130,6 @@ export default function CardBattlePage() {
               </div>
             </div>
 
-            {/* 操作说明 */}
             <div className="rounded-xl border border-white/10 bg-[#1a1a1a] p-4 text-left text-sm text-gray-400 space-y-1">
               <p className="text-[#3ea6ff] font-bold mb-2">操作说明</p>
               <p>点击/触摸选择卡牌，再次点击或按空格出牌</p>
@@ -1097,7 +1222,6 @@ export default function CardBattlePage() {
             </div>
             <p className="text-sm text-gray-400">从已收集的卡牌中选择 {DECK_SIZE} 张组成你的卡组 (最少5张)</p>
 
-            {/* Current deck */}
             <div className="rounded-xl border border-[#3ea6ff]/30 bg-[#1a1a2e] p-4">
               <h3 className="text-sm font-bold text-[#3ea6ff] mb-2">当前卡组</h3>
               <div className="flex flex-wrap gap-2">
@@ -1115,7 +1239,6 @@ export default function CardBattlePage() {
               </div>
             </div>
 
-            {/* Available cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
               {ALL_CARDS.filter(c => collection.includes(c.id)).map(card => {
                 const inDeck = playerDeckIds.includes(card.id);
@@ -1140,7 +1263,7 @@ export default function CardBattlePage() {
           </div>
         )}
 
-        {/* ========== 对战画面 (Canvas) ========== */}
+        {/* ========== 对战画面 (PixiJS Canvas) ========== */}
         {(screen === "battle" || screen === "result") && (
           <div className="space-y-4">
             <canvas

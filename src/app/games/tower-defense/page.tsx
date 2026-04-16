@@ -6,9 +6,10 @@ import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import { fetchWithAuth } from "@/lib/auth";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 import {
   ChevronLeft, Shield, RotateCcw, Play, Volume2, VolumeX,
-  ArrowUp, Crosshair, Snowflake, Skull, Zap, Trophy
 } from "lucide-react";
 
 /* ================================================================
@@ -18,7 +19,6 @@ const GAME_ID = "tower-defense";
 const W = 480, H = 560;
 const GRID = 40, COLS = 12, ROWS = 10;
 const HUD_Y = ROWS * GRID;
-const FPS_INTERVAL = 1000 / 60;
 
 type Phase = "title" | "mapselect" | "playing" | "paused" | "victory" | "gameover";
 type Difficulty = "easy" | "normal" | "hard";
@@ -224,6 +224,21 @@ function addParticles(particles: Particle[], x: number, y: number, color: string
   }
 }
 
+/** Convert "#rrggbb" to numeric 0xrrggbb for PixiJS */
+function hexToNum(hex: string): number {
+  return parseInt(hex.replace("#", "").slice(0, 6), 16);
+}
+
+/** Convert "rgba(r,g,b,a)" or "#rrggbbaa" style alpha colors */
+function hexToNumAlpha(hex: string): { color: number; alpha: number } {
+  if (hex.length === 9 && hex.startsWith("#")) {
+    const alpha = parseInt(hex.slice(7, 9), 16) / 255;
+    return { color: parseInt(hex.slice(1, 7), 16), alpha };
+  }
+  return { color: hexToNum(hex), alpha: 1 };
+}
+
+
 /* ================================================================
    主组件
    ================================================================ */
@@ -239,7 +254,6 @@ export default function TowerDefense() {
 
   const gsRef = useRef<GameState>(createInitialState("normal", 0));
   const wavesRef = useRef<WaveDef[]>(generateWaves());
-  const rafRef = useRef(0);
   const lastRef = useRef(0);
   const soundRef = useRef<SoundEngine>(new SoundEngine(GAME_ID));
 
@@ -291,622 +305,444 @@ export default function TowerDefense() {
     soundRef.current.playLevelUp();
   }, []);
 
-  /* ========== 游戏主循环 ========== */
+
+  /* ========== 游戏主循环 (PixiJS) ========== */
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
+    let destroyed = false;
+    let app: Application | null = null;
 
-    const loop = (ts: number) => {
-      if (!lastRef.current) lastRef.current = ts;
-      const dt = Math.min((ts - lastRef.current) / 1000, 0.05);
-      lastRef.current = ts;
-      const gs = gsRef.current;
-      const path = MAPS[gs.mapIndex]?.path ?? MAPS[0].path;
+    (async () => {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0f0f0f, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
 
-      /* ---- UPDATE ---- */
-      if (phase === "playing") {
-        // Auto-start wave
-        if (!gs.waveActive && gs.spawnQueue.length === 0 && gs.enemies.length === 0) {
-          gs.waveDelay -= dt;
-          if (gs.waveDelay <= 0 && gs.wave < gs.maxWave) {
-            startNextWave();
-          }
-        }
+      const g: PixiGraphics = new pixi.Graphics();
+      app.stage.addChild(g);
 
-        // Spawn enemies
-        if (gs.spawnQueue.length > 0) {
-          gs.spawnTimer += dt;
-          while (gs.spawnQueue.length > 0 && gs.spawnTimer >= gs.spawnQueue[0].delay) {
-            const item = gs.spawnQueue.shift()!;
-            gs.enemies.push(spawnEnemy(item.type, path, gs.difficulty, gs.wave));
-          }
-          if (gs.spawnQueue.length === 0) {
-            gs.spawnTimer = 0;
-          }
-        }
+      // Pre-create text pool
+      const TEXT_POOL_SIZE = 80;
+      const texts: PixiText[] = [];
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({ fontSize: 14, fill: "#ffffff", fontFamily: "sans-serif" }) });
+        t.visible = false;
+        app.stage.addChild(t);
+        texts.push(t);
+      }
+      let textIdx = 0;
 
-        // Move enemies
-        for (const e of gs.enemies) {
-          if (e.hp <= 0) continue;
-          // Slow effect
-          if (e.slowTimer > 0) {
-            e.slowTimer -= dt;
-            e.speed = e.baseSpeed * 0.4;
-          } else {
-            e.speed = e.baseSpeed;
-          }
-          // DOT effect
-          if (e.dotTimer > 0) {
-            e.dotTimer -= dt;
-            e.hp -= e.dotDmg * dt;
-            if (e.hp <= 0) {
-              gs.gold += e.reward;
-              gs.score += e.reward * 10;
-              addParticles(gs.particles, e.x, e.y, "#7bed9f", 6);
-              soundRef.current.playScore(e.reward * 10);
-              continue;
+      function nextText(str: string, x: number, y: number, opts: {
+        fontSize?: number; fill?: string; fontWeight?: string;
+        align?: "left" | "center" | "right"; alpha?: number;
+        baseline?: "top" | "middle" | "alphabetic";
+      } = {}): void {
+        if (textIdx >= TEXT_POOL_SIZE) return;
+        const t = texts[textIdx++];
+        t.text = str;
+        t.visible = true;
+        t.alpha = opts.alpha ?? 1;
+        const s = t.style as import("pixi.js").TextStyle;
+        s.fontSize = opts.fontSize ?? 14;
+        s.fill = opts.fill ?? "#ffffff";
+        s.fontWeight = (opts.fontWeight ?? "normal") as "normal" | "bold";
+        s.fontFamily = "sans-serif";
+        // Position: Canvas 2D fillText uses baseline "alphabetic" by default
+        // PixiJS Text anchor: 0=left/top, 0.5=center, 1=right/bottom
+        const align = opts.align ?? "left";
+        t.anchor.set(align === "center" ? 0.5 : align === "right" ? 1 : 0, 0);
+        // Approximate baseline offset: Canvas "alphabetic" baseline ~ 0.8em from top
+        const baseline = opts.baseline ?? "alphabetic";
+        const fs = opts.fontSize ?? 14;
+        let yOff = 0;
+        if (baseline === "alphabetic") yOff = -fs * 0.8;
+        else if (baseline === "middle") yOff = -fs * 0.4;
+        else if (baseline === "top") yOff = 0;
+        t.x = x;
+        t.y = y + yOff;
+      }
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        const now = performance.now();
+        if (!lastRef.current) lastRef.current = now;
+        const dt = Math.min((now - lastRef.current) / 1000, 0.05);
+        lastRef.current = now;
+        const gs = gsRef.current;
+        const path = MAPS[gs.mapIndex]?.path ?? MAPS[0].path;
+
+        /* ---- UPDATE ---- */
+        if (phase === "playing") {
+          // Auto-start wave
+          if (!gs.waveActive && gs.spawnQueue.length === 0 && gs.enemies.length === 0) {
+            gs.waveDelay -= dt;
+            if (gs.waveDelay <= 0 && gs.wave < gs.maxWave) {
+              startNextWave();
             }
           }
-          const nextPt = path[e.pathIdx + 1];
-          if (!nextPt) {
-            e.hp = 0;
-            gs.lives--;
-            soundRef.current.playError();
-            addParticles(gs.particles, e.x, e.y, "#ff4757", 4);
-            continue;
-          }
-          const tx = nextPt[0] * GRID + GRID / 2;
-          const ty = nextPt[1] * GRID + GRID / 2;
-          const dx = tx - e.x, dy = ty - e.y;
-          const d = Math.sqrt(dx * dx + dy * dy);
-          if (d < 4) {
-            e.pathIdx++;
-          } else {
-            e.x += (dx / d) * e.speed * dt;
-            e.y += (dy / d) * e.speed * dt;
-          }
-        }
 
-        // Tower shooting
-        for (const t of gs.towers) {
-          t.cooldown -= dt;
-          if (t.cooldown > 0) continue;
-          const def = TOWER_DEFS[t.type];
-          const dmg = towerDamage(def, t.level);
-          const range = (def.range + (t.level - 1) * 0.3) * GRID;
-          const cx = t.x * GRID + GRID / 2, cy = t.y * GRID + GRID / 2;
-          const target = gs.enemies.find(e =>
-            e.hp > 0 && (!e.flying || t.type === "arrow" || t.type === "laser") &&
-            dist(e.x, e.y, cx, cy) < range
-          );
-          if (target) {
-            t.cooldown = def.rate / (1 + (t.level - 1) * 0.15);
-            gs.bullets.push({
-              x: cx, y: cy, tx: target.x, ty: target.y,
-              speed: 350, damage: dmg, color: def.color,
-              splash: def.splash ?? 0, slow: def.slow ?? 0,
-              dot: def.dot ? def.dot * (1 + (t.level - 1) * 0.5) : 0,
-              pierce: !!def.pierce, hit: false,
-            });
-            soundRef.current.playTone(300 + Math.random() * 200, 0.05, "square");
+          // Spawn enemies
+          if (gs.spawnQueue.length > 0) {
+            gs.spawnTimer += dt;
+            while (gs.spawnQueue.length > 0 && gs.spawnTimer >= gs.spawnQueue[0].delay) {
+              const item = gs.spawnQueue.shift()!;
+              gs.enemies.push(spawnEnemy(item.type, path, gs.difficulty, gs.wave));
+            }
+            if (gs.spawnQueue.length === 0) {
+              gs.spawnTimer = 0;
+            }
           }
-        }
 
-        // Move bullets
-        for (const b of gs.bullets) {
-          if (b.hit) continue;
-          const dx = b.tx - b.x, dy = b.ty - b.y;
-          const d = Math.sqrt(dx * dx + dy * dy);
-          if (d < 10) {
-            b.hit = true;
-            // Apply damage
-            if (b.splash > 0) {
-              for (const e of gs.enemies) {
-                if (e.hp > 0 && dist(e.x, e.y, b.tx, b.ty) < b.splash) {
-                  e.hp -= b.damage;
-                  if (b.slow > 0) e.slowTimer = Math.max(e.slowTimer, b.slow);
-                  if (b.dot > 0) { e.dotTimer = 3; e.dotDmg = b.dot; }
-                  if (e.hp <= 0) {
-                    gs.gold += e.reward;
-                    gs.score += e.reward * 10;
-                    addParticles(gs.particles, e.x, e.y, e.color, 8);
-                    soundRef.current.playScore(e.reward * 10);
+          // Move enemies
+          for (const e of gs.enemies) {
+            if (e.hp <= 0) continue;
+            if (e.slowTimer > 0) { e.slowTimer -= dt; e.speed = e.baseSpeed * 0.4; } else { e.speed = e.baseSpeed; }
+            if (e.dotTimer > 0) {
+              e.dotTimer -= dt;
+              e.hp -= e.dotDmg * dt;
+              if (e.hp <= 0) {
+                gs.gold += e.reward; gs.score += e.reward * 10;
+                addParticles(gs.particles, e.x, e.y, "#7bed9f", 6);
+                soundRef.current.playScore(e.reward * 10);
+                continue;
+              }
+            }
+            const nextPt = path[e.pathIdx + 1];
+            if (!nextPt) {
+              e.hp = 0; gs.lives--;
+              soundRef.current.playError();
+              addParticles(gs.particles, e.x, e.y, "#ff4757", 4);
+              continue;
+            }
+            const tx = nextPt[0] * GRID + GRID / 2, ty = nextPt[1] * GRID + GRID / 2;
+            const dx = tx - e.x, dy = ty - e.y;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d < 4) { e.pathIdx++; } else { e.x += (dx / d) * e.speed * dt; e.y += (dy / d) * e.speed * dt; }
+          }
+
+          // Tower shooting
+          for (const tw of gs.towers) {
+            tw.cooldown -= dt;
+            if (tw.cooldown > 0) continue;
+            const def = TOWER_DEFS[tw.type];
+            const dmg = towerDamage(def, tw.level);
+            const range = (def.range + (tw.level - 1) * 0.3) * GRID;
+            const cx = tw.x * GRID + GRID / 2, cy = tw.y * GRID + GRID / 2;
+            const target = gs.enemies.find(e =>
+              e.hp > 0 && (!e.flying || tw.type === "arrow" || tw.type === "laser") &&
+              dist(e.x, e.y, cx, cy) < range
+            );
+            if (target) {
+              tw.cooldown = def.rate / (1 + (tw.level - 1) * 0.15);
+              gs.bullets.push({
+                x: cx, y: cy, tx: target.x, ty: target.y,
+                speed: 350, damage: dmg, color: def.color,
+                splash: def.splash ?? 0, slow: def.slow ?? 0,
+                dot: def.dot ? def.dot * (1 + (tw.level - 1) * 0.5) : 0,
+                pierce: !!def.pierce, hit: false,
+              });
+              soundRef.current.playTone(300 + Math.random() * 200, 0.05, "square");
+            }
+          }
+
+          // Move bullets
+          for (const b of gs.bullets) {
+            if (b.hit) continue;
+            const dx = b.tx - b.x, dy = b.ty - b.y;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d < 10) {
+              b.hit = true;
+              if (b.splash > 0) {
+                for (const e of gs.enemies) {
+                  if (e.hp > 0 && dist(e.x, e.y, b.tx, b.ty) < b.splash) {
+                    e.hp -= b.damage;
+                    if (b.slow > 0) e.slowTimer = Math.max(e.slowTimer, b.slow);
+                    if (b.dot > 0) { e.dotTimer = 3; e.dotDmg = b.dot; }
+                    if (e.hp <= 0) { gs.gold += e.reward; gs.score += e.reward * 10; addParticles(gs.particles, e.x, e.y, e.color, 8); soundRef.current.playScore(e.reward * 10); }
                   }
                 }
-              }
-              addParticles(gs.particles, b.tx, b.ty, b.color, 5);
-            } else if (b.pierce) {
-              // Pierce: hit all enemies in a line
-              for (const e of gs.enemies) {
-                if (e.hp > 0 && dist(e.x, e.y, b.tx, b.ty) < 30) {
-                  e.hp -= b.damage;
-                  if (e.hp <= 0) {
-                    gs.gold += e.reward;
-                    gs.score += e.reward * 10;
-                    addParticles(gs.particles, e.x, e.y, e.color, 8);
-                    soundRef.current.playScore(e.reward * 10);
+                addParticles(gs.particles, b.tx, b.ty, b.color, 5);
+              } else if (b.pierce) {
+                for (const e of gs.enemies) {
+                  if (e.hp > 0 && dist(e.x, e.y, b.tx, b.ty) < 30) {
+                    e.hp -= b.damage;
+                    if (e.hp <= 0) { gs.gold += e.reward; gs.score += e.reward * 10; addParticles(gs.particles, e.x, e.y, e.color, 8); soundRef.current.playScore(e.reward * 10); }
                   }
+                }
+              } else {
+                const hit = gs.enemies.find(e => e.hp > 0 && dist(e.x, e.y, b.tx, b.ty) < 20);
+                if (hit) {
+                  hit.hp -= b.damage;
+                  if (b.slow > 0) hit.slowTimer = Math.max(hit.slowTimer, b.slow);
+                  if (b.dot > 0) { hit.dotTimer = 3; hit.dotDmg = b.dot; }
+                  if (hit.hp <= 0) { gs.gold += hit.reward; gs.score += hit.reward * 10; addParticles(gs.particles, hit.x, hit.y, hit.color, 8); soundRef.current.playScore(hit.reward * 10); }
                 }
               }
             } else {
-              const hit = gs.enemies.find(e => e.hp > 0 && dist(e.x, e.y, b.tx, b.ty) < 20);
-              if (hit) {
-                hit.hp -= b.damage;
-                if (b.slow > 0) hit.slowTimer = Math.max(hit.slowTimer, b.slow);
-                if (b.dot > 0) { hit.dotTimer = 3; hit.dotDmg = b.dot; }
-                if (hit.hp <= 0) {
-                  gs.gold += hit.reward;
-                  gs.score += hit.reward * 10;
-                  addParticles(gs.particles, hit.x, hit.y, hit.color, 8);
-                  soundRef.current.playScore(hit.reward * 10);
-                }
+              b.x += (dx / d) * b.speed * dt; b.y += (dy / d) * b.speed * dt;
+            }
+          }
+
+          // Cleanup
+          gs.bullets = gs.bullets.filter(b => !b.hit);
+          gs.enemies = gs.enemies.filter(e => e.hp > 0);
+          for (const p of gs.particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+          gs.particles = gs.particles.filter(p => p.life > 0);
+
+          // Wave complete check
+          if (gs.waveActive && gs.spawnQueue.length === 0 && gs.enemies.length === 0) {
+            gs.waveActive = false; gs.waveDelay = 3;
+            if (gs.wave >= gs.maxWave) {
+              setPhase("victory"); gs.score += gs.lives * 50;
+              soundRef.current.playLevelUp(); submitScore(gs.score); forceUpdate();
+            }
+          }
+          // Game over
+          if (gs.lives <= 0) {
+            gs.lives = 0; setPhase("gameover");
+            soundRef.current.playGameOver(); submitScore(gs.score); forceUpdate();
+          }
+        }
+
+
+        /* ---- RENDER ---- */
+        g.clear();
+        textIdx = 0;
+        for (const t of texts) t.visible = false;
+
+        // Background
+        g.rect(0, 0, W, H).fill({ color: 0x0f0f0f });
+
+        if (phase === "title") {
+          // Decorative grid
+          for (let r = 0; r < 14; r++) for (let c = 0; c < 12; c++) {
+            const col = (r + c) % 2 === 0 ? 0x3ea6ff : 0x1a1a2e;
+            g.rect(c * GRID, r * GRID, GRID - 1, GRID - 1).fill({ color: col, alpha: 0.08 });
+          }
+          // Title
+          nextText("塔防战争", W / 2, 160, { fontSize: 36, fill: "#3ea6ff", fontWeight: "bold", align: "center" });
+          nextText("建造防御塔，抵御敌人入侵", W / 2, 195, { fontSize: 14, fill: "#aaaaaa", align: "center" });
+          // Difficulty buttons
+          const diffs: Difficulty[] = ["easy", "normal", "hard"];
+          for (let i = 0; i < 3; i++) {
+            const bx = W / 2 - 150 + i * 105, by = 240;
+            const isSel = difficulty === diffs[i];
+            g.roundRect(bx, by, 95, 36, 6).fill({ color: isSel ? 0x3ea6ff : 0x1a1a2e });
+            g.roundRect(bx, by, 95, 36, 6).stroke({ color: 0x3ea6ff, width: isSel ? 2 : 1 });
+            nextText(DIFF_DEFS[diffs[i]].name, bx + 47, by + 23, { fontSize: 14, fill: isSel ? "#0f0f0f" : "#cccccc", fontWeight: "bold", align: "center" });
+          }
+          // Map select button
+          g.roundRect(W / 2 - 100, 310, 200, 40, 8).fill({ color: 0x1a1a2e });
+          g.roundRect(W / 2 - 100, 310, 200, 40, 8).stroke({ color: 0x3ea6ff, width: 1 });
+          nextText("选择地图", W / 2, 335, { fontSize: 14, fill: "#3ea6ff", fontWeight: "bold", align: "center" });
+          // Start button
+          g.roundRect(W / 2 - 100, 380, 200, 48, 8).fill({ color: 0x3ea6ff });
+          nextText("开始游戏", W / 2, 410, { fontSize: 18, fill: "#0f0f0f", fontWeight: "bold", align: "center" });
+          // Controls
+          nextText("点击空地放置塔 | 点击塔升级 | 1-5 选择塔类型", W / 2, 470, { fontSize: 12, fill: "#666666", align: "center" });
+          nextText("S: 开始下一波 | M: 静音 | P: 暂停", W / 2, 490, { fontSize: 12, fill: "#666666", align: "center" });
+
+        } else if (phase === "mapselect") {
+          nextText("选择地图", W / 2, 60, { fontSize: 28, fill: "#3ea6ff", fontWeight: "bold", align: "center" });
+          for (let mi = 0; mi < MAPS.length; mi++) {
+            const map = MAPS[mi];
+            const bx = 40, by = 90 + mi * 150, bw = W - 80, bh = 130;
+            const isSel = mapIndex === mi;
+            g.roundRect(bx, by, bw, bh, 8).fill({ color: isSel ? 0x1a2a3e : 0x111111 });
+            g.roundRect(bx, by, bw, bh, 8).stroke({ color: isSel ? 0x3ea6ff : 0x333333, width: isSel ? 2 : 1 });
+            // Mini map preview grid
+            const scale = 8;
+            const ox = bx + 15, oy = by + 30;
+            for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+              g.rect(ox + c * scale, oy + r * scale, scale, scale).stroke({ color: 0x3ea6ff, width: 1, alpha: 0.27 });
+            }
+            // Path line
+            g.moveTo(ox + map.path[0][0] * scale + scale / 2, oy + map.path[0][1] * scale + scale / 2);
+            for (const [px, py] of map.path) {
+              g.lineTo(ox + px * scale + scale / 2, oy + py * scale + scale / 2);
+            }
+            g.stroke({ color: 0x3ea6ff, width: 2 });
+            // Map name
+            nextText(map.name, bx + 130, by + 55, { fontSize: 16, fill: "#ffffff", fontWeight: "bold", align: "left" });
+            nextText(`路径长度: ${map.path.length} 格`, bx + 130, by + 80, { fontSize: 12, fill: "#aaaaaa", align: "left" });
+          }
+          // Back button
+          g.roundRect(W / 2 - 60, H - 60, 120, 36, 6).fill({ color: 0x333333 });
+          nextText("返回", W / 2, H - 37, { fontSize: 14, fill: "#cccccc", align: "center" });
+
+        } else {
+          // Game rendering
+          // Grid
+          for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+            const onP = isOnPath(path, c, r);
+            g.rect(c * GRID, r * GRID, GRID - 1, GRID - 1).fill({ color: onP ? 0x1a1208 : 0x0d0d0d });
+            if (!onP) {
+              g.rect(c * GRID, r * GRID, GRID - 1, GRID - 1).stroke({ color: 0x1a1a1a, width: 0.5 });
+            }
+          }
+
+          // Path line
+          g.moveTo(path[0][0] * GRID + GRID / 2, path[0][1] * GRID + GRID / 2);
+          for (const [px, py] of path) g.lineTo(px * GRID + GRID / 2, py * GRID + GRID / 2);
+          g.stroke({ color: 0x3a2a0a, width: 3 });
+
+          // Start/End markers
+          g.circle(path[0][0] * GRID + GRID / 2, path[0][1] * GRID + GRID / 2, 12).fill({ color: 0x2ed573, alpha: 0.27 });
+          const lastP = path[path.length - 1];
+          g.circle(lastP[0] * GRID + GRID / 2, lastP[1] * GRID + GRID / 2, 12).fill({ color: 0xff4757, alpha: 0.27 });
+
+          // Selected cell highlight
+          if (selectedCell && phase === "playing") {
+            const sc = selectedCell;
+            g.rect(sc.x * GRID + 1, sc.y * GRID + 1, GRID - 3, GRID - 3).stroke({ color: 0x3ea6ff, width: 2 });
+            const existingTower = gs.towers.find(tw => tw.x === sc.x && tw.y === sc.y);
+            if (existingTower) {
+              const def = TOWER_DEFS[existingTower.type];
+              const range = (def.range + (existingTower.level - 1) * 0.3) * GRID;
+              g.circle(sc.x * GRID + GRID / 2, sc.y * GRID + GRID / 2, range).stroke({ color: 0x3ea6ff, width: 1, alpha: 0.2 });
+            } else if (!isOnPath(path, sc.x, sc.y)) {
+              const def = TOWER_DEFS[selectedTower];
+              g.circle(sc.x * GRID + GRID / 2, sc.y * GRID + GRID / 2, def.range * GRID).stroke({ color: 0x3ea6ff, width: 1, alpha: 0.13 });
+            }
+          }
+
+          // Towers
+          for (const tw of gs.towers) {
+            const def = TOWER_DEFS[tw.type];
+            const cx = tw.x * GRID + GRID / 2, cy = tw.y * GRID + GRID / 2;
+            g.circle(cx, cy, GRID / 2 - 2).fill({ color: 0x1a1a2e });
+            g.circle(cx, cy, GRID / 2 - 6).fill({ color: hexToNum(def.color) });
+            if (tw.level > 1) {
+              for (let s = 0; s < tw.level - 1; s++) {
+                nextText("*", cx - 4 + s * 8, cy - 12, { fontSize: 9, fill: "#ffffff", fontWeight: "bold", align: "center", baseline: "middle" });
               }
             }
-          } else {
-            b.x += (dx / d) * b.speed * dt;
-            b.y += (dy / d) * b.speed * dt;
+            const letters: Record<TowerType, string> = { arrow: "A", cannon: "C", ice: "I", poison: "P", laser: "L" };
+            nextText(letters[tw.type], cx, cy + 1, { fontSize: 13, fill: "#0f0f0f", fontWeight: "bold", align: "center", baseline: "middle" });
           }
-        }
 
-        // Cleanup
-        gs.bullets = gs.bullets.filter(b => !b.hit);
-        gs.enemies = gs.enemies.filter(e => e.hp > 0);
-
-        // Particles
-        for (const p of gs.particles) {
-          p.x += p.vx * dt;
-          p.y += p.vy * dt;
-          p.life -= dt;
-        }
-        gs.particles = gs.particles.filter(p => p.life > 0);
-
-        // Wave complete check
-        if (gs.waveActive && gs.spawnQueue.length === 0 && gs.enemies.length === 0) {
-          gs.waveActive = false;
-          gs.waveDelay = 3;
-          if (gs.wave >= gs.maxWave) {
-            setPhase("victory");
-            gs.score += gs.lives * 50;
-            soundRef.current.playLevelUp();
-            submitScore(gs.score);
-            forceUpdate();
+          // Enemies
+          for (const e of gs.enemies) {
+            if (e.hp <= 0) continue;
+            if (e.flying) {
+              g.ellipse(e.x + 3, e.y + 5, e.radius, e.radius * 0.5).fill({ color: 0x000000, alpha: 0.3 });
+            }
+            const bodyColor = e.slowTimer > 0 ? 0x70a1ff : hexToNum(e.color);
+            const ey = e.flying ? e.y - 4 : e.y;
+            g.circle(e.x, ey, e.radius).fill({ color: bodyColor });
+            if (e.dotTimer > 0) {
+              g.circle(e.x, ey, e.radius + 2).stroke({ color: 0x7bed9f, width: 1.5 });
+            }
+            // HP bar
+            const barW = e.radius * 2 + 4;
+            const barY = ey - e.radius - 6;
+            g.rect(e.x - barW / 2, barY, barW, 3).fill({ color: 0x333333 });
+            const hpRatio = Math.max(0, e.hp / e.maxHp);
+            const hpColor = hpRatio > 0.5 ? 0x2ed573 : hpRatio > 0.25 ? 0xffa502 : 0xff4757;
+            g.rect(e.x - barW / 2, barY, barW * hpRatio, 3).fill({ color: hpColor });
           }
-        }
 
-        // Game over
-        if (gs.lives <= 0) {
-          gs.lives = 0;
-          setPhase("gameover");
-          soundRef.current.playGameOver();
-          submitScore(gs.score);
-          forceUpdate();
-        }
-      }
-
-
-      /* ---- RENDER ---- */
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = "#0f0f0f";
-      ctx.fillRect(0, 0, W, H);
-
-      if (phase === "title") {
-        // Title screen
-        ctx.fillStyle = "#0f0f0f";
-        ctx.fillRect(0, 0, W, H);
-        // Decorative grid
-        ctx.globalAlpha = 0.08;
-        for (let r = 0; r < 14; r++) for (let c = 0; c < 12; c++) {
-          ctx.fillStyle = (r + c) % 2 === 0 ? "#3ea6ff" : "#1a1a2e";
-          ctx.fillRect(c * GRID, r * GRID, GRID - 1, GRID - 1);
-        }
-        ctx.globalAlpha = 1;
-        // Title
-        ctx.fillStyle = "#3ea6ff";
-        ctx.font = "bold 36px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("塔防战争", W / 2, 160);
-        ctx.fillStyle = "#aaa";
-        ctx.font = "14px sans-serif";
-        ctx.fillText("建造防御塔，抵御敌人入侵", W / 2, 195);
-        // Difficulty buttons
-        const diffs: Difficulty[] = ["easy", "normal", "hard"];
-        for (let i = 0; i < 3; i++) {
-          const bx = W / 2 - 150 + i * 105, by = 240;
-          const isSelected = difficulty === diffs[i];
-          ctx.fillStyle = isSelected ? "#3ea6ff" : "#1a1a2e";
-          ctx.strokeStyle = "#3ea6ff";
-          ctx.lineWidth = isSelected ? 2 : 1;
-          ctx.beginPath();
-          ctx.roundRect(bx, by, 95, 36, 6);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = isSelected ? "#0f0f0f" : "#ccc";
-          ctx.font = "bold 14px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(DIFF_DEFS[diffs[i]].name, bx + 47, by + 23);
-        }
-        // Map select button
-        ctx.fillStyle = "#1a1a2e";
-        ctx.strokeStyle = "#3ea6ff";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.roundRect(W / 2 - 100, 310, 200, 40, 8);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = "#3ea6ff";
-        ctx.font = "bold 14px sans-serif";
-        ctx.fillText("选择地图", W / 2, 335);
-        // Start button
-        ctx.fillStyle = "#3ea6ff";
-        ctx.beginPath();
-        ctx.roundRect(W / 2 - 100, 380, 200, 48, 8);
-        ctx.fill();
-        ctx.fillStyle = "#0f0f0f";
-        ctx.font = "bold 18px sans-serif";
-        ctx.fillText("开始游戏", W / 2, 410);
-        // Controls
-        ctx.fillStyle = "#666";
-        ctx.font = "12px sans-serif";
-        ctx.fillText("点击空地放置塔 | 点击塔升级 | 1-5 选择塔类型", W / 2, 470);
-        ctx.fillText("S: 开始下一波 | M: 静音 | P: 暂停", W / 2, 490);
-      } else if (phase === "mapselect") {
-        ctx.fillStyle = "#0f0f0f";
-        ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = "#3ea6ff";
-        ctx.font = "bold 28px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("选择地图", W / 2, 60);
-        for (let mi = 0; mi < MAPS.length; mi++) {
-          const map = MAPS[mi];
-          const bx = 40, by = 90 + mi * 150, bw = W - 80, bh = 130;
-          const isSelected = mapIndex === mi;
-          ctx.fillStyle = isSelected ? "#1a2a3e" : "#111";
-          ctx.strokeStyle = isSelected ? "#3ea6ff" : "#333";
-          ctx.lineWidth = isSelected ? 2 : 1;
-          ctx.beginPath();
-          ctx.roundRect(bx, by, bw, bh, 8);
-          ctx.fill();
-          ctx.stroke();
-          // Mini map preview
-          const scale = 8;
-          const ox = bx + 15, oy = by + 30;
-          ctx.strokeStyle = "#3ea6ff44";
-          ctx.lineWidth = 1;
-          for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-            ctx.strokeRect(ox + c * scale, oy + r * scale, scale, scale);
-          }
-          ctx.strokeStyle = "#3ea6ff";
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(ox + map.path[0][0] * scale + scale / 2, oy + map.path[0][1] * scale + scale / 2);
-          for (const [px, py] of map.path) {
-            ctx.lineTo(ox + px * scale + scale / 2, oy + py * scale + scale / 2);
-          }
-          ctx.stroke();
-          // Map name
-          ctx.fillStyle = "#fff";
-          ctx.font = "bold 16px sans-serif";
-          ctx.textAlign = "left";
-          ctx.fillText(map.name, bx + 130, by + 55);
-          ctx.fillStyle = "#aaa";
-          ctx.font = "12px sans-serif";
-          ctx.fillText(`路径长度: ${map.path.length} 格`, bx + 130, by + 80);
-        }
-        // Back button
-        ctx.fillStyle = "#333";
-        ctx.beginPath();
-        ctx.roundRect(W / 2 - 60, H - 60, 120, 36, 6);
-        ctx.fill();
-        ctx.fillStyle = "#ccc";
-        ctx.font = "14px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("返回", W / 2, H - 37);
-      } else {
-        // Game rendering
-        // Grid
-        for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-          const onP = isOnPath(path, c, r);
-          ctx.fillStyle = onP ? "#1a1208" : "#0d0d0d";
-          ctx.fillRect(c * GRID, r * GRID, GRID - 1, GRID - 1);
-          if (!onP) {
-            ctx.strokeStyle = "#1a1a1a";
-            ctx.lineWidth = 0.5;
-            ctx.strokeRect(c * GRID, r * GRID, GRID - 1, GRID - 1);
-          }
-        }
-
-        // Path line
-        ctx.strokeStyle = "#3a2a0a";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(path[0][0] * GRID + GRID / 2, path[0][1] * GRID + GRID / 2);
-        for (const [px, py] of path) ctx.lineTo(px * GRID + GRID / 2, py * GRID + GRID / 2);
-        ctx.stroke();
-
-        // Start/End markers
-        ctx.fillStyle = "#2ed57344";
-        ctx.beginPath();
-        ctx.arc(path[0][0] * GRID + GRID / 2, path[0][1] * GRID + GRID / 2, 12, 0, Math.PI * 2);
-        ctx.fill();
-        const lastP = path[path.length - 1];
-        ctx.fillStyle = "#ff475744";
-        ctx.beginPath();
-        ctx.arc(lastP[0] * GRID + GRID / 2, lastP[1] * GRID + GRID / 2, 12, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Selected cell highlight
-        if (selectedCell && phase === "playing") {
-          const sc = selectedCell;
-          ctx.strokeStyle = "#3ea6ff";
-          ctx.lineWidth = 2;
-          ctx.strokeRect(sc.x * GRID + 1, sc.y * GRID + 1, GRID - 3, GRID - 3);
-          // Show range for tower at this cell
-          const existingTower = gs.towers.find(t => t.x === sc.x && t.y === sc.y);
-          if (existingTower) {
-            const def = TOWER_DEFS[existingTower.type];
-            const range = (def.range + (existingTower.level - 1) * 0.3) * GRID;
-            ctx.strokeStyle = "#3ea6ff33";
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(sc.x * GRID + GRID / 2, sc.y * GRID + GRID / 2, range, 0, Math.PI * 2);
-            ctx.stroke();
-          } else if (!isOnPath(path, sc.x, sc.y)) {
-            const def = TOWER_DEFS[selectedTower];
-            ctx.strokeStyle = "#3ea6ff22";
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(sc.x * GRID + GRID / 2, sc.y * GRID + GRID / 2, def.range * GRID, 0, Math.PI * 2);
-            ctx.stroke();
-          }
-        }
-
-        // Towers
-        for (const t of gs.towers) {
-          const def = TOWER_DEFS[t.type];
-          const cx = t.x * GRID + GRID / 2, cy = t.y * GRID + GRID / 2;
-          // Base
-          ctx.fillStyle = "#1a1a2e";
-          ctx.beginPath();
-          ctx.arc(cx, cy, GRID / 2 - 2, 0, Math.PI * 2);
-          ctx.fill();
-          // Tower body
-          ctx.fillStyle = def.color;
-          ctx.beginPath();
-          ctx.arc(cx, cy, GRID / 2 - 6, 0, Math.PI * 2);
-          ctx.fill();
-          // Level indicator
-          if (t.level > 1) {
-            ctx.fillStyle = "#fff";
-            ctx.font = "bold 9px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            for (let s = 0; s < t.level - 1; s++) {
-              ctx.fillText("*", cx - 4 + s * 8, cy - 12);
+          // Bullets
+          for (const b of gs.bullets) {
+            if (b.hit) continue;
+            g.circle(b.x, b.y, b.pierce ? 4 : 3).fill({ color: hexToNum(b.color) });
+            if (b.pierce) {
+              g.moveTo(b.x - (b.tx - b.x) * 0.3, b.y - (b.ty - b.y) * 0.3);
+              g.lineTo(b.x, b.y);
+              g.stroke({ color: hexToNum(b.color), width: 1, alpha: 0.53 });
             }
           }
-          // Tower letter
-          ctx.fillStyle = "#0f0f0f";
-          ctx.font = "bold 13px sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          const letters: Record<TowerType, string> = { arrow: "A", cannon: "C", ice: "I", poison: "P", laser: "L" };
-          ctx.fillText(letters[t.type], cx, cy + 1);
-        }
 
-        // Enemies
-        for (const e of gs.enemies) {
-          if (e.hp <= 0) continue;
-          // Shadow for flying
-          if (e.flying) {
-            ctx.fillStyle = "rgba(0,0,0,0.3)";
-            ctx.beginPath();
-            ctx.ellipse(e.x + 3, e.y + 5, e.radius, e.radius * 0.5, 0, 0, Math.PI * 2);
-            ctx.fill();
+          // Particles
+          for (const p of gs.particles) {
+            const pAlpha = Math.max(0, p.life / p.maxLife);
+            g.circle(p.x, p.y, p.size * (p.life / p.maxLife)).fill({ color: hexToNum(p.color), alpha: pAlpha });
           }
-          // Body
-          ctx.fillStyle = e.slowTimer > 0 ? "#70a1ff" : e.color;
-          ctx.beginPath();
-          ctx.arc(e.x, e.flying ? e.y - 4 : e.y, e.radius, 0, Math.PI * 2);
-          ctx.fill();
-          // DOT indicator
-          if (e.dotTimer > 0) {
-            ctx.strokeStyle = "#7bed9f";
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.arc(e.x, e.flying ? e.y - 4 : e.y, e.radius + 2, 0, Math.PI * 2);
-            ctx.stroke();
+
+
+          // HUD background
+          g.rect(0, HUD_Y, W, H - HUD_Y).fill({ color: 0x0f0f0f, alpha: 0.95 });
+          g.moveTo(0, HUD_Y); g.lineTo(W, HUD_Y);
+          g.stroke({ color: 0x3ea6ff, width: 1, alpha: 0.2 });
+
+          // HUD info
+          nextText(`波次: ${gs.wave}/${gs.maxWave}`, 8, HUD_Y + 6, { fontSize: 13, fill: "#ffffff", fontWeight: "bold", align: "left", baseline: "top" });
+          nextText(`金币: ${gs.gold}`, 130, HUD_Y + 6, { fontSize: 13, fill: "#ffd700", fontWeight: "bold", align: "left", baseline: "top" });
+          nextText(`生命: ${gs.lives}`, 250, HUD_Y + 6, { fontSize: 13, fill: "#ff4757", fontWeight: "bold", align: "left", baseline: "top" });
+          nextText(`分数: ${gs.score}`, 360, HUD_Y + 6, { fontSize: 13, fill: "#3ea6ff", fontWeight: "bold", align: "left", baseline: "top" });
+
+          // Tower selection buttons
+          const btnY = HUD_Y + 28;
+          const btnW = (W - 20) / 5;
+          for (let i = 0; i < TOWER_TYPES.length; i++) {
+            const tt = TOWER_TYPES[i];
+            const def = TOWER_DEFS[tt];
+            const bx = 6 + i * (btnW + 2);
+            const isSel = selectedTower === tt;
+            const canAfford = gs.gold >= def.cost;
+            g.roundRect(bx, btnY, btnW, 50, 4).fill({ color: isSel ? 0x1a2a4e : 0x111111 });
+            g.roundRect(bx, btnY, btnW, 50, 4).stroke({ color: isSel ? hexToNum(def.color) : (canAfford ? 0x333333 : 0x222222), width: isSel ? 2 : 1 });
+            nextText(def.name, bx + btnW / 2, btnY + 14, { fontSize: 11, fill: canAfford ? def.color : "#555555", fontWeight: "bold", align: "center" });
+            nextText(`${def.cost}G`, bx + btnW / 2, btnY + 30, { fontSize: 10, fill: canAfford ? "#cccccc" : "#444444", align: "center" });
+            nextText(def.desc, bx + btnW / 2, btnY + 42, { fontSize: 10, fill: canAfford ? "#cccccc" : "#444444", align: "center" });
           }
-          // HP bar
-          const barW = e.radius * 2 + 4;
-          const barY = (e.flying ? e.y - 4 : e.y) - e.radius - 6;
-          ctx.fillStyle = "#333";
-          ctx.fillRect(e.x - barW / 2, barY, barW, 3);
-          const hpRatio = Math.max(0, e.hp / e.maxHp);
-          ctx.fillStyle = hpRatio > 0.5 ? "#2ed573" : hpRatio > 0.25 ? "#ffa502" : "#ff4757";
-          ctx.fillRect(e.x - barW / 2, barY, barW * hpRatio, 3);
-        }
 
-        // Bullets
-        for (const b of gs.bullets) {
-          if (b.hit) continue;
-          ctx.fillStyle = b.color;
-          ctx.beginPath();
-          ctx.arc(b.x, b.y, b.pierce ? 4 : 3, 0, Math.PI * 2);
-          ctx.fill();
-          if (b.pierce) {
-            ctx.strokeStyle = b.color + "88";
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(b.x - (b.tx - b.x) * 0.3, b.y - (b.ty - b.y) * 0.3);
-            ctx.lineTo(b.x, b.y);
-            ctx.stroke();
+          // Upgrade info for selected tower
+          if (selectedCell) {
+            const tower = gs.towers.find(tw => tw.x === selectedCell.x && tw.y === selectedCell.y);
+            if (tower && tower.level < 3) {
+              const def = TOWER_DEFS[tower.type];
+              const cost = towerUpgradeCost(def, tower.level);
+              const infoY = HUD_Y + 84;
+              g.roundRect(6, infoY, W - 12, 30, 4).fill({ color: 0x1a1a2e });
+              nextText(
+                `升级 ${def.name} Lv${tower.level} -> Lv${tower.level + 1} (${cost}G) | 伤害: ${towerDamage(def, tower.level)} -> ${towerDamage(def, tower.level + 1)}`,
+                W / 2, infoY + 19, { fontSize: 12, fill: gs.gold >= cost ? "#3ea6ff" : "#666666", fontWeight: "bold", align: "center" }
+              );
+            }
           }
-        }
 
-        // Particles
-        for (const p of gs.particles) {
-          ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
-          ctx.fillStyle = p.color;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.globalAlpha = 1;
+          // Wave start hint
+          if (!gs.waveActive && gs.wave < gs.maxWave && gs.enemies.length === 0 && phase === "playing") {
+            nextText(`按 S 或点击此处开始第 ${gs.wave + 1} 波`, W / 2, HUD_Y + 122, { fontSize: 14, fill: "#3ea6ff", fontWeight: "bold", align: "center", alpha: 0.53 });
+          }
 
+          // Paused overlay
+          if (phase === "paused") {
+            g.rect(0, 0, W, HUD_Y).fill({ color: 0x000000, alpha: 0.7 });
+            nextText("暂停", W / 2, HUD_Y / 2 - 10, { fontSize: 32, fill: "#3ea6ff", fontWeight: "bold", align: "center" });
+            nextText("按 P 或点击继续", W / 2, HUD_Y / 2 + 20, { fontSize: 14, fill: "#aaaaaa", align: "center" });
+          }
 
-        // HUD background
-        ctx.fillStyle = "rgba(15,15,15,0.95)";
-        ctx.fillRect(0, HUD_Y, W, H - HUD_Y);
-        ctx.strokeStyle = "#3ea6ff33";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, HUD_Y);
-        ctx.lineTo(W, HUD_Y);
-        ctx.stroke();
+          // Victory overlay
+          if (phase === "victory") {
+            g.rect(0, 0, W, HUD_Y).fill({ color: 0x000000, alpha: 0.75 });
+            nextText("胜利", W / 2, HUD_Y / 2 - 40, { fontSize: 36, fill: "#2ed573", fontWeight: "bold", align: "center" });
+            nextText(`最终分数: ${gs.score}`, W / 2, HUD_Y / 2, { fontSize: 18, fill: "#ffffff", fontWeight: "bold", align: "center" });
+            nextText(`难度: ${DIFF_DEFS[gs.difficulty].name} | 地图: ${MAPS[gs.mapIndex].name}`, W / 2, HUD_Y / 2 + 30, { fontSize: 14, fill: "#aaaaaa", align: "center" });
+            nextText(`剩余生命: ${gs.lives} | 波次: ${gs.wave}/${gs.maxWave}`, W / 2, HUD_Y / 2 + 55, { fontSize: 14, fill: "#aaaaaa", align: "center" });
+            g.roundRect(W / 2 - 80, HUD_Y / 2 + 75, 160, 40, 8).fill({ color: 0x3ea6ff });
+            nextText("再来一局", W / 2, HUD_Y / 2 + 100, { fontSize: 16, fill: "#0f0f0f", fontWeight: "bold", align: "center" });
+          }
 
-        // HUD info
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 13px sans-serif";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "top";
-        ctx.fillText(`波次: ${gs.wave}/${gs.maxWave}`, 8, HUD_Y + 6);
-        ctx.fillStyle = "#ffd700";
-        ctx.fillText(`金币: ${gs.gold}`, 130, HUD_Y + 6);
-        ctx.fillStyle = "#ff4757";
-        ctx.fillText(`生命: ${gs.lives}`, 250, HUD_Y + 6);
-        ctx.fillStyle = "#3ea6ff";
-        ctx.fillText(`分数: ${gs.score}`, 360, HUD_Y + 6);
-
-        // Tower selection buttons
-        const btnY = HUD_Y + 28;
-        const btnW = (W - 20) / 5;
-        for (let i = 0; i < TOWER_TYPES.length; i++) {
-          const tt = TOWER_TYPES[i];
-          const def = TOWER_DEFS[tt];
-          const bx = 6 + i * (btnW + 2);
-          const isSelected = selectedTower === tt;
-          const canAfford = gs.gold >= def.cost;
-          ctx.fillStyle = isSelected ? "#1a2a4e" : "#111";
-          ctx.strokeStyle = isSelected ? def.color : (canAfford ? "#333" : "#222");
-          ctx.lineWidth = isSelected ? 2 : 1;
-          ctx.beginPath();
-          ctx.roundRect(bx, btnY, btnW, 50, 4);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = canAfford ? def.color : "#555";
-          ctx.font = "bold 11px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(def.name, bx + btnW / 2, btnY + 14);
-          ctx.fillStyle = canAfford ? "#ccc" : "#444";
-          ctx.font = "10px sans-serif";
-          ctx.fillText(`${def.cost}G`, bx + btnW / 2, btnY + 30);
-          ctx.fillText(def.desc, bx + btnW / 2, btnY + 42);
-        }
-
-        // Upgrade info for selected tower
-        if (selectedCell) {
-          const tower = gs.towers.find(t => t.x === selectedCell.x && t.y === selectedCell.y);
-          if (tower && tower.level < 3) {
-            const def = TOWER_DEFS[tower.type];
-            const cost = towerUpgradeCost(def, tower.level);
-            const infoY = HUD_Y + 84;
-            ctx.fillStyle = "#1a1a2e";
-            ctx.beginPath();
-            ctx.roundRect(6, infoY, W - 12, 30, 4);
-            ctx.fill();
-            ctx.fillStyle = gs.gold >= cost ? "#3ea6ff" : "#666";
-            ctx.font = "bold 12px sans-serif";
-            ctx.textAlign = "center";
-            ctx.fillText(
-              `升级 ${def.name} Lv${tower.level} -> Lv${tower.level + 1} (${cost}G) | 伤害: ${towerDamage(def, tower.level)} -> ${towerDamage(def, tower.level + 1)}`,
-              W / 2, infoY + 19
-            );
+          // Game over overlay
+          if (phase === "gameover") {
+            g.rect(0, 0, W, HUD_Y).fill({ color: 0x000000, alpha: 0.75 });
+            nextText("防线失守", W / 2, HUD_Y / 2 - 40, { fontSize: 36, fill: "#ff4757", fontWeight: "bold", align: "center" });
+            nextText(`分数: ${gs.score}`, W / 2, HUD_Y / 2, { fontSize: 18, fill: "#ffffff", fontWeight: "bold", align: "center" });
+            nextText(`坚持到第 ${gs.wave} 波 | ${DIFF_DEFS[gs.difficulty].name}`, W / 2, HUD_Y / 2 + 30, { fontSize: 14, fill: "#aaaaaa", align: "center" });
+            g.roundRect(W / 2 - 80, HUD_Y / 2 + 60, 160, 40, 8).fill({ color: 0x3ea6ff });
+            nextText("再来一局", W / 2, HUD_Y / 2 + 85, { fontSize: 16, fill: "#0f0f0f", fontWeight: "bold", align: "center" });
           }
         }
+      }); // end app.ticker.add
+    })(); // end async IIFE
 
-        // Wave start hint
-        if (!gs.waveActive && gs.wave < gs.maxWave && gs.enemies.length === 0 && phase === "playing") {
-          ctx.fillStyle = "#3ea6ff88";
-          ctx.font = "bold 14px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(`按 S 或点击此处开始第 ${gs.wave + 1} 波`, W / 2, HUD_Y + 122);
-        }
-
-        // Paused overlay
-        if (phase === "paused") {
-          ctx.fillStyle = "rgba(0,0,0,0.7)";
-          ctx.fillRect(0, 0, W, HUD_Y);
-          ctx.fillStyle = "#3ea6ff";
-          ctx.font = "bold 32px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText("暂停", W / 2, HUD_Y / 2 - 10);
-          ctx.fillStyle = "#aaa";
-          ctx.font = "14px sans-serif";
-          ctx.fillText("按 P 或点击继续", W / 2, HUD_Y / 2 + 20);
-        }
-
-        // Victory overlay
-        if (phase === "victory") {
-          ctx.fillStyle = "rgba(0,0,0,0.75)";
-          ctx.fillRect(0, 0, W, HUD_Y);
-          ctx.fillStyle = "#2ed573";
-          ctx.font = "bold 36px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText("胜利", W / 2, HUD_Y / 2 - 40);
-          ctx.fillStyle = "#fff";
-          ctx.font = "bold 18px sans-serif";
-          ctx.fillText(`最终分数: ${gs.score}`, W / 2, HUD_Y / 2);
-          ctx.fillStyle = "#aaa";
-          ctx.font = "14px sans-serif";
-          ctx.fillText(`难度: ${DIFF_DEFS[gs.difficulty].name} | 地图: ${MAPS[gs.mapIndex].name}`, W / 2, HUD_Y / 2 + 30);
-          ctx.fillText(`剩余生命: ${gs.lives} | 波次: ${gs.wave}/${gs.maxWave}`, W / 2, HUD_Y / 2 + 55);
-          ctx.fillStyle = "#3ea6ff";
-          ctx.beginPath();
-          ctx.roundRect(W / 2 - 80, HUD_Y / 2 + 75, 160, 40, 8);
-          ctx.fill();
-          ctx.fillStyle = "#0f0f0f";
-          ctx.font = "bold 16px sans-serif";
-          ctx.fillText("再来一局", W / 2, HUD_Y / 2 + 100);
-        }
-
-        // Game over overlay
-        if (phase === "gameover") {
-          ctx.fillStyle = "rgba(0,0,0,0.75)";
-          ctx.fillRect(0, 0, W, HUD_Y);
-          ctx.fillStyle = "#ff4757";
-          ctx.font = "bold 36px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText("防线失守", W / 2, HUD_Y / 2 - 40);
-          ctx.fillStyle = "#fff";
-          ctx.font = "bold 18px sans-serif";
-          ctx.fillText(`分数: ${gs.score}`, W / 2, HUD_Y / 2);
-          ctx.fillStyle = "#aaa";
-          ctx.font = "14px sans-serif";
-          ctx.fillText(`坚持到第 ${gs.wave} 波 | ${DIFF_DEFS[gs.difficulty].name}`, W / 2, HUD_Y / 2 + 30);
-          ctx.fillStyle = "#3ea6ff";
-          ctx.beginPath();
-          ctx.roundRect(W / 2 - 80, HUD_Y / 2 + 60, 160, 40, 8);
-          ctx.fill();
-          ctx.fillStyle = "#0f0f0f";
-          ctx.font = "bold 16px sans-serif";
-          ctx.fillText("再来一局", W / 2, HUD_Y / 2 + 85);
-        }
-      }
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      destroyed = true;
+      if (app) { app.destroy(true); app = null; }
     };
-
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
   }, [phase, selectedTower, selectedCell, difficulty, mapIndex, startNextWave, submitScore, forceUpdate]);
 
 
@@ -946,7 +782,6 @@ export default function TowerDefense() {
     }
 
     if (phase === "mapselect") {
-      // Map selection
       for (let mi = 0; mi < MAPS.length; mi++) {
         const by = 90 + mi * 150, bh = 130;
         if (mx >= 40 && mx <= W - 40 && my >= by && my <= by + bh) {
@@ -955,7 +790,6 @@ export default function TowerDefense() {
           return;
         }
       }
-      // Back button
       if (mx >= W / 2 - 60 && mx <= W / 2 + 60 && my >= H - 60 && my <= H - 24) {
         setPhase("title");
         soundRef.current.playClick();
@@ -965,7 +799,6 @@ export default function TowerDefense() {
     }
 
     if (phase === "victory" || phase === "gameover") {
-      // Restart button
       const btnY = phase === "victory" ? HUD_Y / 2 + 75 : HUD_Y / 2 + 60;
       if (mx >= W / 2 - 80 && mx <= W / 2 + 80 && my >= btnY && my <= btnY + 40) {
         setPhase("title");
@@ -1051,6 +884,7 @@ export default function TowerDefense() {
     }
   }, [phase, selectedTower, selectedCell, difficulty, mapIndex, startGame, startNextWave, forceUpdate]);
 
+
   /* ========== Canvas 事件 ========== */
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1085,21 +919,14 @@ export default function TowerDefense() {
         return;
       }
       if (phase === "playing") {
-        if (key === "p") {
-          setPhase("paused");
-          return;
-        }
-        if (key === "s") {
-          startNextWave();
-          return;
-        }
+        if (key === "p") { setPhase("paused"); return; }
+        if (key === "s") { startNextWave(); return; }
         const numMap: Record<string, TowerType> = { "1": "arrow", "2": "cannon", "3": "ice", "4": "poison", "5": "laser" };
         if (numMap[key]) {
           setSelectedTower(numMap[key]);
           setSelectedCell(null);
           soundRef.current.playClick();
         }
-        // Upgrade with U key
         if (key === "u" && selectedCell) {
           const gs = gsRef.current;
           const tower = gs.towers.find(t => t.x === selectedCell.x && t.y === selectedCell.y);
@@ -1115,10 +942,7 @@ export default function TowerDefense() {
           }
         }
       }
-      if (phase === "paused" && key === "p") {
-        setPhase("playing");
-        return;
-      }
+      if (phase === "paused" && key === "p") { setPhase("playing"); return; }
       if ((phase === "victory" || phase === "gameover") && (key === "enter" || key === " ")) {
         setPhase("title");
       }
@@ -1136,14 +960,9 @@ export default function TowerDefense() {
   const handleSave = useCallback(() => {
     const gs = gsRef.current;
     return {
-      towers: gs.towers,
-      gold: gs.gold,
-      lives: gs.lives,
-      wave: gs.wave,
-      score: gs.score,
-      difficulty: gs.difficulty,
-      mapIndex: gs.mapIndex,
-      waveActive: gs.waveActive,
+      towers: gs.towers, gold: gs.gold, lives: gs.lives,
+      wave: gs.wave, score: gs.score, difficulty: gs.difficulty,
+      mapIndex: gs.mapIndex, waveActive: gs.waveActive,
     };
   }, []);
 

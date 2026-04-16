@@ -11,6 +11,8 @@ import {
 import { ageGate } from "@/lib/age-gate";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
 import { fetchWithAuth } from "@/lib/auth";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "adult-dress";
@@ -21,12 +23,14 @@ const PRIMARY = "#a55eea", ACCENT = "#3ea6ff", BG = "#0f0f0f";
 type Phase = "title" | "select" | "playing" | "photo";
 type Slot = "hair" | "top" | "bottom" | "shoes" | "accessory" | "underwear";
 
+type PixiDrawFn = (g: PixiGraphics, cx: number, cy: number, color: string, colorToNum: (hex: string) => number) => void;
+
 interface ClothingItem {
   id: string;
   name: string;
   slot: Slot;
   colors: string[];
-  drawFn: (ctx: CanvasRenderingContext2D, cx: number, cy: number, color: string) => void;
+  drawFn: PixiDrawFn;
 }
 
 interface CharacterModel {
@@ -71,78 +75,84 @@ const SLOT_LABELS: Record<Slot, string> = {
 };
 const SLOTS: Slot[] = ["hair", "top", "bottom", "shoes", "accessory", "underwear"];
 
-// ─── Clothing Items ──────────────────────────────────────────────────────────
+// ─── Color Conversion Helper ─────────────────────────────────────────────────
+function hexToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
+// ─── Clothing Items (PixiJS Graphics) ────────────────────────────────────────
 function makeItems(): Record<Slot, ClothingItem[]> {
   return {
     hair: [
       { id: "h1", name: "长直发", slot: "hair", colors: ["#ffd700", "#1a1a2e", "#ff6b81", "#a55eea", "#e8b89d"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(cx, cy - 6, 30, Math.PI, 0); ctx.fill(); ctx.fillRect(cx - 30, cy - 6, 12, 60); ctx.fillRect(cx + 18, cy - 6, 12, 60); } },
+        drawFn: (g, cx, cy, c, cn) => { g.circle(cx, cy - 6, 30).fill({ color: cn(c) }); g.rect(cx - 30, cy - 6, 12, 60).fill({ color: cn(c) }); g.rect(cx + 18, cy - 6, 12, 60).fill({ color: cn(c) }); } },
       { id: "h2", name: "短发", slot: "hair", colors: ["#333", "#ff6b81", "#3ea6ff", "#ffd700", "#a55eea"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(cx, cy - 4, 28, Math.PI * 0.8, Math.PI * 0.2); ctx.fill(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.arc(cx, cy - 4, 28, Math.PI * 0.8, Math.PI * 0.2).fill({ color: cn(c) }); } },
       { id: "h3", name: "马尾辫", slot: "hair", colors: ["#a55eea", "#ffd700", "#ff6b81", "#333", "#e8b89d"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(cx, cy - 6, 28, Math.PI, 0); ctx.fill(); ctx.beginPath(); ctx.moveTo(cx + 20, cy - 10); ctx.quadraticCurveTo(cx + 45, cy, cx + 35, cy + 40); ctx.lineWidth = 8; ctx.strokeStyle = c; ctx.stroke(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.circle(cx, cy - 6, 28).fill({ color: cn(c) }); g.moveTo(cx + 20, cy - 10).quadraticCurveTo(cx + 45, cy, cx + 35, cy + 40).stroke({ color: cn(c), width: 8 }); } },
       { id: "h4", name: "卷发", slot: "hair", colors: ["#2ed573", "#ffd700", "#ff6b81", "#a55eea", "#333"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; for (let a = Math.PI; a >= 0; a -= 0.3) { const r = 30 + Math.sin(a * 5) * 4; ctx.beginPath(); ctx.arc(cx + Math.cos(a) * 26, cy - 6 + Math.sin(a) * -20, 10, 0, Math.PI * 2); ctx.fill(); } ctx.beginPath(); ctx.arc(cx, cy - 6, 28, Math.PI, 0); ctx.fill(); } },
+        drawFn: (g, cx, cy, c, cn) => { for (let a = Math.PI; a >= 0; a -= 0.3) { g.circle(cx + Math.cos(a) * 26, cy - 6 + Math.sin(a) * -20, 10).fill({ color: cn(c) }); } g.circle(cx, cy - 6, 28).fill({ color: cn(c) }); } },
       { id: "h5", name: "双马尾", slot: "hair", colors: ["#ff6b81", "#3ea6ff", "#ffd700", "#a55eea", "#333"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(cx, cy - 6, 28, Math.PI, 0); ctx.fill(); ctx.fillRect(cx - 32, cy - 2, 10, 50); ctx.fillRect(cx + 22, cy - 2, 10, 50); } },
+        drawFn: (g, cx, cy, c, cn) => { g.circle(cx, cy - 6, 28).fill({ color: cn(c) }); g.rect(cx - 32, cy - 2, 10, 50).fill({ color: cn(c) }); g.rect(cx + 22, cy - 2, 10, 50).fill({ color: cn(c) }); } },
     ],
     top: [
       { id: "t1", name: "T恤", slot: "top", colors: ["#3ea6ff", "#ff4757", "#2ed573", "#ffd700", "#a55eea"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.roundRect(cx - 24, cy + 50, 48, 38, 4); ctx.fill(); ctx.fillRect(cx - 34, cy + 50, 14, 20); ctx.fillRect(cx + 20, cy + 50, 14, 20); } },
+        drawFn: (g, cx, cy, c, cn) => { g.roundRect(cx - 24, cy + 50, 48, 38, 4).fill({ color: cn(c) }); g.rect(cx - 34, cy + 50, 14, 20).fill({ color: cn(c) }); g.rect(cx + 20, cy + 50, 14, 20).fill({ color: cn(c) }); } },
       { id: "t2", name: "吊带背心", slot: "top", colors: ["#ff4757", "#333", "#fff", "#a55eea", "#3ea6ff"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.roundRect(cx - 20, cy + 52, 40, 36, 3); ctx.fill(); ctx.strokeStyle = c; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(cx - 14, cy + 52); ctx.lineTo(cx - 10, cy + 42); ctx.stroke(); ctx.beginPath(); ctx.moveTo(cx + 14, cy + 52); ctx.lineTo(cx + 10, cy + 42); ctx.stroke(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.roundRect(cx - 20, cy + 52, 40, 36, 3).fill({ color: cn(c) }); g.moveTo(cx - 14, cy + 52).lineTo(cx - 10, cy + 42).stroke({ color: cn(c), width: 3 }); g.moveTo(cx + 14, cy + 52).lineTo(cx + 10, cy + 42).stroke({ color: cn(c), width: 3 }); } },
       { id: "t3", name: "西装外套", slot: "top", colors: ["#333", "#1a1a4e", "#5a3e2b", "#666", "#a55eea"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.roundRect(cx - 26, cy + 48, 52, 42, 4); ctx.fill(); ctx.fillRect(cx - 36, cy + 48, 14, 28); ctx.fillRect(cx + 22, cy + 48, 14, 28); ctx.fillStyle = "#fff"; ctx.fillRect(cx - 2, cy + 50, 4, 38); } },
+        drawFn: (g, cx, cy, c, cn) => { g.roundRect(cx - 26, cy + 48, 52, 42, 4).fill({ color: cn(c) }); g.rect(cx - 36, cy + 48, 14, 28).fill({ color: cn(c) }); g.rect(cx + 22, cy + 48, 14, 28).fill({ color: cn(c) }); g.rect(cx - 2, cy + 50, 4, 38).fill({ color: 0xffffff }); } },
       { id: "t4", name: "比基尼上衣", slot: "top", colors: ["#ff4757", "#3ea6ff", "#ffd700", "#a55eea", "#333"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(cx - 10, cy + 58, 10, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(cx + 10, cy + 58, 10, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx - 10, cy + 48); ctx.lineTo(cx, cy + 44); ctx.lineTo(cx + 10, cy + 48); ctx.stroke(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.circle(cx - 10, cy + 58, 10).fill({ color: cn(c) }); g.circle(cx + 10, cy + 58, 10).fill({ color: cn(c) }); g.moveTo(cx - 10, cy + 48).lineTo(cx, cy + 44).lineTo(cx + 10, cy + 48).stroke({ color: cn(c), width: 2 }); } },
       { id: "t5", name: "无（裸露）", slot: "top", colors: ["transparent"],
         drawFn: () => {} },
     ],
     bottom: [
       { id: "b1", name: "迷你裙", slot: "bottom", colors: ["#a55eea", "#ff4757", "#333", "#3ea6ff", "#ffd700"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(cx - 22, cy + 88); ctx.lineTo(cx + 22, cy + 88); ctx.lineTo(cx + 28, cy + 118); ctx.lineTo(cx - 28, cy + 118); ctx.closePath(); ctx.fill(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.moveTo(cx - 22, cy + 88).lineTo(cx + 22, cy + 88).lineTo(cx + 28, cy + 118).lineTo(cx - 28, cy + 118).closePath().fill({ color: cn(c) }); } },
       { id: "b2", name: "牛仔裤", slot: "bottom", colors: ["#1e90ff", "#333", "#5a3e2b", "#666", "#1a1a4e"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.fillRect(cx - 20, cy + 88, 18, 55); ctx.fillRect(cx + 2, cy + 88, 18, 55); } },
+        drawFn: (g, cx, cy, c, cn) => { g.rect(cx - 20, cy + 88, 18, 55).fill({ color: cn(c) }); g.rect(cx + 2, cy + 88, 18, 55).fill({ color: cn(c) }); } },
       { id: "b3", name: "热裤", slot: "bottom", colors: ["#ffa502", "#ff4757", "#333", "#a55eea", "#3ea6ff"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.fillRect(cx - 20, cy + 88, 18, 22); ctx.fillRect(cx + 2, cy + 88, 18, 22); } },
+        drawFn: (g, cx, cy, c, cn) => { g.rect(cx - 20, cy + 88, 18, 22).fill({ color: cn(c) }); g.rect(cx + 2, cy + 88, 18, 22).fill({ color: cn(c) }); } },
       { id: "b4", name: "比基尼下装", slot: "bottom", colors: ["#ff4757", "#3ea6ff", "#ffd700", "#a55eea", "#333"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(cx - 16, cy + 88); ctx.lineTo(cx + 16, cy + 88); ctx.lineTo(cx + 12, cy + 100); ctx.lineTo(cx - 12, cy + 100); ctx.closePath(); ctx.fill(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.moveTo(cx - 16, cy + 88).lineTo(cx + 16, cy + 88).lineTo(cx + 12, cy + 100).lineTo(cx - 12, cy + 100).closePath().fill({ color: cn(c) }); } },
       { id: "b5", name: "无（裸露）", slot: "bottom", colors: ["transparent"],
         drawFn: () => {} },
     ],
     shoes: [
       { id: "s1", name: "高跟鞋", slot: "shoes", colors: ["#ff4757", "#333", "#ffd700", "#a55eea", "#fff"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.fillRect(cx - 18, cy + 148, 16, 8); ctx.fillRect(cx + 2, cy + 148, 16, 8); ctx.fillRect(cx - 10, cy + 152, 4, 10); ctx.fillRect(cx + 10, cy + 152, 4, 10); } },
+        drawFn: (g, cx, cy, c, cn) => { g.rect(cx - 18, cy + 148, 16, 8).fill({ color: cn(c) }); g.rect(cx + 2, cy + 148, 16, 8).fill({ color: cn(c) }); g.rect(cx - 10, cy + 152, 4, 10).fill({ color: cn(c) }); g.rect(cx + 10, cy + 152, 4, 10).fill({ color: cn(c) }); } },
       { id: "s2", name: "长靴", slot: "shoes", colors: ["#333", "#5a3e2b", "#1a1a4e", "#ff4757", "#a55eea"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.fillRect(cx - 18, cy + 128, 16, 28); ctx.fillRect(cx + 2, cy + 128, 16, 28); } },
+        drawFn: (g, cx, cy, c, cn) => { g.rect(cx - 18, cy + 128, 16, 28).fill({ color: cn(c) }); g.rect(cx + 2, cy + 128, 16, 28).fill({ color: cn(c) }); } },
       { id: "s3", name: "运动鞋", slot: "shoes", colors: ["#fff", "#ff4757", "#3ea6ff", "#2ed573", "#ffd700"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.roundRect(cx - 20, cy + 148, 18, 10, 3); ctx.fill(); ctx.beginPath(); ctx.roundRect(cx + 2, cy + 148, 18, 10, 3); ctx.fill(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.roundRect(cx - 20, cy + 148, 18, 10, 3).fill({ color: cn(c) }); g.roundRect(cx + 2, cy + 148, 18, 10, 3).fill({ color: cn(c) }); } },
       { id: "s4", name: "凉鞋", slot: "shoes", colors: ["#ffd700", "#ff4757", "#333", "#a55eea", "#3ea6ff"],
-        drawFn: (ctx, cx, cy, c) => { ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx - 16, cy + 150); ctx.lineTo(cx - 6, cy + 145); ctx.lineTo(cx - 16, cy + 155); ctx.stroke(); ctx.beginPath(); ctx.moveTo(cx + 4, cy + 150); ctx.lineTo(cx + 14, cy + 145); ctx.lineTo(cx + 4, cy + 155); ctx.stroke(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.moveTo(cx - 16, cy + 150).lineTo(cx - 6, cy + 145).lineTo(cx - 16, cy + 155).stroke({ color: cn(c), width: 2 }); g.moveTo(cx + 4, cy + 150).lineTo(cx + 14, cy + 145).lineTo(cx + 4, cy + 155).stroke({ color: cn(c), width: 2 }); } },
       { id: "s5", name: "赤脚", slot: "shoes", colors: ["transparent"],
         drawFn: () => {} },
     ],
     accessory: [
       { id: "a1", name: "项链", slot: "accessory", colors: ["#ffd700", "#c0c0c0", "#ff4757", "#3ea6ff", "#a55eea"],
-        drawFn: (ctx, cx, cy, c) => { ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy + 46, 14, 0.1, Math.PI - 0.1); ctx.stroke(); ctx.fillStyle = c; ctx.beginPath(); ctx.arc(cx, cy + 60, 4, 0, Math.PI * 2); ctx.fill(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.arc(cx, cy + 46, 14, 0.1, Math.PI - 0.1).stroke({ color: cn(c), width: 2 }); g.circle(cx, cy + 60, 4).fill({ color: cn(c) }); } },
       { id: "a2", name: "眼镜", slot: "accessory", colors: ["#3ea6ff", "#333", "#ff4757", "#ffd700", "#a55eea"],
-        drawFn: (ctx, cx, cy, c) => { ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx - 10, cy + 18, 8, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.arc(cx + 10, cy + 18, 8, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.moveTo(cx - 2, cy + 18); ctx.lineTo(cx + 2, cy + 18); ctx.stroke(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.circle(cx - 10, cy + 18, 8).stroke({ color: cn(c), width: 2 }); g.circle(cx + 10, cy + 18, 8).stroke({ color: cn(c), width: 2 }); g.moveTo(cx - 2, cy + 18).lineTo(cx + 2, cy + 18).stroke({ color: cn(c), width: 2 }); } },
       { id: "a3", name: "帽子", slot: "accessory", colors: ["#ff6b81", "#333", "#3ea6ff", "#ffd700", "#a55eea"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.fillRect(cx - 32, cy - 8, 64, 10); ctx.beginPath(); ctx.roundRect(cx - 20, cy - 24, 40, 20, 6); ctx.fill(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.rect(cx - 32, cy - 8, 64, 10).fill({ color: cn(c) }); g.roundRect(cx - 20, cy - 24, 40, 20, 6).fill({ color: cn(c) }); } },
       { id: "a4", name: "耳环", slot: "accessory", colors: ["#ffd700", "#c0c0c0", "#ff4757", "#a55eea", "#3ea6ff"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(cx - 26, cy + 22, 4, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(cx + 26, cy + 22, 4, 0, Math.PI * 2); ctx.fill(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.circle(cx - 26, cy + 22, 4).fill({ color: cn(c) }); g.circle(cx + 26, cy + 22, 4).fill({ color: cn(c) }); } },
       { id: "a5", name: "无", slot: "accessory", colors: ["transparent"],
         drawFn: () => {} },
     ],
     underwear: [
       { id: "u1", name: "蕾丝内衣", slot: "underwear", colors: ["#ff4757", "#333", "#fff", "#a55eea", "#ffd700"],
-        drawFn: (ctx, cx, cy, c) => { ctx.strokeStyle = c; ctx.lineWidth = 1.5; for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.arc(cx - 10 + (i % 3) * 10, cy + 54 + Math.floor(i / 3) * 8, 4, 0, Math.PI * 2); ctx.stroke(); } } },
+        drawFn: (g, cx, cy, c, cn) => { for (let i = 0; i < 6; i++) { g.circle(cx - 10 + (i % 3) * 10, cy + 54 + Math.floor(i / 3) * 8, 4).stroke({ color: cn(c), width: 1.5 }); } } },
       { id: "u2", name: "运动内衣", slot: "underwear", colors: ["#333", "#3ea6ff", "#ff4757", "#2ed573", "#a55eea"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.roundRect(cx - 18, cy + 50, 36, 16, 3); ctx.fill(); ctx.globalAlpha = 1; } },
+        drawFn: (g, cx, cy, c, cn) => { g.roundRect(cx - 18, cy + 50, 36, 16, 3).fill({ color: cn(c), alpha: 0.6 }); } },
       { id: "u3", name: "丁字裤", slot: "underwear", colors: ["#ff4757", "#333", "#a55eea", "#ffd700", "#3ea6ff"],
-        drawFn: (ctx, cx, cy, c) => { ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx - 14, cy + 88); ctx.lineTo(cx, cy + 96); ctx.lineTo(cx + 14, cy + 88); ctx.stroke(); } },
+        drawFn: (g, cx, cy, c, cn) => { g.moveTo(cx - 14, cy + 88).lineTo(cx, cy + 96).lineTo(cx + 14, cy + 88).stroke({ color: cn(c), width: 2 }); } },
       { id: "u4", name: "三角内裤", slot: "underwear", colors: ["#a55eea", "#ff4757", "#3ea6ff", "#ffd700", "#333"],
-        drawFn: (ctx, cx, cy, c) => { ctx.fillStyle = c; ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.moveTo(cx - 16, cy + 86); ctx.lineTo(cx + 16, cy + 86); ctx.lineTo(cx, cy + 100); ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1; } },
+        drawFn: (g, cx, cy, c, cn) => { g.moveTo(cx - 16, cy + 86).lineTo(cx + 16, cy + 86).lineTo(cx, cy + 100).closePath().fill({ color: cn(c), alpha: 0.5 }); } },
       { id: "u5", name: "无（裸露）", slot: "underwear", colors: ["transparent"],
         drawFn: () => {} },
     ],
@@ -164,7 +174,6 @@ function calcScore(equipped: EquipState, items: Record<Slot, ClothingItem[]>): {
   const combos: string[] = [];
   const details: string[] = [];
 
-  // Base: each non-empty slot = 10 pts
   let filledSlots = 0;
   for (const s of SLOTS) {
     const item = items[s][equipped[s]];
@@ -174,7 +183,6 @@ function calcScore(equipped: EquipState, items: Record<Slot, ClothingItem[]>): {
   total += basePts;
   details.push(`基础搭配: ${filledSlots} 件 x 10 = ${basePts}`);
 
-  // Color harmony: count matching colors across slots
   const usedColors: string[] = [];
   for (const s of SLOTS) {
     const item = items[s][equipped[s]];
@@ -188,7 +196,6 @@ function calcScore(equipped: EquipState, items: Record<Slot, ClothingItem[]>): {
   if (maxMatch >= 3) { total += 20; details.push("色彩和谐 +20"); }
   else if (maxMatch >= 2) { total += 10; details.push("色彩搭配 +10"); }
 
-  // Style combos
   for (const combo of STYLE_COMBOS) {
     let match = true;
     for (const [slot, validIds] of Object.entries(combo.slots)) {
@@ -198,15 +205,14 @@ function calcScore(equipped: EquipState, items: Record<Slot, ClothingItem[]>): {
     if (match) { total += combo.bonus; combos.push(combo.name); details.push(`${combo.name} +${combo.bonus}`); }
   }
 
-  // Variety bonus
   if (filledSlots >= 5) { total += 15; details.push("全面搭配 +15"); }
 
   return { total: Math.min(total, 100), combos, details };
 }
 
-// ─── Draw Character ──────────────────────────────────────────────────────────
+// ─── Draw Character (PixiJS) ─────────────────────────────────────────────────
 function drawCharacter(
-  ctx: CanvasRenderingContext2D,
+  g: PixiGraphics,
   model: CharacterModel,
   equipped: EquipState,
   colorState: ColorState,
@@ -215,69 +221,57 @@ function drawCharacter(
 ) {
   const { skinColor, bodyWidth, bodyHeight, headRadius } = model;
   const hw = bodyWidth / 2;
+  const sc = hexToNum(skinColor);
 
   // Head
-  ctx.fillStyle = skinColor;
-  ctx.beginPath();
-  ctx.arc(cx, cy + headRadius, headRadius, 0, Math.PI * 2);
-  ctx.fill();
-
+  g.circle(cx, cy + headRadius, headRadius).fill({ color: sc });
   // Neck
-  ctx.fillRect(cx - 6, cy + headRadius * 2 - 4, 12, 12);
-
+  g.rect(cx - 6, cy + headRadius * 2 - 4, 12, 12).fill({ color: sc });
   // Torso
-  ctx.fillStyle = skinColor;
-  ctx.beginPath();
-  ctx.roundRect(cx - hw, cy + 48, bodyWidth, bodyHeight * 0.45, 4);
-  ctx.fill();
-
+  g.roundRect(cx - hw, cy + 48, bodyWidth, bodyHeight * 0.45, 4).fill({ color: sc });
   // Arms
-  ctx.fillRect(cx - hw - 10, cy + 50, 10, 36);
-  ctx.fillRect(cx + hw, cy + 50, 10, 36);
-
+  g.rect(cx - hw - 10, cy + 50, 10, 36).fill({ color: sc });
+  g.rect(cx + hw, cy + 50, 10, 36).fill({ color: sc });
   // Legs
   const legW = hw * 0.45;
-  ctx.fillRect(cx - hw + 2, cy + 48 + bodyHeight * 0.45, legW, bodyHeight * 0.55);
-  ctx.fillRect(cx + hw - 2 - legW, cy + 48 + bodyHeight * 0.45, legW, bodyHeight * 0.55);
+  g.rect(cx - hw + 2, cy + 48 + bodyHeight * 0.45, legW, bodyHeight * 0.55).fill({ color: sc });
+  g.rect(cx + hw - 2 - legW, cy + 48 + bodyHeight * 0.45, legW, bodyHeight * 0.55).fill({ color: sc });
 
-  // Underwear (drawn under clothes)
+  // Underwear
   const uwItem = items.underwear[equipped.underwear];
-  if (uwItem) uwItem.drawFn(ctx, cx, cy, uwItem.colors[colorState.underwear] || uwItem.colors[0]);
-
+  if (uwItem) uwItem.drawFn(g, cx, cy, uwItem.colors[colorState.underwear] || uwItem.colors[0], hexToNum);
   // Bottom
   const btItem = items.bottom[equipped.bottom];
-  if (btItem) btItem.drawFn(ctx, cx, cy, btItem.colors[colorState.bottom] || btItem.colors[0]);
-
+  if (btItem) btItem.drawFn(g, cx, cy, btItem.colors[colorState.bottom] || btItem.colors[0], hexToNum);
   // Top
   const tpItem = items.top[equipped.top];
-  if (tpItem) tpItem.drawFn(ctx, cx, cy, tpItem.colors[colorState.top] || tpItem.colors[0]);
-
+  if (tpItem) tpItem.drawFn(g, cx, cy, tpItem.colors[colorState.top] || tpItem.colors[0], hexToNum);
   // Shoes
   const shItem = items.shoes[equipped.shoes];
-  if (shItem) shItem.drawFn(ctx, cx, cy, shItem.colors[colorState.shoes] || shItem.colors[0]);
+  if (shItem) shItem.drawFn(g, cx, cy, shItem.colors[colorState.shoes] || shItem.colors[0], hexToNum);
 
   // Face
-  ctx.fillStyle = "#333";
-  ctx.beginPath(); ctx.arc(cx - 8, cy + headRadius - 4, 3, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(cx + 8, cy + headRadius - 4, 3, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = "#ff6b81"; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(cx, cy + headRadius + 6, 5, 0.1, Math.PI - 0.1); ctx.stroke();
+  g.circle(cx - 8, cy + headRadius - 4, 3).fill({ color: 0x333333 });
+  g.circle(cx + 8, cy + headRadius - 4, 3).fill({ color: 0x333333 });
+  g.arc(cx, cy + headRadius + 6, 5, 0.1, Math.PI - 0.1).stroke({ color: 0xff6b81, width: 1.5 });
 
-  // Hair (on top)
+  // Hair
   const hrItem = items.hair[equipped.hair];
-  if (hrItem) hrItem.drawFn(ctx, cx, cy, hrItem.colors[colorState.hair] || hrItem.colors[0]);
-
-  // Accessory (on top of everything)
+  if (hrItem) hrItem.drawFn(g, cx, cy, hrItem.colors[colorState.hair] || hrItem.colors[0], hexToNum);
+  // Accessory
   const acItem = items.accessory[equipped.accessory];
-  if (acItem) acItem.drawFn(ctx, cx, cy, acItem.colors[colorState.accessory] || acItem.colors[0]);
+  if (acItem) acItem.drawFn(g, cx, cy, acItem.colors[colorState.accessory] || acItem.colors[0], hexToNum);
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 export default function AdultDressUp() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
   const itemsRef = useRef<Record<Slot, ClothingItem[]>>(makeItems());
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
 
   const [blocked, setBlocked] = useState(false);
   const [phase, setPhase] = useState<Phase>("title");
@@ -321,271 +315,233 @@ export default function AdultDressUp() {
     setCombos(result.combos);
   }, [equipped, phase]);
 
-  // ─── Canvas Render Loop ──────────────────────────────────────────────────
+  // ─── PixiJS Render Loop ──────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = CW * dpr;
-    canvas.height = CH * dpr;
-    canvas.style.width = `${CW}px`;
-    canvas.style.height = `${CH}px`;
+    let destroyed = false;
 
-    const render = () => {
-      animFrameRef.current++;
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = BG;
-      ctx.fillRect(0, 0, CW, CH);
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: CW, height: CH, backgroundColor: 0x0f0f0f, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+      pixiAppRef.current = app;
 
-      const p = phaseRef.current;
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
 
-      if (p === "title") {
-        drawTitleScreen(ctx);
-      } else if (p === "select") {
-        drawSelectScreen(ctx);
-      } else if (p === "playing" || p === "photo") {
-        drawPlayingScreen(ctx, p === "photo");
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
+
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 12,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      // Pre-create text objects (enough for all screens)
+      for (let i = 0; i < 80; i++) makeText(`t${i}`, { fontSize: 12 });
+
+      let textIdx = 0;
+      const showText = (text: string, x: number, y: number, opts?: { fill?: string; fontSize?: number; fontWeight?: string; ax?: number; ay?: number; alpha?: number }) => {
+        if (textIdx >= 80) return;
+        const t = texts.get(`t${textIdx}`)!;
+        textIdx++;
+        t.text = text;
+        t.x = x; t.y = y;
+        t.anchor.set(opts?.ax ?? 0, opts?.ay ?? 0);
+        t.alpha = opts?.alpha ?? 1;
+        t.style.fill = opts?.fill ?? "#ffffff";
+        t.style.fontSize = opts?.fontSize ?? 12;
+        t.style.fontWeight = (opts?.fontWeight ?? "normal") as "normal" | "bold";
+        t.visible = true;
+      };
+
+      const cn = hexToNum;
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        animFrameRef.current++;
+        const t = animFrameRef.current;
+        gfx.clear();
+        texts.forEach(tx => { tx.visible = false; });
+        textIdx = 0;
+
+        const p = phaseRef.current;
+
+        if (p === "title") {
+          // Background
+          gfx.rect(0, 0, CW, CH).fill({ color: 0x1a0a2e });
+          gfx.rect(0, CH * 0.4, CW, CH * 0.6).fill({ color: 0x0f0f0f });
+
+          // Floating particles
+          for (let i = 0; i < 20; i++) {
+            const px = (i * 67 + t * 0.3) % CW;
+            const py = (i * 43 + t * 0.2) % CH;
+            const alpha = 0.2 + Math.sin(t * 0.02 + i) * 0.15;
+            const r = 2 + Math.sin(t * 0.03 + i) * 1;
+            gfx.circle(px, py, r).fill({ color: cn(PRIMARY), alpha });
+          }
+
+          // Title
+          showText("魅影衣橱", CW / 2, 200, { fill: PRIMARY, fontSize: 36, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+          showText("成人换装游戏 (NC-17)", CW / 2, 235, { fill: "#888888", fontSize: 14, ax: 0.5, ay: 0.5 });
+
+          // Start button
+          const btnY = 300;
+          const pulse = Math.sin(t * 0.05) * 3;
+          gfx.roundRect(CW / 2 - 80, btnY - 20 + pulse, 160, 44, 22).fill({ color: cn(PRIMARY) });
+          showText("开始游戏", CW / 2, btnY + 2 + pulse, { fill: "#ffffff", fontSize: 16, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+          // Instructions
+          showText("选择角色模型，自由搭配服装", CW / 2, 400, { fill: "#666666", fontSize: 12, ax: 0.5, ay: 0.5 });
+          showText("获得搭配评分，拍照保存", CW / 2, 420, { fill: "#666666", fontSize: 12, ax: 0.5, ay: 0.5 });
+
+        } else if (p === "select") {
+          gfx.rect(0, 0, CW, CH).fill({ color: 0x1a0a2e });
+
+          showText("选择角色模型", CW / 2, 50, { fill: ACCENT, fontSize: 22, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+          for (let i = 0; i < MODELS.length; i++) {
+            const m = MODELS[i];
+            const bx = 40 + i * 150, by = 80;
+            const sel = modelIdxRef.current === i;
+
+            // Card
+            gfx.roundRect(bx, by, 130, 320, 10).fill({ color: sel ? 0x2a1a3e : 0x1a1a2e });
+            gfx.roundRect(bx, by, 130, 320, 10).stroke({ color: sel ? cn(PRIMARY) : 0x333333, width: sel ? 2 : 1 });
+
+            // Mini character preview
+            const pcx = bx + 65, pcy = by + 40;
+            gfx.circle(pcx, pcy + 20, 18).fill({ color: cn(m.skinColor) });
+            gfx.rect(pcx - m.bodyWidth / 3, pcy + 38, m.bodyWidth * 0.66, 50).fill({ color: cn(m.skinColor) });
+            gfx.rect(pcx - 10, pcy + 88, 8, 35).fill({ color: cn(m.skinColor) });
+            gfx.rect(pcx + 2, pcy + 88, 8, 35).fill({ color: cn(m.skinColor) });
+            // Eyes
+            gfx.circle(pcx - 6, pcy + 18, 2).fill({ color: 0x333333 });
+            gfx.circle(pcx + 6, pcy + 18, 2).fill({ color: 0x333333 });
+
+            // Labels
+            showText(m.name, bx + 65, by + 200, { fill: "#ffffff", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            showText(m.desc, bx + 65, by + 222, { fill: "#aaaaaa", fontSize: 12, ax: 0.5, ay: 0.5 });
+            showText(`体型: ${m.bodyType}`, bx + 65, by + 244, { fill: "#aaaaaa", fontSize: 12, ax: 0.5, ay: 0.5 });
+
+            if (sel) {
+              gfx.roundRect(bx + 25, by + 270, 80, 30, 15).fill({ color: cn(PRIMARY) });
+              showText("已选择", bx + 65, by + 285, { fill: "#ffffff", fontSize: 12, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+            }
+          }
+
+          // Confirm button
+          gfx.roundRect(CW / 2 - 70, 440, 140, 40, 20).fill({ color: cn(ACCENT) });
+          showText("确认选择", CW / 2, 460, { fill: "#ffffff", fontSize: 14, fontWeight: "bold", ax: 0.5, ay: 0.5 });
+
+          showText("点击角色卡片选择", CW / 2, 520, { fill: "#666666", fontSize: 12, ax: 0.5, ay: 0.5 });
+
+        } else if (p === "playing" || p === "photo") {
+          const isPhoto = p === "photo";
+
+          // Background
+          gfx.rect(0, 0, CW, CH * 0.5).fill({ color: 0x1a0a2e });
+          gfx.rect(0, CH * 0.5, CW, CH * 0.5).fill({ color: 0x0f0f0f });
+
+          const model = MODELS[modelIdxRef.current];
+          const eq = equippedRef.current;
+          const cs = colorStateRef.current;
+
+          // Draw character
+          const charX = 140, charY = 60;
+          drawCharacter(gfx, model, eq, cs, itemsRef.current, charX, charY);
+
+          if (isPhoto) {
+            showText("魅影衣橱", CW - 20, CH - 20, { fill: "#a55eea", fontSize: 12, ax: 1, ay: 1, alpha: 0.6 });
+            return;
+          }
+
+          // Right panel
+          const panelX = 280;
+          gfx.roundRect(panelX - 10, 10, CW - panelX + 5, CH - 20, 10).fill({ color: 0x1a1a2e, alpha: 0.8 });
+
+          // Slot tabs
+          const slotAS = activeSlotRef.current;
+          for (let i = 0; i < SLOTS.length; i++) {
+            const s = SLOTS[i];
+            const tx = panelX, ty = 20 + i * 34;
+            gfx.roundRect(tx, ty, 90, 28, 6).fill({ color: slotAS === s ? 0x2a1a3e : 0x1a1a2e });
+            gfx.roundRect(tx, ty, 90, 28, 6).stroke({ color: slotAS === s ? cn(PRIMARY) : 0x444444, width: slotAS === s ? 2 : 1 });
+            showText(SLOT_LABELS[s], tx + 45, ty + 14, {
+              fill: slotAS === s ? "#ffffff" : "#aaaaaa",
+              fontSize: 12,
+              fontWeight: slotAS === s ? "bold" : "normal",
+              ax: 0.5, ay: 0.5,
+            });
+          }
+
+          // Items for active slot
+          const slotItems = itemsRef.current[slotAS];
+          const itemStartY = 240;
+          for (let i = 0; i < slotItems.length; i++) {
+            const item = slotItems[i];
+            const ix = panelX, iy = itemStartY + i * 42;
+            const sel = eq[slotAS] === i;
+
+            gfx.roundRect(ix, iy, 185, 36, 6).fill({ color: sel ? 0x2a1a3e : 0x151520 });
+            gfx.roundRect(ix, iy, 185, 36, 6).stroke({ color: sel ? cn(PRIMARY) : 0x333333, width: sel ? 2 : 1 });
+
+            // Color swatch
+            const c = item.colors[cs[slotAS] % item.colors.length];
+            if (c !== "transparent") {
+              gfx.circle(ix + 18, iy + 18, 8).fill({ color: cn(c) });
+            } else {
+              gfx.circle(ix + 18, iy + 18, 8).stroke({ color: 0x666666, width: 1 });
+              gfx.moveTo(ix + 12, iy + 12).lineTo(ix + 24, iy + 24).stroke({ color: 0x666666, width: 1 });
+            }
+
+            // Name
+            showText(item.name, ix + 34, iy + 18, { fill: sel ? "#ffffff" : "#aaaaaa", fontSize: 12, ay: 0.5 });
+
+            // Color cycle arrow
+            if (item.colors.length > 1 && sel) {
+              showText("换色 >", ix + 178, iy + 18, { fill: ACCENT, fontSize: 10, fontWeight: "bold", ax: 1, ay: 0.5 });
+            }
+          }
+
+          // Score display at bottom
+          gfx.roundRect(10, CH - 60, 260, 50, 8).fill({ color: cn(ACCENT), alpha: 0.15 });
+          const scoreResult = calcScore(eq, itemsRef.current);
+          showText(`搭配评分: ${scoreResult.total}`, 20, CH - 35, { fill: ACCENT, fontSize: 14, fontWeight: "bold", ay: 0.5 });
+          if (scoreResult.combos.length > 0) {
+            showText(scoreResult.combos.join(" / "), 20, CH - 18, { fill: "#ffd700", fontSize: 11, ay: 0.5 });
+          }
+        }
+      });
+    }
+
+    initPixi();
+
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
       }
-
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(render);
+      pixiGfxRef.current = null;
+      pixiTextsRef.current.clear();
+      pixiInitRef.current = false;
     };
-
-    rafRef.current = requestAnimationFrame(render);
-    return () => { cancelAnimationFrame(rafRef.current); };
   }, []);
-
-  // ─── Draw Functions ──────────────────────────────────────────────────────
-  function drawTitleScreen(ctx: CanvasRenderingContext2D) {
-    const t = animFrameRef.current;
-    // Background shimmer
-    const grad = ctx.createLinearGradient(0, 0, CW, CH);
-    grad.addColorStop(0, "#1a0a2e");
-    grad.addColorStop(0.5, "#0f0f0f");
-    grad.addColorStop(1, "#1a0a2e");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, CW, CH);
-
-    // Floating particles
-    for (let i = 0; i < 20; i++) {
-      const px = (i * 67 + t * 0.3) % CW;
-      const py = (i * 43 + t * 0.2) % CH;
-      ctx.fillStyle = `rgba(165, 94, 234, ${0.2 + Math.sin(t * 0.02 + i) * 0.15})`;
-      ctx.beginPath();
-      ctx.arc(px, py, 2 + Math.sin(t * 0.03 + i) * 1, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Title
-    ctx.fillStyle = PRIMARY;
-    ctx.font = "bold 36px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("魅影衣橱", CW / 2, 200);
-
-    ctx.fillStyle = "#888";
-    ctx.font = "14px sans-serif";
-    ctx.fillText("成人换装游戏 (NC-17)", CW / 2, 235);
-
-    // Start button
-    const btnY = 300;
-    const pulse = Math.sin(t * 0.05) * 3;
-    ctx.fillStyle = PRIMARY;
-    ctx.beginPath();
-    ctx.roundRect(CW / 2 - 80, btnY - 20 + pulse, 160, 44, 22);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 16px sans-serif";
-    ctx.fillText("开始游戏", CW / 2, btnY + 6 + pulse);
-
-    // Instructions
-    ctx.fillStyle = "#666";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("选择角色模型，自由搭配服装", CW / 2, 400);
-    ctx.fillText("获得搭配评分，拍照保存", CW / 2, 420);
-  }
-
-  function drawSelectScreen(ctx: CanvasRenderingContext2D) {
-    ctx.fillStyle = "#1a0a2e";
-    ctx.fillRect(0, 0, CW, CH);
-
-    ctx.fillStyle = ACCENT;
-    ctx.font = "bold 22px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("选择角色模型", CW / 2, 50);
-
-    for (let i = 0; i < MODELS.length; i++) {
-      const m = MODELS[i];
-      const bx = 40 + i * 150, by = 80;
-      const sel = modelIdxRef.current === i;
-
-      // Card
-      ctx.fillStyle = sel ? "#2a1a3e" : "#1a1a2e";
-      ctx.beginPath();
-      ctx.roundRect(bx, by, 130, 320, 10);
-      ctx.fill();
-      ctx.strokeStyle = sel ? PRIMARY : "#333";
-      ctx.lineWidth = sel ? 2 : 1;
-      ctx.beginPath();
-      ctx.roundRect(bx, by, 130, 320, 10);
-      ctx.stroke();
-
-      // Mini character preview
-      const pcx = bx + 65, pcy = by + 40;
-      ctx.fillStyle = m.skinColor;
-      ctx.beginPath(); ctx.arc(pcx, pcy + 20, 18, 0, Math.PI * 2); ctx.fill();
-      ctx.fillRect(pcx - m.bodyWidth / 3, pcy + 38, m.bodyWidth * 0.66, 50);
-      ctx.fillRect(pcx - 10, pcy + 88, 8, 35);
-      ctx.fillRect(pcx + 2, pcy + 88, 8, 35);
-      // Eyes
-      ctx.fillStyle = "#333";
-      ctx.beginPath(); ctx.arc(pcx - 6, pcy + 18, 2, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(pcx + 6, pcy + 18, 2, 0, Math.PI * 2); ctx.fill();
-
-      // Labels
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 14px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(m.name, bx + 65, by + 200);
-
-      ctx.fillStyle = "#aaa";
-      ctx.font = "12px sans-serif";
-      ctx.fillText(m.desc, bx + 65, by + 222);
-      ctx.fillText(`体型: ${m.bodyType}`, bx + 65, by + 244);
-
-      // Select indicator
-      if (sel) {
-        ctx.fillStyle = PRIMARY;
-        ctx.beginPath();
-        ctx.roundRect(bx + 25, by + 270, 80, 30, 15);
-        ctx.fill();
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 12px sans-serif";
-        ctx.fillText("已选择", bx + 65, by + 290);
-      }
-    }
-
-    // Confirm button
-    ctx.fillStyle = ACCENT;
-    ctx.beginPath();
-    ctx.roundRect(CW / 2 - 70, 440, 140, 40, 20);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 14px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("确认选择", CW / 2, 465);
-
-    // Back
-    ctx.fillStyle = "#666";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("点击角色卡片选择", CW / 2, 520);
-  }
-
-  function drawPlayingScreen(ctx: CanvasRenderingContext2D, isPhoto: boolean) {
-    // Background
-    const grad = ctx.createLinearGradient(0, 0, 0, CH);
-    grad.addColorStop(0, "#1a0a2e");
-    grad.addColorStop(1, "#0f0f0f");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, CW, CH);
-
-    const model = MODELS[modelIdxRef.current];
-    const eq = equippedRef.current;
-    const cs = colorStateRef.current;
-
-    // Draw character centered on left side
-    const charX = 140, charY = 60;
-    drawCharacter(ctx, model, eq, cs, itemsRef.current, charX, charY);
-
-    if (isPhoto) {
-      // Photo mode: just character + watermark
-      ctx.fillStyle = "rgba(165, 94, 234, 0.6)";
-      ctx.font = "12px sans-serif";
-      ctx.textAlign = "right";
-      ctx.fillText("魅影衣橱", CW - 20, CH - 20);
-      return;
-    }
-
-    // Right panel: slot tabs
-    const panelX = 280;
-    ctx.fillStyle = "rgba(26, 26, 46, 0.8)";
-    ctx.beginPath();
-    ctx.roundRect(panelX - 10, 10, CW - panelX + 5, CH - 20, 10);
-    ctx.fill();
-
-    // Slot tabs
-    const slotAS = activeSlotRef.current;
-    for (let i = 0; i < SLOTS.length; i++) {
-      const s = SLOTS[i];
-      const tx = panelX, ty = 20 + i * 34;
-      ctx.fillStyle = slotAS === s ? "#2a1a3e" : "#1a1a2e";
-      ctx.beginPath(); ctx.roundRect(tx, ty, 90, 28, 6); ctx.fill();
-      ctx.strokeStyle = slotAS === s ? PRIMARY : "#444";
-      ctx.lineWidth = slotAS === s ? 2 : 1;
-      ctx.beginPath(); ctx.roundRect(tx, ty, 90, 28, 6); ctx.stroke();
-      ctx.fillStyle = slotAS === s ? "#fff" : "#aaa";
-      ctx.font = slotAS === s ? "bold 12px sans-serif" : "12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(SLOT_LABELS[s], tx + 45, ty + 18);
-    }
-
-    // Items for active slot
-    const slotItems = itemsRef.current[slotAS];
-    const itemStartY = 240;
-    for (let i = 0; i < slotItems.length; i++) {
-      const item = slotItems[i];
-      const ix = panelX, iy = itemStartY + i * 42;
-      const sel = eq[slotAS] === i;
-
-      ctx.fillStyle = sel ? "#2a1a3e" : "#151520";
-      ctx.beginPath(); ctx.roundRect(ix, iy, 185, 36, 6); ctx.fill();
-      ctx.strokeStyle = sel ? PRIMARY : "#333";
-      ctx.lineWidth = sel ? 2 : 1;
-      ctx.beginPath(); ctx.roundRect(ix, iy, 185, 36, 6); ctx.stroke();
-
-      // Color swatch
-      const c = item.colors[cs[slotAS] % item.colors.length];
-      if (c !== "transparent") {
-        ctx.fillStyle = c;
-        ctx.beginPath(); ctx.arc(ix + 18, iy + 18, 8, 0, Math.PI * 2); ctx.fill();
-      } else {
-        ctx.strokeStyle = "#666";
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(ix + 18, iy + 18, 8, 0, Math.PI * 2); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(ix + 12, iy + 12); ctx.lineTo(ix + 24, iy + 24); ctx.stroke();
-      }
-
-      // Name
-      ctx.fillStyle = sel ? "#fff" : "#aaa";
-      ctx.font = "12px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(item.name, ix + 34, iy + 22);
-
-      // Color cycle arrow (if multiple colors)
-      if (item.colors.length > 1 && sel) {
-        ctx.fillStyle = ACCENT;
-        ctx.font = "bold 10px sans-serif";
-        ctx.textAlign = "right";
-        ctx.fillText("换色 >", ix + 178, iy + 22);
-      }
-    }
-
-    // Score display at bottom
-    ctx.fillStyle = "rgba(62, 166, 255, 0.15)";
-    ctx.beginPath(); ctx.roundRect(10, CH - 60, 260, 50, 8); ctx.fill();
-    ctx.fillStyle = ACCENT;
-    ctx.font = "bold 14px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(`搭配评分: ${calcScore(eq, itemsRef.current).total}`, 20, CH - 32);
-    const comboResult = calcScore(eq, itemsRef.current);
-    if (comboResult.combos.length > 0) {
-      ctx.fillStyle = "#ffd700";
-      ctx.font = "11px sans-serif";
-      ctx.fillText(comboResult.combos.join(" / "), 20, CH - 16);
-    }
-  }
 
   // ─── Canvas Click Handler ────────────────────────────────────────────────
   useEffect(() => {
@@ -596,7 +552,6 @@ export default function AdultDressUp() {
       const p = phaseRef.current;
 
       if (p === "title") {
-        // Start button
         const pulse = Math.sin(animFrameRef.current * 0.05) * 3;
         if (mx >= CW / 2 - 80 && mx <= CW / 2 + 80 && my >= 280 + pulse && my <= 324 + pulse) {
           soundRef.current?.playClick();
@@ -606,7 +561,6 @@ export default function AdultDressUp() {
       }
 
       if (p === "select") {
-        // Model cards
         for (let i = 0; i < MODELS.length; i++) {
           const bx = 40 + i * 150, by = 80;
           if (mx >= bx && mx <= bx + 130 && my >= by && my <= by + 320) {
@@ -615,7 +569,6 @@ export default function AdultDressUp() {
             return;
           }
         }
-        // Confirm button
         if (mx >= CW / 2 - 70 && mx <= CW / 2 + 70 && my >= 440 && my <= 480) {
           soundRef.current?.playLevelUp();
           setPhase("playing");
@@ -626,7 +579,6 @@ export default function AdultDressUp() {
       if (p === "playing") {
         const panelX = 280;
 
-        // Slot tabs
         for (let i = 0; i < SLOTS.length; i++) {
           const tx = panelX, ty = 20 + i * 34;
           if (mx >= tx && mx <= tx + 90 && my >= ty && my <= ty + 28) {
@@ -636,7 +588,6 @@ export default function AdultDressUp() {
           }
         }
 
-        // Items
         const slotAS = activeSlotRef.current;
         const slotItems = itemsRef.current[slotAS];
         const itemStartY = 240;
@@ -645,7 +596,6 @@ export default function AdultDressUp() {
           if (mx >= ix && mx <= ix + 185 && my >= iy && my <= iy + 36) {
             const currentEq = equippedRef.current[slotAS];
             if (currentEq === i) {
-              // Already selected: cycle color
               const item = slotItems[i];
               if (item.colors.length > 1) {
                 soundRef.current?.playMove();
@@ -657,7 +607,6 @@ export default function AdultDressUp() {
             } else {
               soundRef.current?.playScore(10);
               setEquipped(prev => ({ ...prev, [slotAS]: i }));
-              // Reset color for new item
               setColorState(prev => ({ ...prev, [slotAS]: 0 }));
             }
             return;
@@ -705,7 +654,6 @@ export default function AdultDressUp() {
   const handlePhoto = useCallback(() => {
     soundRef.current?.playLevelUp();
     setPhase("photo");
-    // Delay to let one frame render in photo mode, then capture
     setTimeout(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;

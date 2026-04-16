@@ -10,6 +10,8 @@ import {
   Play, RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
   Trophy, Crosshair, Flame, Wind
 } from "lucide-react";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText, Container } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "pixel-rpg";
@@ -266,57 +268,11 @@ class AudioMgr {
   boss()   { this.play(150, 0.3, "sawtooth", 0.1); this.play(100, 0.4, "sawtooth", 0.08); }
 }
 
-// ─── Pixel Drawing Helpers ───────────────────────────────────────────────────
-function drawPixelChar(ctx: CanvasRenderingContext2D, x: number, y: number, dir: Direction, frame: number) {
-  const s = TILE;
-  // body
-  ctx.fillStyle = "#4a90d9";
-  ctx.fillRect(x + 8, y + 8, 16, 14);
-  // head
-  ctx.fillStyle = "#ffd5a0";
-  ctx.fillRect(x + 10, y + 2, 12, 10);
-  // eyes
-  ctx.fillStyle = "#222";
-  if (dir === "left") { ctx.fillRect(x + 11, y + 5, 2, 2); }
-  else if (dir === "right") { ctx.fillRect(x + 19, y + 5, 2, 2); }
-  else { ctx.fillRect(x + 12, y + 5, 2, 2); ctx.fillRect(x + 18, y + 5, 2, 2); }
-  // legs (animated)
-  ctx.fillStyle = "#3a3a8a";
-  const legOff = Math.sin(frame * 0.3) * 2;
-  ctx.fillRect(x + 10, y + 22, 5, 8 + legOff);
-  ctx.fillRect(x + 17, y + 22, 5, 8 - legOff);
-  // weapon hint
-  ctx.fillStyle = "#aaa";
-  if (dir === "right") ctx.fillRect(x + 26, y + 12, 4, 10);
-  else if (dir === "left") ctx.fillRect(x + 2, y + 12, 4, 10);
-}
-
-function drawPixelEnemy(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, isBoss: boolean, frame: number) {
-  const sz = isBoss ? 80 : 48;
-  const ox = x - sz / 2, oy = y - sz / 2 + Math.sin(frame * 0.05) * 3;
-  // body
-  ctx.fillStyle = color;
-  ctx.fillRect(ox + sz * 0.15, oy + sz * 0.2, sz * 0.7, sz * 0.6);
-  // head
-  ctx.fillStyle = color;
-  ctx.fillRect(ox + sz * 0.25, oy, sz * 0.5, sz * 0.35);
-  // eyes
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(ox + sz * 0.3, oy + sz * 0.1, sz * 0.12, sz * 0.1);
-  ctx.fillRect(ox + sz * 0.55, oy + sz * 0.1, sz * 0.12, sz * 0.1);
-  ctx.fillStyle = "#ff0000";
-  ctx.fillRect(ox + sz * 0.33, oy + sz * 0.12, sz * 0.06, sz * 0.06);
-  ctx.fillRect(ox + sz * 0.58, oy + sz * 0.12, sz * 0.06, sz * 0.06);
-  if (isBoss) {
-    // horns
-    ctx.fillStyle = "#ff6b6b";
-    ctx.fillRect(ox + sz * 0.15, oy - sz * 0.1, sz * 0.1, sz * 0.15);
-    ctx.fillRect(ox + sz * 0.75, oy - sz * 0.1, sz * 0.1, sz * 0.15);
-    // wings
-    ctx.fillStyle = color + "88";
-    ctx.fillRect(ox - sz * 0.15, oy + sz * 0.15, sz * 0.2, sz * 0.4);
-    ctx.fillRect(ox + sz * 0.95, oy + sz * 0.15, sz * 0.2, sz * 0.4);
-  }
+// ─── PixiJS Drawing Helpers ──────────────────────────────────────────────────
+// 颜色字符串转数字
+function colorToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
 }
 
 const TILE_COLORS: Record<MapTile["type"], string> = {
@@ -324,68 +280,87 @@ const TILE_COLORS: Record<MapTile["type"], string> = {
   floor: "#2a2a3a", door: "#6a4a2a", tree: "#0a2a0a", rock: "#5a5a5a",
 };
 
-function drawTile(ctx: CanvasRenderingContext2D, tile: MapTile, x: number, y: number) {
-  ctx.fillStyle = TILE_COLORS[tile.type];
-  ctx.fillRect(x, y, TILE, TILE);
-  // detail
+function gfxRect(g: PixiGraphics, color: string | number, x: number, y: number, w: number, h: number, alpha = 1) {
+  g.rect(x, y, w, h).fill({ color: typeof color === "string" ? colorToNum(color) : color, alpha });
+}
+
+function drawPixelCharGfx(g: PixiGraphics, x: number, y: number, dir: Direction, frame: number) {
+  gfxRect(g, "#4a90d9", x + 8, y + 8, 16, 14);
+  gfxRect(g, "#ffd5a0", x + 10, y + 2, 12, 10);
+  if (dir === "left") { gfxRect(g, "#222222", x + 11, y + 5, 2, 2); }
+  else if (dir === "right") { gfxRect(g, "#222222", x + 19, y + 5, 2, 2); }
+  else { gfxRect(g, "#222222", x + 12, y + 5, 2, 2); gfxRect(g, "#222222", x + 18, y + 5, 2, 2); }
+  const legOff = Math.sin(frame * 0.3) * 2;
+  gfxRect(g, "#3a3a8a", x + 10, y + 22, 5, 8 + legOff);
+  gfxRect(g, "#3a3a8a", x + 17, y + 22, 5, 8 - legOff);
+  if (dir === "right") gfxRect(g, "#aaaaaa", x + 26, y + 12, 4, 10);
+  else if (dir === "left") gfxRect(g, "#aaaaaa", x + 2, y + 12, 4, 10);
+}
+
+function drawPixelEnemyGfx(g: PixiGraphics, x: number, y: number, color: string, isBoss: boolean, frame: number) {
+  const sz = isBoss ? 80 : 48;
+  const ox = x - sz / 2, oy = y - sz / 2 + Math.sin(frame * 0.05) * 3;
+  const c = colorToNum(color);
+  gfxRect(g, c, ox + sz * 0.15, oy + sz * 0.2, sz * 0.7, sz * 0.6);
+  gfxRect(g, c, ox + sz * 0.25, oy, sz * 0.5, sz * 0.35);
+  gfxRect(g, "#ffffff", ox + sz * 0.3, oy + sz * 0.1, sz * 0.12, sz * 0.1);
+  gfxRect(g, "#ffffff", ox + sz * 0.55, oy + sz * 0.1, sz * 0.12, sz * 0.1);
+  gfxRect(g, "#ff0000", ox + sz * 0.33, oy + sz * 0.12, sz * 0.06, sz * 0.06);
+  gfxRect(g, "#ff0000", ox + sz * 0.58, oy + sz * 0.12, sz * 0.06, sz * 0.06);
+  if (isBoss) {
+    gfxRect(g, "#ff6b6b", ox + sz * 0.15, oy - sz * 0.1, sz * 0.1, sz * 0.15);
+    gfxRect(g, "#ff6b6b", ox + sz * 0.75, oy - sz * 0.1, sz * 0.1, sz * 0.15);
+    gfxRect(g, c, ox - sz * 0.15, oy + sz * 0.15, sz * 0.2, sz * 0.4, 0.53);
+    gfxRect(g, c, ox + sz * 0.95, oy + sz * 0.15, sz * 0.2, sz * 0.4, 0.53);
+  }
+}
+
+function drawTileGfx(g: PixiGraphics, tile: MapTile, x: number, y: number) {
+  gfxRect(g, TILE_COLORS[tile.type], x, y, TILE, TILE);
   if (tile.type === "tree") {
-    ctx.fillStyle = "#4a2a0a"; ctx.fillRect(x + 13, y + 20, 6, 12);
-    ctx.fillStyle = "#1a5a1a"; ctx.fillRect(x + 6, y + 4, 20, 18);
-    ctx.fillStyle = "#2a7a2a"; ctx.fillRect(x + 10, y + 2, 12, 8);
+    gfxRect(g, "#4a2a0a", x + 13, y + 20, 6, 12);
+    gfxRect(g, "#1a5a1a", x + 6, y + 4, 20, 18);
+    gfxRect(g, "#2a7a2a", x + 10, y + 2, 12, 8);
   } else if (tile.type === "rock") {
-    ctx.fillStyle = "#7a7a7a"; ctx.fillRect(x + 4, y + 8, 24, 20);
-    ctx.fillStyle = "#8a8a8a"; ctx.fillRect(x + 8, y + 6, 16, 8);
+    gfxRect(g, "#7a7a7a", x + 4, y + 8, 24, 20);
+    gfxRect(g, "#8a8a8a", x + 8, y + 6, 16, 8);
   } else if (tile.type === "water") {
-    ctx.fillStyle = "#2a3a7a"; ctx.fillRect(x + 2, y + 10, 28, 4);
-    ctx.fillStyle = "#3a4a8a"; ctx.fillRect(x + 8, y + 20, 20, 3);
+    gfxRect(g, "#2a3a7a", x + 2, y + 10, 28, 4);
+    gfxRect(g, "#3a4a8a", x + 8, y + 20, 20, 3);
   } else if (tile.type === "wall") {
-    ctx.fillStyle = "#5a5a5a"; ctx.fillRect(x, y, TILE, 4);
-    ctx.fillStyle = "#3a3a3a"; ctx.fillRect(x, y + TILE - 4, TILE, 4);
-    ctx.strokeStyle = "#555"; ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+    gfxRect(g, "#5a5a5a", x, y, TILE, 4);
+    gfxRect(g, "#3a3a3a", x, y + TILE - 4, TILE, 4);
+    g.rect(x + 0.5, y + 0.5, TILE - 1, TILE - 1).stroke({ color: 0x555555, width: 1 });
   } else if (tile.type === "door") {
-    ctx.fillStyle = "#8a6a3a"; ctx.fillRect(x + 8, y + 4, 16, 24);
-    ctx.fillStyle = "#aa8a4a"; ctx.fillRect(x + 10, y + 6, 12, 20);
-    ctx.fillStyle = "#ffd700"; ctx.fillRect(x + 20, y + 16, 3, 3);
+    gfxRect(g, "#8a6a3a", x + 8, y + 4, 16, 24);
+    gfxRect(g, "#aa8a4a", x + 10, y + 6, 12, 20);
+    gfxRect(g, "#ffd700", x + 20, y + 16, 3, 3);
   } else if (tile.type === "grass") {
-    ctx.fillStyle = "#1e4a1e";
-    ctx.fillRect(x + 4, y + 24, 2, 6); ctx.fillRect(x + 14, y + 22, 2, 8);
-    ctx.fillRect(x + 24, y + 26, 2, 4);
+    gfxRect(g, "#1e4a1e", x + 4, y + 24, 2, 6);
+    gfxRect(g, "#1e4a1e", x + 14, y + 22, 2, 8);
+    gfxRect(g, "#1e4a1e", x + 24, y + 26, 2, 4);
   } else if (tile.type === "floor") {
-    ctx.fillStyle = "#333348";
-    ctx.fillRect(x, y, 1, TILE); ctx.fillRect(x, y, TILE, 1);
+    gfxRect(g, "#333348", x, y, 1, TILE);
+    gfxRect(g, "#333348", x, y, TILE, 1);
   }
 }
 
-function drawNPC(ctx: CanvasRenderingContext2D, npc: NPC, frame: number) {
+function drawNPCGfx(g: PixiGraphics, npc: NPC, frame: number) {
   const px = npc.x * TILE, py = npc.y * TILE;
-  ctx.fillStyle = npc.color;
-  ctx.fillRect(px + 8, py + 4, 16, 12);
-  ctx.fillStyle = "#ffd5a0";
-  ctx.fillRect(px + 10, py + 0, 12, 8);
-  ctx.fillStyle = "#222";
-  ctx.fillRect(px + 12, py + 3, 2, 2); ctx.fillRect(px + 18, py + 3, 2, 2);
-  // bob
+  gfxRect(g, npc.color, px + 8, py + 4, 16, 12);
+  gfxRect(g, "#ffd5a0", px + 10, py + 0, 12, 8);
+  gfxRect(g, "#222222", px + 12, py + 3, 2, 2);
+  gfxRect(g, "#222222", px + 18, py + 3, 2, 2);
   const bob = Math.sin(frame * 0.03) * 1;
-  ctx.fillStyle = npc.color;
-  ctx.fillRect(px + 10, py + 16, 5, 10 + bob);
-  ctx.fillRect(px + 17, py + 16, 5, 10 - bob);
-  // name tag
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 9px " + FONT;
-  ctx.textAlign = "center";
-  ctx.fillText(npc.name, px + 16, py - 2);
+  gfxRect(g, npc.color, px + 10, py + 16, 5, 10 + bob);
+  gfxRect(g, npc.color, px + 17, py + 16, 5, 10 - bob);
 }
 
-function drawChest(ctx: CanvasRenderingContext2D, chest: Chest) {
+function drawChestGfx(g: PixiGraphics, chest: Chest) {
   const px = chest.x * TILE, py = chest.y * TILE;
-  ctx.fillStyle = chest.opened ? "#5a4a2a" : "#c8a84a";
-  ctx.fillRect(px + 4, py + 10, 24, 16);
-  ctx.fillStyle = chest.opened ? "#4a3a1a" : "#a08030";
-  ctx.fillRect(px + 4, py + 6, 24, 8);
-  if (!chest.opened) {
-    ctx.fillStyle = "#ffd700";
-    ctx.fillRect(px + 14, py + 14, 4, 4);
-  }
+  gfxRect(g, chest.opened ? "#5a4a2a" : "#c8a84a", px + 4, py + 10, 24, 16);
+  gfxRect(g, chest.opened ? "#4a3a1a" : "#a08030", px + 4, py + 6, 24, 8);
+  if (!chest.opened) gfxRect(g, "#ffd700", px + 14, py + 14, 4, 4);
 }
 
 // ─── Initial State ───────────────────────────────────────────────────────────
@@ -410,6 +385,10 @@ export default function PixelRPGPage() {
   const frameRef = useRef(0);
   const keysRef = useRef<Set<string>>(new Set());
   const moveTimerRef = useRef(0);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
+  const pixiInitRef = useRef(false);
 
   // ─── State ─────────────────────────────────────────────────────────────────
   const [screen, setScreen] = useState<Screen>("title");
@@ -886,195 +865,251 @@ export default function PixelRPGPage() {
     return () => clearInterval(interval);
   }, [screen, tryMove]);
 
-  // ─── Canvas Render Loop ────────────────────────────────────────────────────
+  // ─── PixiJS Render Loop ─────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    let animId: number;
+    let destroyed = false;
 
-    const render = () => {
-      frameRef.current++;
-      const f = frameRef.current;
-      const s = stateRef.current;
-      ctx.imageSmoothingEnabled = false;
+    async function initPixi() {
+      if (pixiInitRef.current || destroyed) return;
+      pixiInitRef.current = true;
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: CW, height: CH, backgroundColor: 0x0f0f0f, antialias: false });
+      if (destroyed) { app.destroy(); return; }
+      pixiAppRef.current = app;
 
-      if (s.screen === "explore") {
-        const diff = DIFF_SCALE[s.difficulty];
-        const ad = getAreaData(s.area, diff);
-        // draw tiles
-        for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) drawTile(ctx, ad.tiles[y][x], x * TILE, y * TILE);
-        // draw chests
-        for (const chest of s.areaChests) drawChest(ctx, chest);
-        // draw NPCs
-        for (const npc of ad.npcs) drawNPC(ctx, npc, f);
-        // draw player
-        drawPixelChar(ctx, s.playerX * TILE, s.playerY * TILE, s.playerDir, f);
-        // HUD overlay
-        ctx.fillStyle = "rgba(0,0,0,0.7)";
-        ctx.fillRect(0, 0, CW, 28);
-        ctx.fillStyle = "#fff"; ctx.font = "bold 11px " + FONT; ctx.textAlign = "left";
-        ctx.fillText(`Lv.${s.stats.level} ${getAreaData(s.area, 1).label}`, 4, 12);
-        // HP bar
-        ctx.fillStyle = "#333"; ctx.fillRect(100, 4, 80, 8);
-        ctx.fillStyle = "#e74c3c"; ctx.fillRect(100, 4, 80 * (s.stats.hp / s.stats.maxHp), 8);
-        ctx.fillStyle = "#fff"; ctx.font = "9px " + FONT;
-        ctx.fillText(`${s.stats.hp}/${s.stats.maxHp}`, 102, 11);
-        // MP bar
-        ctx.fillStyle = "#333"; ctx.fillRect(100, 16, 80, 8);
-        ctx.fillStyle = PRIMARY; ctx.fillRect(100, 16, 80 * (s.stats.mp / s.stats.maxMp), 8);
-        ctx.fillText(`${s.stats.mp}/${s.stats.maxMp}`, 102, 23);
-        // XP
-        ctx.fillStyle = "#aaa"; ctx.textAlign = "right";
-        ctx.fillText(`XP:${s.stats.xp}/${s.stats.xpNext}  G:${s.stats.gold}`, CW - 4, 12);
-        // area indicator
-        ctx.fillStyle = "#aaa"; ctx.font = "9px " + FONT; ctx.textAlign = "right";
-        ctx.fillText("[I]背包 [K]技能", CW - 4, 24);
-      }
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
 
-      if (s.screen === "combat" && s.combat) {
-        const c = s.combat;
-        // background
-        ctx.fillStyle = "#0a0a1a";
-        ctx.fillRect(0, 0, CW, CH);
-        // ground
-        ctx.fillStyle = "#1a1a2a";
-        ctx.fillRect(0, CH * 0.6, CW, CH * 0.4);
-        // enemy
-        drawPixelEnemy(ctx, CW * 0.65, CH * 0.35, c.enemy.color, c.enemy.isBoss, f);
-        // enemy HP bar
-        ctx.fillStyle = "#333"; ctx.fillRect(CW * 0.4, CH * 0.08, CW * 0.5, 12);
-        ctx.fillStyle = c.enemy.isBoss ? "#e74c3c" : "#ff6b6b";
-        ctx.fillRect(CW * 0.4, CH * 0.08, CW * 0.5 * (c.enemy.hp / c.enemy.maxHp), 12);
-        ctx.fillStyle = "#fff"; ctx.font = "bold 10px " + FONT; ctx.textAlign = "center";
-        ctx.fillText(`${c.enemy.name} ${c.enemy.hp}/${c.enemy.maxHp}`, CW * 0.65, CH * 0.07);
-        // player sprite (small)
-        drawPixelChar(ctx, CW * 0.15, CH * 0.45, "right", f);
-        // player HP/MP
-        ctx.fillStyle = "#333"; ctx.fillRect(10, CH * 0.42, 100, 8);
-        ctx.fillStyle = "#e74c3c"; ctx.fillRect(10, CH * 0.42, 100 * (s.stats.hp / s.stats.maxHp), 8);
-        ctx.fillStyle = "#333"; ctx.fillRect(10, CH * 0.42 + 10, 100, 8);
-        ctx.fillStyle = PRIMARY; ctx.fillRect(10, CH * 0.42 + 10, 100 * (s.stats.mp / s.stats.maxMp), 8);
-        ctx.fillStyle = "#fff"; ctx.font = "9px " + FONT; ctx.textAlign = "left";
-        ctx.fillText(`HP:${s.stats.hp}/${s.stats.maxHp}`, 12, CH * 0.42 + 7);
-        ctx.fillText(`MP:${s.stats.mp}/${s.stats.maxMp}`, 12, CH * 0.42 + 17);
-        // combat log
-        ctx.fillStyle = "rgba(0,0,0,0.8)";
-        ctx.fillRect(0, CH * 0.65, CW, CH * 0.15);
-        ctx.fillStyle = "#ccc"; ctx.font = "10px " + FONT; ctx.textAlign = "left";
-        const visibleLog = c.log.slice(-3);
-        visibleLog.forEach((line, i) => ctx.fillText(line, 8, CH * 0.68 + i * 14));
-        // action menu
-        if (c.turn === "player" && !c.animating && !c.fled) {
-          ctx.fillStyle = "rgba(0,0,0,0.85)";
-          ctx.fillRect(0, CH * 0.82, CW, CH * 0.18);
-          if (!c.skillSelect && !c.itemSelect) {
-            const actions = ["攻击", "技能", "道具", "逃跑"];
-            const icons = ["swords", "zap", "package", "wind"];
-            actions.forEach((a, i) => {
-              const bx = 10 + i * (CW / 4 - 5), by = CH * 0.84;
-              ctx.fillStyle = c.selectedAction === i ? PRIMARY : "#333";
-              ctx.fillRect(bx, by, CW / 4 - 15, 24);
-              ctx.fillStyle = c.selectedAction === i ? "#000" : "#fff";
-              ctx.font = "bold 11px " + FONT; ctx.textAlign = "center";
-              ctx.fillText(a, bx + (CW / 4 - 15) / 2, by + 16);
-              void icons;
-            });
-          } else if (c.skillSelect) {
-            const unlocked = s.skills.filter(sk => sk.unlocked);
-            if (unlocked.length === 0) {
-              ctx.fillStyle = "#aaa"; ctx.font = "11px " + FONT; ctx.textAlign = "center";
-              ctx.fillText("还没有解锁技能！按ESC返回", CW / 2, CH * 0.92);
-            } else {
-              unlocked.forEach((sk, i) => {
-                const by = CH * 0.84 + i * 16;
-                ctx.fillStyle = i === s.combatSkillIdx ? PRIMARY : "transparent";
-                ctx.fillRect(8, by - 2, CW - 16, 14);
-                ctx.fillStyle = i === s.combatSkillIdx ? "#000" : "#fff";
-                ctx.font = "10px " + FONT; ctx.textAlign = "left";
-                ctx.fillText(`${sk.name} (MP:${sk.mpCost})`, 12, by + 9);
+      // 文字层容器
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+
+      // 创建可复用文字对象
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string; fontFamily?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 11,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: opts.fontFamily ?? FONT,
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        pixiTextsRef.current.set(key, t);
+        return t;
+      };
+
+      // 预创建文字对象
+      makeText("hud_level", { fontSize: 11, fill: "#ffffff", fontWeight: "bold" });
+      makeText("hud_hp", { fontSize: 9, fill: "#ffffff" });
+      makeText("hud_mp", { fontSize: 9, fill: "#ffffff" });
+      makeText("hud_xp", { fontSize: 9, fill: "#aaaaaa" });
+      makeText("hud_keys", { fontSize: 9, fill: "#aaaaaa" });
+      // NPC name tags
+      for (let i = 0; i < 5; i++) makeText(`npc_name_${i}`, { fontSize: 9, fill: "#ffffff", fontWeight: "bold" });
+      // Combat texts
+      makeText("enemy_name", { fontSize: 10, fill: "#ffffff", fontWeight: "bold" });
+      makeText("combat_hp", { fontSize: 9, fill: "#ffffff" });
+      makeText("combat_mp", { fontSize: 9, fill: "#ffffff" });
+      for (let i = 0; i < 3; i++) makeText(`combat_log_${i}`, { fontSize: 10, fill: "#cccccc" });
+      for (let i = 0; i < 4; i++) makeText(`combat_action_${i}`, { fontSize: 11, fill: "#ffffff", fontWeight: "bold" });
+      for (let i = 0; i < 6; i++) makeText(`combat_list_${i}`, { fontSize: 10, fill: "#ffffff" });
+      makeText("combat_empty", { fontSize: 11, fill: "#aaaaaa" });
+      // Dialogue texts
+      makeText("dlg_name", { fontSize: 12, fill: PRIMARY, fontWeight: "bold" });
+      makeText("dlg_line", { fontSize: 11, fill: "#ffffff" });
+      makeText("dlg_hint", { fontSize: 9, fill: "#aaaaaa" });
+      // Particle/popup texts
+      for (let i = 0; i < 10; i++) makeText(`popup_${i}`, { fontSize: 14, fill: "#ffffff", fontWeight: "bold" });
+
+      // 渲染循环
+      app.ticker.add(() => {
+        if (destroyed) return;
+        frameRef.current++;
+        const f = frameRef.current;
+        const s = stateRef.current;
+        const g = pixiGfxRef.current!;
+        const texts = pixiTextsRef.current;
+
+        // 隐藏所有文字
+        texts.forEach(t => { t.visible = false; });
+        // 清空图形
+        g.clear();
+
+        const showText = (key: string, text: string, x: number, y: number, anchor?: { x?: number; y?: number }) => {
+          const t = texts.get(key);
+          if (!t) return;
+          t.text = text;
+          t.x = x;
+          t.y = y;
+          t.anchor.set(anchor?.x ?? 0, anchor?.y ?? 0);
+          t.alpha = 1;
+          t.visible = true;
+        };
+
+        if (s.screen === "explore") {
+          const diff = DIFF_SCALE[s.difficulty];
+          const ad = getAreaData(s.area, diff);
+          for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) drawTileGfx(g, ad.tiles[y][x], x * TILE, y * TILE);
+          for (const chest of s.areaChests) drawChestGfx(g, chest);
+          for (const npc of ad.npcs) drawNPCGfx(g, npc, f);
+          drawPixelCharGfx(g, s.playerX * TILE, s.playerY * TILE, s.playerDir, f);
+          // NPC name tags
+          ad.npcs.forEach((npc, i) => {
+            if (i < 5) showText(`npc_name_${i}`, npc.name, npc.x * TILE + 16, npc.y * TILE - 6, { x: 0.5, y: 1 });
+          });
+          // HUD
+          gfxRect(g, 0x000000, 0, 0, CW, 28, 0.7);
+          showText("hud_level", `Lv.${s.stats.level} ${getAreaData(s.area, 1).label}`, 4, 2);
+          gfxRect(g, "#333333", 100, 4, 80, 8);
+          gfxRect(g, "#e74c3c", 100, 4, 80 * (s.stats.hp / s.stats.maxHp), 8);
+          showText("hud_hp", `${s.stats.hp}/${s.stats.maxHp}`, 102, 3);
+          gfxRect(g, "#333333", 100, 16, 80, 8);
+          gfxRect(g, PRIMARY, 100, 16, 80 * (s.stats.mp / s.stats.maxMp), 8);
+          showText("hud_mp", `${s.stats.mp}/${s.stats.maxMp}`, 102, 15);
+          showText("hud_xp", `XP:${s.stats.xp}/${s.stats.xpNext}  G:${s.stats.gold}`, CW - 4, 2, { x: 1 });
+          showText("hud_keys", "[I]背包 [K]技能", CW - 4, 14, { x: 1 });
+        }
+
+        if (s.screen === "combat" && s.combat) {
+          const c = s.combat;
+          gfxRect(g, "#0a0a1a", 0, 0, CW, CH);
+          gfxRect(g, "#1a1a2a", 0, CH * 0.6, CW, CH * 0.4);
+          drawPixelEnemyGfx(g, CW * 0.65, CH * 0.35, c.enemy.color, c.enemy.isBoss, f);
+          gfxRect(g, "#333333", CW * 0.4, CH * 0.08, CW * 0.5, 12);
+          gfxRect(g, c.enemy.isBoss ? "#e74c3c" : "#ff6b6b", CW * 0.4, CH * 0.08, CW * 0.5 * (c.enemy.hp / c.enemy.maxHp), 12);
+          showText("enemy_name", `${c.enemy.name} ${c.enemy.hp}/${c.enemy.maxHp}`, CW * 0.65, CH * 0.07 - 12, { x: 0.5 });
+          drawPixelCharGfx(g, CW * 0.15, CH * 0.45, "right", f);
+          gfxRect(g, "#333333", 10, CH * 0.42, 100, 8);
+          gfxRect(g, "#e74c3c", 10, CH * 0.42, 100 * (s.stats.hp / s.stats.maxHp), 8);
+          gfxRect(g, "#333333", 10, CH * 0.42 + 10, 100, 8);
+          gfxRect(g, PRIMARY, 10, CH * 0.42 + 10, 100 * (s.stats.mp / s.stats.maxMp), 8);
+          showText("combat_hp", `HP:${s.stats.hp}/${s.stats.maxHp}`, 12, CH * 0.42 - 1);
+          showText("combat_mp", `MP:${s.stats.mp}/${s.stats.maxMp}`, 12, CH * 0.42 + 9);
+          // combat log
+          gfxRect(g, 0x000000, 0, CH * 0.65, CW, CH * 0.15, 0.8);
+          const visibleLog = c.log.slice(-3);
+          visibleLog.forEach((line, i) => showText(`combat_log_${i}`, line, 8, CH * 0.66 + i * 14));
+          // action menu
+          if (c.turn === "player" && !c.animating && !c.fled) {
+            gfxRect(g, 0x000000, 0, CH * 0.82, CW, CH * 0.18, 0.85);
+            if (!c.skillSelect && !c.itemSelect) {
+              const actions = ["攻击", "技能", "道具", "逃跑"];
+              actions.forEach((a, i) => {
+                const bx = 10 + i * (CW / 4 - 5), by = CH * 0.84;
+                gfxRect(g, c.selectedAction === i ? PRIMARY : "#333333", bx, by, CW / 4 - 15, 24);
+                const t = texts.get(`combat_action_${i}`);
+                if (t) {
+                  t.text = a; t.x = bx + (CW / 4 - 15) / 2; t.y = by + 4;
+                  t.anchor.set(0.5, 0); t.alpha = 1; t.visible = true;
+                  t.style.fill = c.selectedAction === i ? "#000000" : "#ffffff";
+                }
               });
+            } else if (c.skillSelect) {
+              const unlocked = s.skills.filter(sk => sk.unlocked);
+              if (unlocked.length === 0) {
+                showText("combat_empty", "还没有解锁技能！按ESC返回", CW / 2, CH * 0.90, { x: 0.5 });
+              } else {
+                unlocked.forEach((sk, i) => {
+                  if (i >= 6) return;
+                  const by = CH * 0.84 + i * 16;
+                  if (i === s.combatSkillIdx) gfxRect(g, PRIMARY, 8, by - 2, CW - 16, 14);
+                  const t = texts.get(`combat_list_${i}`);
+                  if (t) {
+                    t.text = `${sk.name} (MP:${sk.mpCost})`; t.x = 12; t.y = by - 1;
+                    t.anchor.set(0, 0); t.alpha = 1; t.visible = true;
+                    t.style.fill = i === s.combatSkillIdx ? "#000000" : "#ffffff";
+                  }
+                });
+              }
+            } else if (c.itemSelect) {
+              const usable = s.inventory.filter(it => it.type === "potion" || it.type === "mpPotion");
+              if (usable.length === 0) {
+                showText("combat_empty", "没有可用道具！按ESC返回", CW / 2, CH * 0.90, { x: 0.5 });
+              } else {
+                usable.forEach((it, i) => {
+                  if (i >= 6) return;
+                  const by = CH * 0.84 + i * 16;
+                  if (i === s.combatItemIdx) gfxRect(g, PRIMARY, 8, by - 2, CW - 16, 14);
+                  const t = texts.get(`combat_list_${i}`);
+                  if (t) {
+                    t.text = `${it.name} - ${it.desc}`; t.x = 12; t.y = by - 1;
+                    t.anchor.set(0, 0); t.alpha = 1; t.visible = true;
+                    t.style.fill = i === s.combatItemIdx ? "#000000" : "#ffffff";
+                  }
+                });
+              }
             }
-          } else if (c.itemSelect) {
-            const usable = s.inventory.filter(it => it.type === "potion" || it.type === "mpPotion");
-            if (usable.length === 0) {
-              ctx.fillStyle = "#aaa"; ctx.font = "11px " + FONT; ctx.textAlign = "center";
-              ctx.fillText("没有可用道具！按ESC返回", CW / 2, CH * 0.92);
-            } else {
-              usable.forEach((it, i) => {
-                const by = CH * 0.84 + i * 16;
-                ctx.fillStyle = i === s.combatItemIdx ? PRIMARY : "transparent";
-                ctx.fillRect(8, by - 2, CW - 16, 14);
-                ctx.fillStyle = i === s.combatItemIdx ? "#000" : "#fff";
-                ctx.font = "10px " + FONT; ctx.textAlign = "left";
-                ctx.fillText(`${it.name} - ${it.desc}`, 12, by + 9);
-              });
+          }
+        }
+
+        if (s.screen === "dialogue" && s.dialogueNpc) {
+          const diff = DIFF_SCALE[s.difficulty];
+          const ad = getAreaData(s.area, diff);
+          for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) drawTileGfx(g, ad.tiles[y][x], x * TILE, y * TILE);
+          for (const chest of s.areaChests) drawChestGfx(g, chest);
+          for (const npc of ad.npcs) drawNPCGfx(g, npc, f);
+          ad.npcs.forEach((npc, i) => {
+            if (i < 5) showText(`npc_name_${i}`, npc.name, npc.x * TILE + 16, npc.y * TILE - 6, { x: 0.5, y: 1 });
+          });
+          drawPixelCharGfx(g, s.playerX * TILE, s.playerY * TILE, s.playerDir, f);
+          gfxRect(g, 0x000000, 10, CH - 90, CW - 20, 80, 0.85);
+          g.rect(10, CH - 90, CW - 20, 80).stroke({ color: colorToNum(PRIMARY), width: 2 });
+          showText("dlg_name", s.dialogueNpc.name, 20, CH - 86);
+          showText("dlg_line", s.dialogueNpc.lines[s.dialogueLine] || "", 20, CH - 64);
+          showText("dlg_hint", "按Enter继续", CW - 20, CH - 22, { x: 1 });
+        }
+
+        // particles
+        setParticles(prev => {
+          const next: Particle[] = [];
+          for (const p of prev) {
+            p.x += p.vx; p.y += p.vy; p.life--;
+            if (p.life > 0) {
+              gfxRect(g, p.color, p.x, p.y, p.size, p.size, p.life / p.maxLife);
+              next.push(p);
             }
           }
-        }
-      }
+          return next;
+        });
 
-      if (s.screen === "dialogue" && s.dialogueNpc) {
-        // draw map behind
-        const diff = DIFF_SCALE[s.difficulty];
-        const ad = getAreaData(s.area, diff);
-        for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) drawTile(ctx, ad.tiles[y][x], x * TILE, y * TILE);
-        for (const chest of s.areaChests) drawChest(ctx, chest);
-        for (const npc of ad.npcs) drawNPC(ctx, npc, f);
-        drawPixelChar(ctx, s.playerX * TILE, s.playerY * TILE, s.playerDir, f);
-        // dialogue box
-        ctx.fillStyle = "rgba(0,0,0,0.85)";
-        ctx.fillRect(10, CH - 90, CW - 20, 80);
-        ctx.strokeStyle = PRIMARY; ctx.lineWidth = 2;
-        ctx.strokeRect(10, CH - 90, CW - 20, 80);
-        ctx.fillStyle = PRIMARY; ctx.font = "bold 12px " + FONT; ctx.textAlign = "left";
-        ctx.fillText(s.dialogueNpc.name, 20, CH - 72);
-        ctx.fillStyle = "#fff"; ctx.font = "11px " + FONT;
-        ctx.fillText(s.dialogueNpc.lines[s.dialogueLine] || "", 20, CH - 50);
-        ctx.fillStyle = "#aaa"; ctx.font = "9px " + FONT; ctx.textAlign = "right";
-        ctx.fillText("按Enter继续", CW - 20, CH - 18);
-      }
-
-      // particles
-      setParticles(prev => {
-        const next: Particle[] = [];
-        for (const p of prev) {
-          p.x += p.vx; p.y += p.vy; p.life--;
-          if (p.life > 0) {
-            ctx.globalAlpha = p.life / p.maxLife;
-            ctx.fillStyle = p.color;
-            ctx.fillRect(p.x, p.y, p.size, p.size);
-            next.push(p);
+        // damage popups
+        setPopups(prev => {
+          const next: DamagePopup[] = [];
+          for (let pi = 0; pi < prev.length; pi++) {
+            const p = prev[pi];
+            p.y -= 1; p.life--;
+            if (p.life > 0 && pi < 10) {
+              const t = texts.get(`popup_${pi}`);
+              if (t) {
+                t.text = p.text; t.x = p.x; t.y = p.y;
+                t.anchor.set(0.5, 0.5); t.alpha = p.life / 40;
+                t.style.fill = p.color; t.visible = true;
+              }
+              next.push(p);
+            }
           }
-        }
-        ctx.globalAlpha = 1;
-        return next;
+          return next;
+        });
       });
+    }
 
-      // damage popups
-      setPopups(prev => {
-        const next: DamagePopup[] = [];
-        for (const p of prev) {
-          p.y -= 1; p.life--;
-          if (p.life > 0) {
-            ctx.globalAlpha = p.life / 40;
-            ctx.fillStyle = p.color;
-            ctx.font = "bold 14px " + FONT; ctx.textAlign = "center";
-            ctx.fillText(p.text, p.x, p.y);
-            next.push(p);
-          }
-        }
-        ctx.globalAlpha = 1;
-        return next;
-      });
+    initPixi();
 
-      animId = requestAnimationFrame(render);
+    return () => {
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+        pixiGfxRef.current = null;
+        pixiTextsRef.current.clear();
+        pixiInitRef.current = false;
+      }
     };
-
-    animId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(animId);
-  }, [screen]);
+  }, []);
 
   // ─── Equip Item ────────────────────────────────────────────────────────────
   const equipItem = useCallback((item: Item, idx: number) => {

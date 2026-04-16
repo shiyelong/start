@@ -12,14 +12,33 @@ import {
 } from "lucide-react";
 import { ageGate } from "@/lib/age-gate";
 import { SoundEngine } from "@/lib/game-engine/sound-engine";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GAME_ID = "adult-rpg";
 const TILE = 28;
 const MAP_W = 16, MAP_H = 12;
 const CW = MAP_W * TILE, CH = MAP_H * TILE + 80;
-const PRIMARY = "#a55eea", ACCENT = "#3ea6ff", BG = "#0f0f0f";
-const FPS = 60;
+const PRIMARY = "#a55eea", ACCENT = "#3ea6ff";
+
+/** Convert "#rrggbb" to numeric 0xRRGGBB for PixiJS */
+function hexColor(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
+}
+function hslaToHex(h: number, s: number, l: number): number {
+  const hMod = ((h % 360) + 360) % 360;
+  const sN = s / 100, lN = l / 100;
+  const a2 = sN * Math.min(lN, 1 - lN);
+  const f = (n: number) => {
+    const k = (n + hMod / 30) % 12;
+    return lN - a2 * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+  };
+  const r = Math.round(f(0) * 255);
+  const g = Math.round(f(8) * 255);
+  const b = Math.round(f(4) * 255);
+  return (r << 16) | (g << 8) | b;
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Difficulty = "easy" | "normal" | "hard";
@@ -151,7 +170,6 @@ function initStats(): Stats {
 export default function AdultRPG() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const soundRef = useRef<SoundEngine | null>(null);
-  const rafRef = useRef(0);
   const frameRef = useRef(0);
 
   const [blocked, setBlocked] = useState(false);
@@ -696,272 +714,213 @@ export default function AdultRPG() {
     return () => window.removeEventListener("keydown", onKey);
   }, [tryMove, advanceFromCG]);
 
-  // ─── Canvas Render ─────────────────────────────────────────────────────────
+  // ─── PixiJS Render ──────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = CW * dpr;
-    canvas.height = CH * dpr;
-    canvas.style.width = `${CW}px`;
-    canvas.style.height = `${CH}px`;
+    let destroyed = false;
+    let app: Application | null = null;
 
-    const render = () => {
-      ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.fillStyle = "#0a0a0a";
-      ctx.fillRect(0, 0, CW, CH);
-      const s = stateRef.current;
-      frameRef.current++;
+    const TEXT_POOL_SIZE = 80;
 
-      if (s.phase === "title") {
-        // Title screen
-        ctx.fillStyle = PRIMARY;
-        ctx.font = "bold 32px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("暗影地牢", CW / 2, CH / 2 - 60);
-        ctx.fillStyle = "#ff4757";
-        ctx.font = "14px monospace";
-        ctx.fillText("NC-17 成人RPG", CW / 2, CH / 2 - 30);
-        ctx.fillStyle = "#aaa";
-        ctx.font = "13px monospace";
-        ctx.fillText("地牢探索 · 回合制战斗 · Boss挑战", CW / 2, CH / 2);
-        // Animated glow
-        const glow = 0.5 + 0.5 * Math.sin(frameRef.current * 0.05);
-        ctx.fillStyle = `rgba(165, 94, 234, ${glow})`;
-        ctx.font = "16px monospace";
-        ctx.fillText("选择难度开始冒险", CW / 2, CH / 2 + 40);
-      } else if (s.phase === "explore") {
+    async function initPixi() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      app = await createPixiApp({ canvas: canvas!, width: CW, height: CH, backgroundColor: 0x0a0a0a, antialias: true });
+      if (destroyed) { app.destroy(true); return; }
+
+      const g: PixiGraphics = new pixi.Graphics();
+      app.stage.addChild(g);
+
+      // Pre-create text pool
+      const texts: PixiText[] = [];
+      for (let i = 0; i < TEXT_POOL_SIZE; i++) {
+        const t = new pixi.Text({ text: "", style: { fontSize: 12, fill: 0xffffff, fontFamily: "monospace", fontWeight: "normal" } });
+        t.visible = false;
+        app.stage.addChild(t);
+        texts.push(t);
+      }
+      let textIdx = 0;
+
+      function nextText(str: string, x: number, y: number, opts: { size?: number; color?: number; bold?: boolean; align?: "left" | "center" | "right" }): void {
+        if (textIdx >= texts.length) return;
+        const t = texts[textIdx++];
+        t.text = str;
+        t.style.fontSize = opts.size ?? 12;
+        t.style.fill = opts.color ?? 0xffffff;
+        t.style.fontWeight = opts.bold ? "bold" : "normal";
+        t.visible = true;
+        t.alpha = 1;
+        // Position based on alignment
+        if (opts.align === "center") {
+          t.anchor.set(0.5, 0.5);
+        } else if (opts.align === "right") {
+          t.anchor.set(1, 0);
+        } else {
+          t.anchor.set(0, 0);
+        }
+        t.x = x;
+        t.y = y;
+      }
+
+      app.ticker.add(() => {
+        if (destroyed) return;
+        g.clear();
+        textIdx = 0;
+        for (const t of texts) t.visible = false;
+
+        const s = stateRef.current;
+        frameRef.current++;
+
+        if (s.phase === "title") {
+          nextText("暗影地牢", CW / 2, CH / 2 - 60, { size: 32, color: hexColor(PRIMARY), bold: true, align: "center" });
+          nextText("NC-17 成人RPG", CW / 2, CH / 2 - 30, { size: 14, color: 0xff4757, align: "center" });
+          nextText("地牢探索 · 回合制战斗 · Boss挑战", CW / 2, CH / 2, { size: 13, color: 0xaaaaaa, align: "center" });
+          const glow = 0.5 + 0.5 * Math.sin(frameRef.current * 0.05);
+          nextText("选择难度开始冒险", CW / 2, CH / 2 + 40, { size: 16, color: hexColor(PRIMARY), align: "center" });
+          if (textIdx > 0) texts[textIdx - 1].alpha = glow;
+        } else if (s.phase === "explore") {
         // Draw map
         for (let y = 0; y < MAP_H; y++) {
           for (let x = 0; x < MAP_W; x++) {
             const tile = s.map[y]?.[x];
             if (!tile) continue;
             const tx = x * TILE, ty = y * TILE;
+            let tileColor: number;
             switch (tile.type) {
-              case "wall": ctx.fillStyle = "#2d1b4e"; break;
-              case "floor": ctx.fillStyle = "#1a0a2e"; break;
-              case "chest":
-                ctx.fillStyle = s.openedChests.has(`${x},${y}`) ? "#1a0a2e" : "#1a0a2e";
-                break;
-              case "stairs": ctx.fillStyle = "#0d3b66"; break;
-              default: ctx.fillStyle = "#1a0a2e";
+              case "wall": tileColor = 0x2d1b4e; break;
+              case "stairs": tileColor = 0x0d3b66; break;
+              default: tileColor = 0x1a0a2e;
             }
-            ctx.fillRect(tx, ty, TILE - 1, TILE - 1);
-            // Chest icon
+            g.rect(tx, ty, TILE - 1, TILE - 1).fill(tileColor);
             if (tile.type === "chest" && !s.openedChests.has(`${x},${y}`)) {
-              ctx.fillStyle = "#fed330";
-              ctx.font = "16px monospace";
-              ctx.textAlign = "center";
-              ctx.textBaseline = "middle";
-              ctx.fillText("$", tx + TILE / 2, ty + TILE / 2);
+              nextText("$", tx + TILE / 2, ty + TILE / 2, { size: 16, color: 0xfed330, align: "center" });
             }
-            // Stairs icon
             if (tile.type === "stairs") {
-              ctx.fillStyle = ACCENT;
-              ctx.font = "14px monospace";
-              ctx.textAlign = "center";
-              ctx.textBaseline = "middle";
-              ctx.fillText(">", tx + TILE / 2, ty + TILE / 2);
+              nextText(">", tx + TILE / 2, ty + TILE / 2, { size: 14, color: hexColor(ACCENT), align: "center" });
             }
           }
         }
         // Draw enemies
         for (const ep of s.enemyPositions) {
-          const ex = ep.x * TILE, ey = ep.y * TILE;
-          ctx.fillStyle = ep.enemy.color;
-          ctx.font = ep.enemy.isBoss ? "bold 20px monospace" : "bold 16px monospace";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(ep.enemy.isBoss ? "B" : "E", ex + TILE / 2, ey + TILE / 2);
+          nextText(ep.enemy.isBoss ? "B" : "E", ep.x * TILE + TILE / 2, ep.y * TILE + TILE / 2, {
+            size: ep.enemy.isBoss ? 20 : 16, color: hexColor(ep.enemy.color), bold: true, align: "center",
+          });
         }
         // Draw player
-        const px = s.playerX * TILE, py = s.playerY * TILE;
-        ctx.fillStyle = PRIMARY;
-        ctx.font = "bold 18px monospace";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("@", px + TILE / 2, py + TILE / 2);
+        nextText("@", s.playerX * TILE + TILE / 2, s.playerY * TILE + TILE / 2, {
+          size: 18, color: hexColor(PRIMARY), bold: true, align: "center",
+        });
         // HUD bar at bottom
         const hudY = MAP_H * TILE + 4;
-        ctx.fillStyle = "#111";
-        ctx.fillRect(0, hudY, CW, 76);
-        ctx.fillStyle = "#fff";
-        ctx.font = "12px monospace";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "top";
+        g.rect(0, hudY, CW, 76).fill(0x111111);
         // HP bar
-        ctx.fillStyle = "#333";
-        ctx.fillRect(8, hudY + 4, 140, 12);
-        ctx.fillStyle = "#ff4757";
-        ctx.fillRect(8, hudY + 4, 140 * (s.stats.hp / s.stats.maxHp), 12);
-        ctx.fillStyle = "#fff";
-        ctx.font = "10px monospace";
-        ctx.fillText(`HP ${s.stats.hp}/${s.stats.maxHp}`, 10, hudY + 5);
+        g.rect(8, hudY + 4, 140, 12).fill(0x333333);
+        g.rect(8, hudY + 4, 140 * (s.stats.hp / s.stats.maxHp), 12).fill(0xff4757);
+        nextText(`HP ${s.stats.hp}/${s.stats.maxHp}`, 10, hudY + 5, { size: 10, color: 0xffffff });
         // MP bar
-        ctx.fillStyle = "#333";
-        ctx.fillRect(8, hudY + 20, 140, 12);
-        ctx.fillStyle = "#3ea6ff";
-        ctx.fillRect(8, hudY + 20, 140 * (s.stats.mp / s.stats.maxMp), 12);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(`MP ${s.stats.mp}/${s.stats.maxMp}`, 10, hudY + 21);
+        g.rect(8, hudY + 20, 140, 12).fill(0x333333);
+        g.rect(8, hudY + 20, 140 * (s.stats.mp / s.stats.maxMp), 12).fill(hexColor(ACCENT));
+        nextText(`MP ${s.stats.mp}/${s.stats.maxMp}`, 10, hudY + 21, { size: 10, color: 0xffffff });
         // Stats
-        ctx.fillStyle = "#ccc";
-        ctx.font = "11px monospace";
-        ctx.fillText(`Lv.${s.stats.level}  攻:${s.stats.atk + (s.equipment.weapon?.atk || 0)}  防:${s.stats.def + (s.equipment.armor?.def || 0)}`, 8, hudY + 38);
-        ctx.fillText(`第${s.floor}层  金币:${s.stats.gold}  分数:${s.score}`, 8, hudY + 54);
+        nextText(`Lv.${s.stats.level}  攻:${s.stats.atk + (s.equipment.weapon?.atk || 0)}  防:${s.stats.def + (s.equipment.armor?.def || 0)}`, 8, hudY + 38, { size: 11, color: 0xcccccc });
+        nextText(`第${s.floor}层  金币:${s.stats.gold}  分数:${s.score}`, 8, hudY + 54, { size: 11, color: 0xcccccc });
         // Right side info
-        ctx.textAlign = "right";
-        ctx.fillStyle = "#888";
-        ctx.fillText(`武器: ${s.equipment.weapon?.name || "无"}`, CW - 8, hudY + 5);
-        ctx.fillText(`防具: ${s.equipment.armor?.name || "无"}`, CW - 8, hudY + 21);
-        ctx.fillText(`背包: ${s.inventory.length}件  [I]打开`, CW - 8, hudY + 38);
+        nextText(`武器: ${s.equipment.weapon?.name || "无"}`, CW - 8, hudY + 5, { size: 11, color: 0x888888, align: "right" });
+        nextText(`防具: ${s.equipment.armor?.name || "无"}`, CW - 8, hudY + 21, { size: 11, color: 0x888888, align: "right" });
+        nextText(`背包: ${s.inventory.length}件  [I]打开`, CW - 8, hudY + 38, { size: 11, color: 0x888888, align: "right" });
         if (s.stats.statPoints > 0) {
-          ctx.fillStyle = "#fed330";
-          ctx.fillText(`可分配点数: ${s.stats.statPoints}`, CW - 8, hudY + 54);
+          nextText(`可分配点数: ${s.stats.statPoints}`, CW - 8, hudY + 54, { size: 11, color: 0xfed330, align: "right" });
         }
       } else if (s.phase === "combat" && s.combat) {
-        // Combat screen
         const c = s.combat;
-        ctx.fillStyle = "#0d0020";
-        ctx.fillRect(0, 0, CW, CH);
+        g.rect(0, 0, CW, CH).fill(0x0d0020);
         // Enemy
-        ctx.fillStyle = c.enemy.color;
-        ctx.font = c.enemy.isBoss ? "bold 48px monospace" : "bold 36px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(c.enemy.isBoss ? "B" : "E", CW / 2, 80);
-        ctx.fillStyle = "#fff";
-        ctx.font = "14px monospace";
-        ctx.fillText(c.enemy.name, CW / 2, 110);
+        nextText(c.enemy.isBoss ? "B" : "E", CW / 2, 80, {
+          size: c.enemy.isBoss ? 48 : 36, color: hexColor(c.enemy.color), bold: true, align: "center",
+        });
+        nextText(c.enemy.name, CW / 2, 110, { size: 14, color: 0xffffff, align: "center" });
         // Enemy HP bar
-        ctx.fillStyle = "#333";
-        ctx.fillRect(CW / 2 - 80, 120, 160, 14);
-        ctx.fillStyle = "#ff4757";
-        ctx.fillRect(CW / 2 - 80, 120, 160 * Math.max(0, c.enemy.hp / c.enemy.maxHp), 14);
-        ctx.fillStyle = "#fff";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`${c.enemy.hp}/${c.enemy.maxHp}`, CW / 2, 131);
+        g.rect(CW / 2 - 80, 120, 160, 14).fill(0x333333);
+        g.rect(CW / 2 - 80, 120, 160 * Math.max(0, c.enemy.hp / c.enemy.maxHp), 14).fill(0xff4757);
+        nextText(`${c.enemy.hp}/${c.enemy.maxHp}`, CW / 2, 127, { size: 10, color: 0xffffff, align: "center" });
         // Player HP/MP
-        ctx.textAlign = "left";
-        ctx.fillStyle = "#333";
-        ctx.fillRect(20, 160, 180, 12);
-        ctx.fillStyle = "#ff4757";
-        ctx.fillRect(20, 160, 180 * (s.stats.hp / s.stats.maxHp), 12);
-        ctx.fillStyle = "#fff";
-        ctx.font = "10px monospace";
-        ctx.fillText(`HP ${s.stats.hp}/${s.stats.maxHp}`, 22, 161);
-        ctx.fillStyle = "#333";
-        ctx.fillRect(20, 176, 180, 12);
-        ctx.fillStyle = ACCENT;
-        ctx.fillRect(20, 176, 180 * (s.stats.mp / s.stats.maxMp), 12);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(`MP ${s.stats.mp}/${s.stats.maxMp}`, 22, 177);
+        g.rect(20, 160, 180, 12).fill(0x333333);
+        g.rect(20, 160, 180 * (s.stats.hp / s.stats.maxHp), 12).fill(0xff4757);
+        nextText(`HP ${s.stats.hp}/${s.stats.maxHp}`, 22, 161, { size: 10, color: 0xffffff });
+        g.rect(20, 176, 180, 12).fill(0x333333);
+        g.rect(20, 176, 180 * (s.stats.mp / s.stats.maxMp), 12).fill(hexColor(ACCENT));
+        nextText(`MP ${s.stats.mp}/${s.stats.maxMp}`, 22, 177, { size: 10, color: 0xffffff });
         // Combat log
-        ctx.fillStyle = "#111";
-        ctx.fillRect(10, 200, CW - 20, 100);
-        ctx.fillStyle = "#ccc";
-        ctx.font = "11px monospace";
+        g.rect(10, 200, CW - 20, 100).fill(0x111111);
         const visibleLog = c.log.slice(-6);
         visibleLog.forEach((line, i) => {
-          ctx.fillText(line.substring(0, 40), 16, 216 + i * 15);
+          nextText(line.substring(0, 40), 16, 216 + i * 15, { size: 11, color: 0xcccccc });
         });
         // Action buttons hint
-        ctx.fillStyle = "#888";
-        ctx.font = "12px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("使用下方按钮选择行动", CW / 2, CH - 20);
+        nextText("使用下方按钮选择行动", CW / 2, CH - 20, { size: 12, color: 0x888888, align: "center" });
       } else if (s.phase === "cg") {
         // Abstract CG reward scene
-        ctx.fillStyle = "#0a0020";
-        ctx.fillRect(0, 0, CW, CH);
+        g.rect(0, 0, CW, CH).fill(0x0a0020);
         const t = frameRef.current * 0.02;
-        // Abstract flowing shapes
+        // Abstract flowing shapes (ellipses)
         for (let i = 0; i < 12; i++) {
           const cx = CW / 2 + Math.sin(t + i * 0.8) * 120;
           const cy = CH / 2 + Math.cos(t + i * 0.6) * 80;
           const r = 20 + Math.sin(t * 2 + i) * 15;
-          const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
           const hue = (i * 30 + frameRef.current) % 360;
-          grad.addColorStop(0, `hsla(${hue}, 80%, 60%, 0.8)`);
-          grad.addColorStop(1, `hsla(${hue}, 80%, 40%, 0)`);
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.ellipse(cx, cy, r, r * 0.7, t + i, 0, Math.PI * 2);
-          ctx.fill();
+          const col = hslaToHex(hue, 80, 60);
+          g.ellipse(cx, cy, r, r * 0.7).fill({ color: col, alpha: 0.8 });
         }
-        // Flowing curves
-        ctx.strokeStyle = `hsla(${(frameRef.current * 2) % 360}, 70%, 60%, 0.6)`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        for (let i = 0; i < CW; i += 2) {
-          const y = CH / 2 + Math.sin(i * 0.02 + t) * 60 + Math.cos(i * 0.03 + t * 1.5) * 40;
-          if (i === 0) ctx.moveTo(i, y); else ctx.lineTo(i, y);
+        // Flowing curves (polylines)
+        const hue1 = (frameRef.current * 2) % 360;
+        g.setStrokeStyle({ width: 2, color: hslaToHex(hue1, 70, 60), alpha: 0.6 });
+        g.moveTo(0, CH / 2 + Math.sin(t) * 60 + Math.cos(t * 1.5) * 40);
+        for (let i = 2; i < CW; i += 2) {
+          const yy = CH / 2 + Math.sin(i * 0.02 + t) * 60 + Math.cos(i * 0.03 + t * 1.5) * 40;
+          g.lineTo(i, yy);
         }
-        ctx.stroke();
-        ctx.strokeStyle = `hsla(${(frameRef.current * 2 + 120) % 360}, 70%, 60%, 0.4)`;
-        ctx.beginPath();
-        for (let i = 0; i < CW; i += 2) {
-          const y = CH / 2 + Math.sin(i * 0.025 + t * 1.2) * 50 + Math.cos(i * 0.015 + t * 0.8) * 60;
-          if (i === 0) ctx.moveTo(i, y); else ctx.lineTo(i, y);
+        g.stroke();
+        const hue2 = (frameRef.current * 2 + 120) % 360;
+        g.setStrokeStyle({ width: 2, color: hslaToHex(hue2, 70, 60), alpha: 0.4 });
+        g.moveTo(0, CH / 2 + Math.sin(t * 1.2) * 50 + Math.cos(t * 0.8) * 60);
+        for (let i = 2; i < CW; i += 2) {
+          const yy = CH / 2 + Math.sin(i * 0.025 + t * 1.2) * 50 + Math.cos(i * 0.015 + t * 0.8) * 60;
+          g.lineTo(i, yy);
         }
-        ctx.stroke();
+        g.stroke();
         // Title
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 20px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`第${s.floor}层 Boss击败奖励`, CW / 2, 30);
-        ctx.fillStyle = "#aaa";
-        ctx.font = "13px monospace";
-        ctx.fillText("点击继续...", CW / 2, CH - 20);
+        nextText(`第${s.floor}层 Boss击败奖励`, CW / 2, 30, { size: 20, color: 0xffffff, bold: true, align: "center" });
+        nextText("点击继续...", CW / 2, CH - 20, { size: 13, color: 0xaaaaaa, align: "center" });
       } else if (s.phase === "gameover") {
-        ctx.fillStyle = "rgba(0,0,0,0.85)";
-        ctx.fillRect(0, 0, CW, CH);
-        ctx.fillStyle = "#ff4757";
-        ctx.font = "bold 28px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("你被击败了", CW / 2, CH / 2 - 40);
-        ctx.fillStyle = "#ccc";
-        ctx.font = "14px monospace";
-        ctx.fillText(`最终分数: ${s.score}`, CW / 2, CH / 2);
-        ctx.fillText(`到达第${s.floor}层  等级${s.stats.level}`, CW / 2, CH / 2 + 24);
-        ctx.fillStyle = "#888";
-        ctx.font = "13px monospace";
-        ctx.fillText("点击重新开始", CW / 2, CH / 2 + 60);
+        g.rect(0, 0, CW, CH).fill({ color: 0x000000, alpha: 0.85 });
+        nextText("你被击败了", CW / 2, CH / 2 - 40, { size: 28, color: 0xff4757, bold: true, align: "center" });
+        nextText(`最终分数: ${s.score}`, CW / 2, CH / 2, { size: 14, color: 0xcccccc, align: "center" });
+        nextText(`到达第${s.floor}层  等级${s.stats.level}`, CW / 2, CH / 2 + 24, { size: 14, color: 0xcccccc, align: "center" });
+        nextText("点击重新开始", CW / 2, CH / 2 + 60, { size: 13, color: 0x888888, align: "center" });
       } else if (s.phase === "result") {
-        ctx.fillStyle = "rgba(0,0,0,0.85)";
-        ctx.fillRect(0, 0, CW, CH);
+        g.rect(0, 0, CW, CH).fill({ color: 0x000000, alpha: 0.85 });
         // Victory particles
         for (let i = 0; i < 20; i++) {
           const px2 = (Math.sin(frameRef.current * 0.03 + i * 1.2) * 0.5 + 0.5) * CW;
           const py2 = (Math.cos(frameRef.current * 0.02 + i * 0.9) * 0.5 + 0.5) * CH;
-          ctx.fillStyle = `hsla(${(i * 18 + frameRef.current) % 360}, 80%, 60%, 0.6)`;
-          ctx.beginPath();
-          ctx.arc(px2, py2, 3, 0, Math.PI * 2);
-          ctx.fill();
+          const hue = (i * 18 + frameRef.current) % 360;
+          g.circle(px2, py2, 3).fill({ color: hslaToHex(hue, 80, 60), alpha: 0.6 });
         }
-        ctx.fillStyle = "#fed330";
-        ctx.font = "bold 28px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("征服暗影地牢！", CW / 2, CH / 2 - 60);
-        ctx.fillStyle = "#fff";
-        ctx.font = "14px monospace";
-        ctx.fillText(`最终分数: ${s.score}`, CW / 2, CH / 2 - 20);
-        ctx.fillText(`等级: ${s.stats.level}  击败Boss: ${s.bossesDefeated}`, CW / 2, CH / 2 + 4);
-        ctx.fillText(`解锁CG: ${s.cgUnlocked.length}/3`, CW / 2, CH / 2 + 28);
-        ctx.fillStyle = "#888";
-        ctx.font = "13px monospace";
-        ctx.fillText("点击返回标题", CW / 2, CH / 2 + 64);
+        nextText("征服暗影地牢！", CW / 2, CH / 2 - 60, { size: 28, color: 0xfed330, bold: true, align: "center" });
+        nextText(`最终分数: ${s.score}`, CW / 2, CH / 2 - 20, { size: 14, color: 0xffffff, align: "center" });
+        nextText(`等级: ${s.stats.level}  击败Boss: ${s.bossesDefeated}`, CW / 2, CH / 2 + 4, { size: 14, color: 0xffffff, align: "center" });
+        nextText(`解锁CG: ${s.cgUnlocked.length}/3`, CW / 2, CH / 2 + 28, { size: 14, color: 0xffffff, align: "center" });
+        nextText("点击返回标题", CW / 2, CH / 2 + 64, { size: 13, color: 0x888888, align: "center" });
       }
+      });
+    }
 
-      ctx.restore();
-      rafRef.current = requestAnimationFrame(render);
+    initPixi();
+    return () => {
+      destroyed = true;
+      if (app) app.destroy(true);
     };
-
-    rafRef.current = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
   // ─── Touch on canvas ───────────────────────────────────────────────────────

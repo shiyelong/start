@@ -9,6 +9,8 @@ import {
   ChevronLeft, Zap, Shield, Crosshair, Rocket, Play,
   RotateCcw, Trophy, Target, Flame, Wind, Star, User
 } from "lucide-react";
+import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
+import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
 
 /* ========== 常量 ========== */
 const GAME_ID = "spaceshoot";
@@ -214,206 +216,135 @@ function fireBullets(s: GameState) {
   }
 }
 
-/* ========== 绘制函数 ========== */
-function drawGame(ctx: CanvasRenderingContext2D, s: GameState) {
+/* ========== PixiJS 绘制函数 ========== */
+function colorToNum(hex: string): number {
+  if (hex.startsWith("#")) return parseInt(hex.slice(1, 7), 16);
+  return 0xffffff;
+}
+
+function drawGamePixi(g: PixiGraphics, texts: Map<string, PixiText>, s: GameState) {
   const level = LEVELS[s.level - 1] || LEVELS[0];
+  g.clear();
+  texts.forEach(t => { t.visible = false; });
+
+  const showText = (key: string, text: string, x: number, y: number, ax = 0, ay = 0) => {
+    const t = texts.get(key);
+    if (!t) return;
+    t.text = text; t.x = x; t.y = y; t.anchor.set(ax, ay); t.alpha = 1; t.visible = true;
+  };
+
   // 背景
-  ctx.fillStyle = level.bgColor;
-  ctx.fillRect(0, 0, W, H);
+  g.rect(0, 0, W, H).fill({ color: colorToNum(level.bgColor) });
 
   // 星空
   for (const star of s.stars) {
-    ctx.globalAlpha = star.brightness;
-    ctx.fillStyle = level.starColor;
-    ctx.fillRect(star.x, star.y, star.size, star.size);
+    g.rect(star.x, star.y, star.size, star.size).fill({ color: colorToNum(level.starColor), alpha: star.brightness });
   }
-  ctx.globalAlpha = 1;
 
   // 粒子
   for (const p of s.particles) {
-    ctx.globalAlpha = p.life / p.maxLife;
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    ctx.fill();
+    g.circle(p.x, p.y, p.size).fill({ color: colorToNum(p.color), alpha: p.life / p.maxLife });
   }
-  ctx.globalAlpha = 1;
 
   // 能量道具
-  for (const pu of s.powerups) {
-    const colors: Record<string, string> = { energy: "#f0b90b", shield: "#3ea6ff", hp: "#2ba640", bomb: "#ff4444" };
-    const icons: Record<string, string> = { energy: "E", shield: "S", hp: "+", bomb: "B" };
-    ctx.fillStyle = colors[pu.type] || "#fff";
-    ctx.globalAlpha = 0.8;
-    ctx.beginPath();
-    ctx.arc(pu.x, pu.y, 10, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 10px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(icons[pu.type] || "?", pu.x, pu.y);
-  }
+  const puColors: Record<string, string> = { energy: "#f0b90b", shield: "#3ea6ff", hp: "#2ba640", bomb: "#ff4444" };
+  const puIcons: Record<string, string> = { energy: "E", shield: "S", hp: "+", bomb: "B" };
+  s.powerups.forEach((pu, i) => {
+    g.circle(pu.x, pu.y, 10).fill({ color: colorToNum(puColors[pu.type] || "#ffffff"), alpha: 0.8 });
+    if (i < 4) showText(`pu_${i}`, puIcons[pu.type] || "?", pu.x, pu.y, 0.5, 0.5);
+  });
 
   // 敌人
   for (const e of s.enemies) {
     if (e.type === "boss") {
-      ctx.fillStyle = "#ff4444";
-      ctx.fillRect(e.x, e.y, e.w, e.h);
-      ctx.fillStyle = "#cc0000";
-      ctx.fillRect(e.x + 5, e.y + 5, e.w - 10, e.h - 10);
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(e.x + 15, e.y + 15, 8, 8);
-      ctx.fillRect(e.x + e.w - 23, e.y + 15, 8, 8);
-      ctx.fillStyle = "#ff0";
-      ctx.fillRect(e.x + 17, e.y + 17, 4, 4);
-      ctx.fillRect(e.x + e.w - 21, e.y + 17, 4, 4);
-      // Boss血条
+      g.rect(e.x, e.y, e.w, e.h).fill({ color: 0xff4444 });
+      g.rect(e.x + 5, e.y + 5, e.w - 10, e.h - 10).fill({ color: 0xcc0000 });
+      g.rect(e.x + 15, e.y + 15, 8, 8).fill({ color: 0xffffff });
+      g.rect(e.x + e.w - 23, e.y + 15, 8, 8).fill({ color: 0xffffff });
+      g.rect(e.x + 17, e.y + 17, 4, 4).fill({ color: 0xffff00 });
+      g.rect(e.x + e.w - 21, e.y + 17, 4, 4).fill({ color: 0xffff00 });
       const hpRatio = e.hp / e.maxHp;
-      ctx.fillStyle = "#333";
-      ctx.fillRect(W / 2 - 80, 8, 160, 6);
-      ctx.fillStyle = hpRatio > 0.5 ? "#2ba640" : hpRatio > 0.25 ? "#f0b90b" : "#ff4444";
-      ctx.fillRect(W / 2 - 80, 8, 160 * hpRatio, 6);
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 8px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(`BOSS - ${level.name}`, W / 2, 22);
+      g.rect(W / 2 - 80, 8, 160, 6).fill({ color: 0x333333 });
+      g.rect(W / 2 - 80, 8, 160 * hpRatio, 6).fill({ color: hpRatio > 0.5 ? 0x2ba640 : hpRatio > 0.25 ? 0xf0b90b : 0xff4444 });
+      showText("boss_label", `BOSS - ${level.name}`, W / 2, 14, 0.5, 0);
     } else {
-      ctx.fillStyle = e.color;
-      ctx.beginPath();
-      ctx.moveTo(e.x + e.w / 2, e.y + e.h);
-      ctx.lineTo(e.x, e.y);
-      ctx.lineTo(e.x + e.w, e.y);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = e.color + "80";
-      ctx.fillRect(e.x + e.w / 2 - 3, e.y - 4, 6, 4);
+      const ec = colorToNum(e.color);
+      g.moveTo(e.x + e.w / 2, e.y + e.h).lineTo(e.x, e.y).lineTo(e.x + e.w, e.y).closePath().fill({ color: ec });
+      g.rect(e.x + e.w / 2 - 3, e.y - 4, 6, 4).fill({ color: ec, alpha: 0.5 });
       if (e.hp < e.maxHp) {
         const ratio = e.hp / e.maxHp;
-        ctx.fillStyle = "#333";
-        ctx.fillRect(e.x, e.y - 6, e.w, 3);
-        ctx.fillStyle = ratio > 0.5 ? "#2ba640" : "#ff4444";
-        ctx.fillRect(e.x, e.y - 6, e.w * ratio, 3);
+        g.rect(e.x, e.y - 6, e.w, 3).fill({ color: 0x333333 });
+        g.rect(e.x, e.y - 6, e.w * ratio, 3).fill({ color: ratio > 0.5 ? 0x2ba640 : 0xff4444 });
       }
     }
   }
 
   // 敌人子弹
   for (const b of s.eBullets) {
-    ctx.fillStyle = b.color;
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 0.3;
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.size * 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+    const bc = colorToNum(b.color);
+    g.circle(b.x, b.y, b.size).fill({ color: bc });
+    g.circle(b.x, b.y, b.size * 2).fill({ color: bc, alpha: 0.3 });
   }
 
   // 玩家子弹
   for (const b of s.bullets) {
-    const wc = WEAPONS[b.type]?.color || "#3ea6ff";
-    ctx.fillStyle = wc;
+    const wc = colorToNum(WEAPONS[b.type]?.color || "#3ea6ff");
     if (b.type === "laser") {
-      ctx.fillRect(b.x - 2, b.y - 8, 4, 16);
-      ctx.globalAlpha = 0.4;
-      ctx.fillRect(b.x - 4, b.y - 10, 8, 20);
-      ctx.globalAlpha = 1;
+      g.rect(b.x - 2, b.y - 8, 4, 16).fill({ color: wc });
+      g.rect(b.x - 4, b.y - 10, 8, 20).fill({ color: wc, alpha: 0.4 });
     } else if (b.type === "missile") {
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#f0b90b";
-      ctx.globalAlpha = 0.6;
-      ctx.beginPath();
-      ctx.arc(b.x - b.vx * 0.3, b.y - b.vy * 0.3, 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
+      g.circle(b.x, b.y, 4).fill({ color: wc });
+      g.circle(b.x - b.vx * 0.3, b.y - b.vy * 0.3, 3).fill({ color: 0xf0b90b, alpha: 0.6 });
     } else {
-      ctx.fillRect(b.x - 1.5, b.y - 4, 3, 8);
-      ctx.globalAlpha = 0.4;
-      ctx.fillRect(b.x - 3, b.y - 6, 6, 12);
-      ctx.globalAlpha = 1;
+      g.rect(b.x - 1.5, b.y - 4, 3, 8).fill({ color: wc });
+      g.rect(b.x - 3, b.y - 6, 6, 12).fill({ color: wc, alpha: 0.4 });
     }
   }
 
   // 玩家飞船
   if (s.invincible <= 0 || s.frame % 4 < 2) {
     const px = s.px, py = s.py;
-    const pc = s.character.color;
+    const pc = colorToNum(s.character.color);
     if (s.shield > 0) {
-      ctx.strokeStyle = pc;
-      ctx.lineWidth = 1.5;
-      ctx.globalAlpha = 0.4 + 0.2 * Math.sin(s.frame * 0.1);
-      ctx.beginPath();
-      ctx.arc(px, py, 22, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
+      g.circle(px, py, 22).stroke({ color: pc, width: 1.5, alpha: 0.4 + 0.2 * Math.sin(s.frame * 0.1) });
     }
-    ctx.fillStyle = pc;
-    ctx.beginPath();
-    ctx.moveTo(px, py - PLAYER_H / 2);
-    ctx.lineTo(px - PLAYER_W / 2, py + PLAYER_H / 2);
-    ctx.lineTo(px - PLAYER_W / 4, py + PLAYER_H / 3);
-    ctx.lineTo(px + PLAYER_W / 4, py + PLAYER_H / 3);
-    ctx.lineTo(px + PLAYER_W / 2, py + PLAYER_H / 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.arc(px, py, 4, 0, Math.PI * 2);
-    ctx.fill();
+    g.moveTo(px, py - PLAYER_H / 2)
+      .lineTo(px - PLAYER_W / 2, py + PLAYER_H / 2)
+      .lineTo(px - PLAYER_W / 4, py + PLAYER_H / 3)
+      .lineTo(px + PLAYER_W / 4, py + PLAYER_H / 3)
+      .lineTo(px + PLAYER_W / 2, py + PLAYER_H / 2)
+      .closePath().fill({ color: pc });
+    g.circle(px, py, 4).fill({ color: 0xffffff });
     const flameH = 6 + Math.sin(s.frame * 0.5) * 3;
-    ctx.fillStyle = "#f0b90b";
-    ctx.beginPath();
-    ctx.moveTo(px - 5, py + PLAYER_H / 3);
-    ctx.lineTo(px, py + PLAYER_H / 3 + flameH);
-    ctx.lineTo(px + 5, py + PLAYER_H / 3);
-    ctx.closePath();
-    ctx.fill();
+    g.moveTo(px - 5, py + PLAYER_H / 3)
+      .lineTo(px, py + PLAYER_H / 3 + flameH)
+      .lineTo(px + 5, py + PLAYER_H / 3)
+      .closePath().fill({ color: 0xf0b90b });
   }
 
   // HUD
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 11px sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillText(`分数: ${s.score}`, 8, H - 8);
-  ctx.textAlign = "right";
-  ctx.fillText(`关卡${s.level} 波${s.wave}/${(LEVELS[s.level - 1] || LEVELS[0]).waves}`, W - 8, H - 8);
+  showText("hud_score", `分数: ${s.score}`, 8, H - 16);
+  showText("hud_wave", `关卡${s.level} 波${s.wave}/${(LEVELS[s.level - 1] || LEVELS[0]).waves}`, W - 8, H - 16, 1, 0);
   // HP条
-  ctx.fillStyle = "#333";
-  ctx.fillRect(8, H - 24, 70, 5);
-  ctx.fillStyle = s.hp > s.maxHp * 0.3 ? "#2ba640" : "#ff4444";
-  ctx.fillRect(8, H - 24, 70 * (s.hp / s.maxHp), 5);
-  ctx.fillStyle = "#fff";
-  ctx.font = "8px sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillText("HP", 8, H - 27);
+  g.rect(8, H - 24, 70, 5).fill({ color: 0x333333 });
+  g.rect(8, H - 24, 70 * (s.hp / s.maxHp), 5).fill({ color: s.hp > s.maxHp * 0.3 ? 0x2ba640 : 0xff4444 });
+  showText("hud_hp", "HP", 8, H - 36);
   // 能量条
-  ctx.fillStyle = "#333";
-  ctx.fillRect(8, H - 38, 70, 5);
-  ctx.fillStyle = "#f0b90b";
-  ctx.fillRect(8, H - 38, 70 * (s.energy / s.maxEnergy), 5);
-  ctx.fillText("能量", 8, H - 41);
+  g.rect(8, H - 38, 70, 5).fill({ color: 0x333333 });
+  g.rect(8, H - 38, 70 * (s.energy / s.maxEnergy), 5).fill({ color: 0xf0b90b });
+  showText("hud_energy", "能量", 8, H - 50);
   // 武器
-  ctx.fillStyle = WEAPONS[s.weapon].color;
-  ctx.font = "bold 9px sans-serif";
-  ctx.textAlign = "right";
-  ctx.fillText(`[${WEAPONS[s.weapon].name}] Lv${s.weaponLevel}`, W - 8, H - 22);
+  showText("hud_weapon", `[${WEAPONS[s.weapon].name}] Lv${s.weaponLevel}`, W - 8, H - 30, 1, 0);
   // Combo
-  if (s.combo > 1) {
-    ctx.fillStyle = "#f0b90b";
-    ctx.font = "bold 14px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(`${s.combo}x`, W / 2, H - 8);
-  }
+  if (s.combo > 1) showText("hud_combo", `${s.combo}x`, W / 2, H - 16, 0.5, 0);
 }
 
 /* ========== 主组件 ========== */
 export default function SpaceShootPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pixiAppRef = useRef<Application | null>(null);
+  const pixiGfxRef = useRef<PixiGraphics | null>(null);
+  const pixiTextsRef = useRef<Map<string, PixiText>>(new Map());
   const [screen, setScreen] = useState<"title" | "playing" | "result">("title");
   const [selectedChar, setSelectedChar] = useState<CharacterId>("defense");
   const [selectedDiff, setSelectedDiff] = useState<DifficultyId>("normal");
@@ -502,13 +433,12 @@ export default function SpaceShootPage() {
     } catch { /* ignore */ }
   }, []);
 
-  /* ========== 游戏循环 ========== */
+  /* ========== 游戏循环 (PixiJS) ========== */
   useEffect(() => {
     if (screen !== "playing" || !canvasRef.current) return;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d")!;
     const s = sRef.current!;
-    let raf: number;
+    let destroyed = false;
 
     const onKey = (e: KeyboardEvent, down: boolean) => {
       if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","a","d","w","s"," ","1","2","3","4"].includes(e.key)) {
@@ -533,7 +463,45 @@ export default function SpaceShootPage() {
 
     const levelDef = LEVELS[s.level - 1] || LEVELS[0];
 
-    function update() {
+    async function initAndRun() {
+      const pixi = await loadPixi();
+      if (destroyed) return;
+      const app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x050510, antialias: false });
+      if (destroyed) { app.destroy(); return; }
+      pixiAppRef.current = app;
+
+      const gfx = new pixi.Graphics();
+      app.stage.addChild(gfx);
+      pixiGfxRef.current = gfx;
+
+      const textContainer = new pixi.Container();
+      app.stage.addChild(textContainer);
+      const texts = pixiTextsRef.current;
+      texts.clear();
+
+      const makeText = (key: string, opts: { fontSize?: number; fill?: string | number; fontWeight?: string }) => {
+        const t = new pixi.Text({ text: "", style: new pixi.TextStyle({
+          fontSize: opts.fontSize ?? 11,
+          fill: opts.fill ?? "#ffffff",
+          fontWeight: (opts.fontWeight ?? "normal") as "normal" | "bold",
+          fontFamily: "sans-serif",
+        })});
+        t.visible = false;
+        textContainer.addChild(t);
+        texts.set(key, t);
+      };
+
+      makeText("hud_score", { fontSize: 11, fontWeight: "bold" });
+      makeText("hud_wave", { fontSize: 11, fontWeight: "bold" });
+      makeText("hud_hp", { fontSize: 8 });
+      makeText("hud_energy", { fontSize: 8 });
+      makeText("hud_weapon", { fontSize: 9, fill: "#3ea6ff", fontWeight: "bold" });
+      makeText("hud_combo", { fontSize: 14, fill: "#f0b90b", fontWeight: "bold" });
+      makeText("boss_label", { fontSize: 8, fontWeight: "bold" });
+      for (let i = 0; i < 4; i++) makeText(`pu_${i}`, { fontSize: 10, fontWeight: "bold" });
+
+      app.ticker.add(() => {
+        if (destroyed) return;
       s.frame++;
       s.elapsedTime = Date.now() - s.startTime;
 
@@ -760,13 +728,21 @@ export default function SpaceShootPage() {
         return;
       }
 
-      drawGame(ctx, s);
-      raf = requestAnimationFrame(update);
+        // === DRAW (PixiJS) ===
+        drawGamePixi(gfx, texts, s);
+      });
     }
 
-    raf = requestAnimationFrame(update);
+    initAndRun();
+
     return () => {
-      cancelAnimationFrame(raf);
+      destroyed = true;
+      if (pixiAppRef.current) {
+        pixiAppRef.current.destroy(true);
+        pixiAppRef.current = null;
+        pixiGfxRef.current = null;
+        pixiTextsRef.current.clear();
+      }
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       canvas.removeEventListener("touchmove", onTouch);
