@@ -43,7 +43,25 @@ inclusion: always
 - CraftPix.net — 2D 游戏套件
 - Quaternius.com — 低多边形 3D 模型
 - AmbientCG.com — PBR 贴图
-- 成人素材：Itch.io Adult Assets、SmutBase（3D角色）
+
+### 成人游戏素材来源（海外合法商用）
+- Itch.io Adult Game Assets — 免费+低价 NSFW 2D 素材，像素角色、成人立绘、性感UI、CG素材
+- DLsite English (Adult Assets) — 日本专业成人游戏素材，2D立绘、像素角色、VN背景
+- Hentai Foundry Resources — 免费 NSFW 2D 角色插画、线稿、立绘
+- SmutBase — 海外顶流 NSFW 3D 资源站，成人角色模型、骨骼绑定、服装道具
+- Virt-A-Mate Resources — 高精度 3D 成人角色、全身绑定、自定义动画
+- 3DClick NSFW — 低模/高模 3D 成人角色、写实人体模型
+- Unity Asset Store (Mature Content) — 免费成人3D角色、性感风格模型
+- Adult Game Dev Hub (adultgamedev.com/resources) — 一站式成人游戏开发素材合集
+
+### 成人游戏改造重点
+每款成人游戏需要：
+1. 用高质量立绘/sprite替换简陋的几何图形角色
+2. 添加更吸引人的视觉效果（光影、粒子、动画过渡）
+3. CG奖励场景用真实风格插画替换抽象艺术
+4. 角色模型要有吸引力（性感、精致、有细节）
+5. 场景背景要有氛围感（灯光、色调、装饰）
+6. 成人养成/换装的角色要有多套服装和表情变化
 
 ### 改造模式
 每个游戏的改造步骤：
