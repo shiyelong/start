@@ -317,7 +317,7 @@ export default function BlackjackPage() {
   const deal = useCallback(() => {
     setGs(prev => {
       if (prev.phase !== "bet" || prev.currentBet > prev.chips) return prev;
-      const s = { ...prev, shoe: [...prev.shoe], dealer: [] as Card[], hands: [{ cards: [] as Card[], bet: prev.currentBet, done: false, doubled: false }], insurance: 0, phase: "play" as const, message: "", activeHand: 0 };
+      const s = { ...prev, shoe: [...prev.shoe], dealer: [] as Card[], hands: [{ cards: [] as Card[], bet: prev.currentBet, done: false, doubled: false }], insurance: 0, phase: "play" as GameState["phase"], message: "", activeHand: 0 };
       s.chips -= s.currentBet;
       // Deal 2 to player, 2 to dealer (one face down)
       const p1 = drawFromShoe(s); s.hands[0].cards.push(p1);

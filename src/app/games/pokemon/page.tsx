@@ -1260,7 +1260,7 @@ export default function PokemonPage() {
       if (destroyed) return;
 
       app = await createPixiApp({
-        canvas,
+        canvas: canvas!,
         width: CANVAS_WIDTH,
         height: CANVAS_HEIGHT,
         backgroundColor: 0x0f0f0f,

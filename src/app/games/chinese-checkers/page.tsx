@@ -137,7 +137,7 @@ function getValidMoves(cells: Map<string, Owner>, from: string): Set<string> {
 
 function checkWin(cells: Map<string, Owner>, player: 1 | 2): boolean {
   const goal = player === 1 ? TOP_TRI : BOT_TRI;
-  for (const k of goal) {
+  for (const k of Array.from(goal)) {
     if (cells.get(k) !== player) return false;
   }
   return true;

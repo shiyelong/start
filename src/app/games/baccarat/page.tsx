@@ -270,7 +270,7 @@ export default function BaccaratPage() {
       if (destroyed) return;
       const pixi = await loadPixi();
       if (destroyed) return;
-      app = await createPixiApp({ canvas, width: W, height: H, backgroundColor: 0x0f0f0f });
+      app = await createPixiApp({ canvas: canvas!, width: W, height: H, backgroundColor: 0x0f0f0f });
       if (destroyed) { app.destroy(true); return; }
       const g = new pixi.Graphics();
       app.stage.addChild(g);

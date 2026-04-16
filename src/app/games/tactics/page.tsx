@@ -6,7 +6,7 @@ import GameLeaderboard from "@/components/GameLeaderboard";
 import GameSaveLoad from "@/components/GameSaveLoad";
 import {
   ChevronLeft, RotateCcw, Swords, Volume2, VolumeX,
-  Shield, Target, Map, Play, Trophy, SkipForward
+  Shield, Target, Map as MapIcon, Play, Trophy, SkipForward
 } from "lucide-react";
 import { loadPixi, createPixiApp } from "@/lib/game-engine/pixi-wrapper";
 import type { Application, Graphics as PixiGraphics, Text as PixiText } from "pixi.js";
@@ -952,7 +952,7 @@ export default function TacticsGame() {
               {/* Map Select */}
               <div className="bg-[#111] rounded-xl p-4 border border-white/10">
                 <div className="flex items-center gap-2 mb-3">
-                  <Map className="w-4 h-4 text-[#3ea6ff]" />
+                  <MapIcon className="w-4 h-4 text-[#3ea6ff]" />
                   <span className="text-sm font-semibold">Select Starting Map</span>
                 </div>
                 <div className="grid grid-cols-3 gap-2">

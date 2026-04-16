@@ -488,7 +488,7 @@ export default function MahjongPage() {
     // Check if human has actions
     const humanActions = actions.filter(a => a.player === 0);
     if (humanActions.length > 0) {
-      const acts = humanActions.map(a => a.type);
+      const acts: string[] = humanActions.map(a => a.type);
       acts.push("pass");
       setShowActions(acts);
       if (acts.includes("chi")) {

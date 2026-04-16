@@ -904,8 +904,6 @@ function drawGamePixi(g: PixiGraphics, texts: Map<string, PixiText>, gs: GameSta
       t.visible = true;
     }
   });
-
-  });
 }
 
 

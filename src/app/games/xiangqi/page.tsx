@@ -772,9 +772,10 @@ async function drawUI(
       fill: stalemate ? "#ffd700" : (winner === "red" ? "#cc0000" : "#ffffff"),
       fontFamily: "serif",
       fontWeight: "bold",
-      dropShadow: true,
-      dropShadowColor: "#000000",
-      dropShadowDistance: 2,
+      dropShadow: {
+        color: "#000000",
+        distance: 2,
+      },
     });
     const result = new pixi.Text({ text: resultText, style: resultStyle });
     result.anchor.set(0.5);
