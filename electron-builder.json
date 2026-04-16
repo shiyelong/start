@@ -6,8 +6,13 @@
   },
   "files": [
     "out/**/*",
-    "electron/**/*"
+    "electron/**/*.js",
+    "electron/**/*.html",
+    "package.json"
   ],
+  "extraMetadata": {
+    "main": "electron/main.js"
+  },
   "win": {
     "target": ["nsis"],
     "icon": "public/icon-512.png"
