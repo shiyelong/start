@@ -58,8 +58,13 @@ function createMainWindow(): BrowserWindow {
   });
 
   // Load the app
-  const url = IS_DEV ? DEV_URL : PROD_URL;
-  win.loadURL(url);
+  if (IS_DEV) {
+    win.loadURL(DEV_URL);
+  } else {
+    // Load local static export
+    const indexPath = path.join(__dirname, '..', 'out', 'index.html');
+    win.loadFile(indexPath);
+  }
 
   // Show window when ready
   win.once('ready-to-show', () => {

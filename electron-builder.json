@@ -7,7 +7,6 @@
   "files": [
     "out/**/*",
     "electron/**/*.js",
-    "electron/**/*.html",
     "package.json"
   ],
   "extraMetadata": {
@@ -19,12 +18,21 @@
   },
   "nsis": {
     "oneClick": false,
-    "allowToChangeInstallationDirectory": true
+    "allowToChangeInstallationDirectory": true,
+    "installerLanguages": ["zh_CN", "en_US"],
+    "shortcutName": "星聚"
   },
   "mac": {
     "target": ["dmg"],
     "icon": "public/icon-512.png",
     "category": "public.app-category.entertainment"
+  },
+  "dmg": {
+    "title": "星聚",
+    "contents": [
+      { "x": 130, "y": 220 },
+      { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+    ]
   },
   "linux": {
     "target": ["AppImage"],

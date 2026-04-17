@@ -20,6 +20,11 @@ import {
   Lock,
   Unlock,
   ChevronsRight,
+  Music,
+  FileText,
+  BookOpen,
+  Headphones,
+  Clapperboard,
 } from 'lucide-react';
 import RatingBadge from '@/components/ui/RatingBadge';
 
@@ -194,6 +199,84 @@ function SpeedBoostOverlay({ active }: { active: boolean }) {
         <ChevronsRight className="w-4 h-4 text-[#3ea6ff]" />
         3x 快进中
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Content Mode Switch (inside player)
+// ---------------------------------------------------------------------------
+
+const PLAYER_MODES = [
+  { id: 'video', label: '视频', icon: Play },
+  { id: 'audio', label: '纯音频', icon: Music },
+  { id: 'text', label: '文字', icon: FileText },
+  { id: 'comic', label: '漫画', icon: BookOpen },
+  { id: 'audiobook', label: '有声书', icon: Headphones },
+  { id: 'visual-novel', label: '视觉小说', icon: Clapperboard },
+] as const;
+
+function ContentModeSwitch() {
+  const [open, setOpen] = useState(false);
+  const [currentMode, setCurrentMode] = useState('video');
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('starhub_content_modes');
+      if (saved) {
+        const prefs = JSON.parse(saved);
+        if (prefs.defaultVideoMode) setCurrentMode(prefs.defaultVideoMode);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleSelect = useCallback((modeId: string) => {
+    setCurrentMode(modeId);
+    setOpen(false);
+    try {
+      const saved = localStorage.getItem('starhub_content_modes');
+      const prefs = saved ? JSON.parse(saved) : {};
+      prefs.defaultVideoMode = modeId;
+      localStorage.setItem('starhub_content_modes', JSON.stringify(prefs));
+    } catch { /* ignore */ }
+    // Dispatch event so other components can react
+    window.dispatchEvent(new CustomEvent('starhub:content-mode-change', { detail: { mode: modeId } }));
+  }, []);
+
+  const current = PLAYER_MODES.find(m => m.id === currentMode) || PLAYER_MODES[0];
+  const CurrentIcon = current.icon;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={`hover:text-[#3ea6ff] transition-colors p-1 flex items-center gap-1 ${currentMode !== 'video' ? 'text-[#3ea6ff]' : 'text-white'}`}
+        aria-label="内容模式"
+        title="切换内容模式"
+      >
+        <CurrentIcon className="w-4 h-4" />
+        <span className="text-[10px] hidden sm:inline">{current.label}</span>
+      </button>
+      {open && (
+        <div className="absolute bottom-full right-0 mb-2 bg-[#1a1a1a] border border-white/10 rounded-lg py-1 min-w-[120px] shadow-lg z-50">
+          <div className="px-3 py-1.5 text-[10px] text-white/40 border-b border-white/5">内容模式</div>
+          {PLAYER_MODES.map(mode => {
+            const Icon = mode.icon;
+            return (
+              <button
+                key={mode.id}
+                onClick={() => handleSelect(mode.id)}
+                className={`flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 transition-colors ${
+                  currentMode === mode.id ? 'text-[#3ea6ff]' : 'text-white'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {mode.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -958,7 +1041,7 @@ export default function VideoPlayer({
 
       {/* Controls bar (bottom) */}
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent pt-8 pb-2 px-3 transition-opacity duration-300 z-10 ${
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent pt-8 pb-3 sm:pb-2 px-3 sm:px-4 transition-opacity duration-300 z-10 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
         data-controls
@@ -967,7 +1050,7 @@ export default function VideoPlayer({
         {/* Progress bar with timeline preview and buffer */}
         <div
           ref={progressBarRef}
-          className="w-full h-1.5 bg-white/10 rounded-full cursor-pointer mb-3 group/progress relative"
+          className="w-full h-1.5 sm:h-2 bg-white/10 rounded-full cursor-pointer mb-3 group/progress relative hover:h-3 transition-[height] duration-150"
           onClick={handleProgressClick}
           onMouseMove={handleProgressMouseMove}
           onMouseLeave={handleProgressMouseLeave}
@@ -1032,7 +1115,7 @@ export default function VideoPlayer({
           <div className="flex-1" />
 
           {/* Volume */}
-          <div className="flex items-center gap-1 group/vol">
+          <div className="flex items-center gap-1.5 group/vol">
             <button
               onClick={toggleMute}
               className="text-white hover:text-[#3ea6ff] transition-colors p-1"
@@ -1041,10 +1124,12 @@ export default function VideoPlayer({
               {muted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
             </button>
             <div
-              className="w-16 h-1 bg-white/20 rounded-full cursor-pointer hidden sm:block"
+              className="w-0 sm:w-20 h-1.5 bg-white/20 rounded-full cursor-pointer overflow-hidden transition-[width] duration-200 group-hover/vol:w-24"
               onClick={handleVolumeClick}
             >
-              <div className="h-full bg-[#3ea6ff] rounded-full" style={{ width: `${volumePercent}%` }} />
+              <div className="h-full bg-[#3ea6ff] rounded-full relative" style={{ width: `${volumePercent}%` }}>
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover/vol:opacity-100 transition-opacity shadow-md" />
+              </div>
             </div>
           </div>
 
@@ -1137,6 +1222,9 @@ export default function VideoPlayer({
           )}
 
           {/* PiP */}
+          <ContentModeSwitch />
+
+          {/* PiP button */}
           <button
             onClick={togglePiP}
             className="text-white hover:text-[#3ea6ff] transition-colors p-1 hidden sm:block"

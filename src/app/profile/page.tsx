@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Header from '@/components/layout/Header';
+import { useAuth, fetchWithAuth, getUser } from '@/lib/auth';
+import type { User } from '@/lib/auth';
 import {
-  User,
+  User as UserIcon,
   Mail,
   CalendarDays,
   History,
@@ -16,6 +18,9 @@ import {
   Clock,
   ChevronRight,
   Inbox,
+  Loader2,
+  RefreshCw,
+  Shield,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -24,83 +29,17 @@ import {
 
 type ProfileTab = 'history' | 'favorites' | 'bookmarks' | 'playlists';
 
-interface MockItem {
-  id: string;
+interface ContentItem {
+  id: string | number;
   title: string;
-  cover: string;
+  cover?: string | null;
   source: string;
   date: string;
   type: string;
-}
-
-// ---------------------------------------------------------------------------
-// Mock user data
-// ---------------------------------------------------------------------------
-
-const MOCK_USER = {
-  username: '星聚用户',
-  email: 'user@starhub.app',
-  joinDate: '2025-01-15',
-  avatar: null as string | null,
-};
-
-const MOCK_STATS = {
-  history: 128,
-  favorites: 45,
-  bookmarks: 23,
-  playlists: 6,
-};
-
-// ---------------------------------------------------------------------------
-// Mock content items
-// ---------------------------------------------------------------------------
-
-const COVER_IMAGES = [
-  'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=300&q=80',
-  'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&q=80',
-  'https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae?w=300&q=80',
-  'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=300&q=80',
-  'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=300&q=80',
-  'https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=300&q=80',
-];
-
-function generateMockItems(tab: ProfileTab): MockItem[] {
-  const sources = ['网易云音乐', 'QQ音乐', 'B站', '爱奇艺', '优酷', '芒果TV'];
-  const types: Record<ProfileTab, string[]> = {
-    history: ['视频', '音乐', '动漫', '播客'],
-    favorites: ['音乐', '视频', '漫画', '小说'],
-    bookmarks: ['动漫', '小说', '播客', '直播'],
-    playlists: ['音乐合集', '视频合集', '播客合集'],
-  };
-  const titles: Record<ProfileTab, string[]> = {
-    history: [
-      '周杰伦 - 晴天', '进击的巨人 最终季', '故事FM 第128期',
-      '黑神话：悟空 实况', '邓紫棋 - 光年之外', '海贼王 1089集',
-      '科技美学 新品评测', '深夜电台 助眠音乐',
-    ],
-    favorites: [
-      '平凡之路 - 朴树', '你的名字 OST', '鬼灭之刃 无限列车',
-      '三体 有声书', '成都 - 赵雷', '灌篮高手 全集',
-    ],
-    bookmarks: [
-      '咒术回战 第二季', '斗破苍穹 最新章节', '日谈公园 播客',
-      '原神 3.0 直播', '一人之下 漫画', '凡人修仙传 有声书',
-    ],
-    playlists: [
-      '深夜放松', '运动节奏', '通勤必听',
-      '经典老歌', '日语学习', '工作专注',
-    ],
-  };
-
-  const itemTitles = titles[tab];
-  return itemTitles.map((title, i) => ({
-    id: `${tab}-${i}`,
-    title,
-    cover: COVER_IMAGES[i % COVER_IMAGES.length],
-    source: sources[i % sources.length],
-    date: `2025-04-${String(15 - i).padStart(2, '0')}`,
-    type: types[tab][i % types[tab].length],
-  }));
+  content_type?: string;
+  content_id?: string;
+  progress?: number;
+  duration?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,40 +61,155 @@ const TABS: TabConfig[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// API fetchers
+// ---------------------------------------------------------------------------
+
+async function fetchTabData(tab: ProfileTab): Promise<ContentItem[]> {
+  try {
+    let url = '';
+    switch (tab) {
+      case 'history':
+        url = '/api/video/history?pageSize=50';
+        break;
+      case 'favorites':
+        url = '/api/video/favorite?pageSize=50';
+        break;
+      case 'bookmarks':
+        url = '/api/comic/bookmark';
+        break;
+      case 'playlists':
+        url = '/api/music/playlist';
+        break;
+    }
+
+    const res = await fetchWithAuth(url);
+    if (!res.ok) return [];
+
+    const data = await res.json() as Record<string, unknown>;
+
+    // Normalize different response shapes
+    if (tab === 'history') {
+      const items = (data.items || data.data || []) as Record<string, unknown>[];
+      return items.map((item) => ({
+        id: String(item.id || item.content_id || ''),
+        title: String(item.title || ''),
+        cover: item.cover as string | null,
+        source: String(item.source || ''),
+        date: String(item.watched_at || item.created_at || ''),
+        type: String(item.content_type || 'video'),
+        content_type: String(item.content_type || ''),
+        content_id: String(item.content_id || ''),
+        progress: Number(item.progress || 0),
+        duration: Number(item.duration || 0),
+      }));
+    }
+
+    if (tab === 'favorites') {
+      const items = (data.items || data.data || []) as Record<string, unknown>[];
+      return items.map((item) => ({
+        id: String(item.id || item.content_id || ''),
+        title: String(item.title || ''),
+        cover: item.cover as string | null,
+        source: String(item.source || ''),
+        date: String(item.created_at || ''),
+        type: String(item.content_type || 'video'),
+      }));
+    }
+
+    if (tab === 'bookmarks') {
+      const items = (data.bookmarks || data.items || []) as Record<string, unknown>[];
+      return items.map((item) => ({
+        id: String(item.id || item.mangaId || item.novelId || ''),
+        title: String(item.mangaId || item.novelId || item.content_id || ''),
+        cover: null,
+        source: '本地',
+        date: String(item.updated_at || ''),
+        type: 'comic',
+      }));
+    }
+
+    if (tab === 'playlists') {
+      const items = (data.playlists || data.items || []) as Record<string, unknown>[];
+      return items.map((item) => ({
+        id: String(item.id || ''),
+        title: String(item.name || ''),
+        cover: null,
+        source: String(item.type || 'music'),
+        date: String(item.updated_at || item.created_at || ''),
+        type: String(item.type || 'music'),
+      }));
+    }
+
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+async function fetchStats(): Promise<Record<string, number>> {
+  try {
+    const res = await fetchWithAuth('/api/users/me/sync');
+    if (!res.ok) return { history: 0, favorites: 0, bookmarks: 0, playlists: 0 };
+    const data = await res.json() as Record<string, unknown[]>;
+    return {
+      history: Array.isArray(data.history) ? data.history.length : 0,
+      favorites: Array.isArray(data.favorites) ? data.favorites.length : 0,
+      bookmarks: Array.isArray(data.bookmarks) ? data.bookmarks.length : 0,
+      playlists: Array.isArray(data.playlists) ? data.playlists.length : 0,
+    };
+  } catch {
+    return { history: 0, favorites: 0, bookmarks: 0, playlists: 0 };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function UserInfoCard() {
+function UserInfoCard({ user, onLogout }: { user: User | null; onLogout: () => void }) {
   return (
     <div className="bg-[#1a1a1a] rounded-2xl border border-white/5 p-5 sm:p-6">
       <div className="flex items-start gap-4">
-        {/* Avatar placeholder */}
         <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#2a2a2a] border-2 border-[#3ea6ff]/30 flex items-center justify-center flex-shrink-0">
-          <User className="w-8 h-8 sm:w-10 sm:h-10 text-[#3ea6ff]/60" />
+          {user?.avatar ? (
+            <img src={user.avatar} alt={user.username} className="w-full h-full rounded-full object-cover" />
+          ) : (
+            <UserIcon className="w-8 h-8 sm:w-10 sm:h-10 text-[#3ea6ff]/60" />
+          )}
         </div>
-
         <div className="flex-1 min-w-0">
           <h2 className="text-lg sm:text-xl font-bold text-white truncate">
-            {MOCK_USER.username}
+            {user?.nickname || user?.username || '未登录'}
           </h2>
-          <div className="flex items-center gap-1.5 mt-1 text-sm text-white/40">
-            <Mail className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="truncate">{MOCK_USER.email}</span>
-          </div>
-          <div className="flex items-center gap-1.5 mt-1 text-sm text-white/30">
-            <CalendarDays className="w-3.5 h-3.5 flex-shrink-0" />
-            <span>加入于 {MOCK_USER.joinDate}</span>
-          </div>
+          {user?.email && (
+            <div className="flex items-center gap-1.5 mt-1 text-sm text-white/40">
+              <Mail className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="truncate">{user.email}</span>
+            </div>
+          )}
+          {user?.created_at && (
+            <div className="flex items-center gap-1.5 mt-1 text-sm text-white/30">
+              <CalendarDays className="w-3.5 h-3.5 flex-shrink-0" />
+              <span>加入于 {user.created_at.split('T')[0]}</span>
+            </div>
+          )}
+          {user?.role && user.role !== 'user' && (
+            <div className="flex items-center gap-1.5 mt-1 text-sm text-[#3ea6ff]/60">
+              <Shield className="w-3.5 h-3.5 flex-shrink-0" />
+              <span>{user.role === 'admin' ? '管理员' : user.role}</span>
+            </div>
+          )}
         </div>
       </div>
-
-      {/* Action buttons */}
       <div className="flex items-center gap-2 mt-4">
         <button className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#3ea6ff] text-black text-xs font-semibold hover:bg-[#3ea6ff]/90 transition">
           <Edit className="w-3.5 h-3.5" />
           编辑资料
         </button>
-        <button className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white/5 text-red-400 text-xs font-medium border border-red-500/20 hover:bg-red-500/10 transition">
+        <button
+          onClick={onLogout}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white/5 text-red-400 text-xs font-medium border border-red-500/20 hover:bg-red-500/10 transition"
+        >
           <LogOut className="w-3.5 h-3.5" />
           退出登录
         </button>
@@ -164,23 +218,20 @@ function UserInfoCard() {
   );
 }
 
-function StatsRow() {
-  const stats = [
-    { label: '播放历史', value: MOCK_STATS.history, icon: History },
-    { label: '收藏', value: MOCK_STATS.favorites, icon: Heart },
-    { label: '书签', value: MOCK_STATS.bookmarks, icon: Bookmark },
-    { label: '播放列表', value: MOCK_STATS.playlists, icon: ListMusic },
+function StatsRow({ stats }: { stats: Record<string, number> }) {
+  const items = [
+    { label: '播放历史', value: stats.history || 0, icon: History },
+    { label: '收藏', value: stats.favorites || 0, icon: Heart },
+    { label: '书签', value: stats.bookmarks || 0, icon: Bookmark },
+    { label: '播放列表', value: stats.playlists || 0, icon: ListMusic },
   ];
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
-      {stats.map((stat) => {
+      {items.map((stat) => {
         const Icon = stat.icon;
         return (
-          <div
-            key={stat.label}
-            className="bg-[#1a1a1a] rounded-xl border border-white/5 p-3 sm:p-4 text-center"
-          >
+          <div key={stat.label} className="bg-[#1a1a1a] rounded-xl border border-white/5 p-3 sm:p-4 text-center">
             <Icon className="w-5 h-5 text-[#3ea6ff] mx-auto mb-1.5" />
             <p className="text-xl sm:text-2xl font-bold text-white">{stat.value}</p>
             <p className="text-[11px] sm:text-xs text-white/40 mt-0.5">{stat.label}</p>
@@ -191,40 +242,35 @@ function StatsRow() {
   );
 }
 
-function ContentItem({ item }: { item: MockItem }) {
+function ContentItemRow({ item }: { item: ContentItem }) {
   return (
     <div className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-white/5 transition cursor-pointer group">
-      {/* Cover */}
       <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 relative bg-[#2a2a2a]">
-        <img
-          src={item.cover}
-          alt={item.title}
-          loading="lazy"
-          className="w-full h-full object-cover"
-        />
+        {item.cover ? (
+          <img src={item.cover} alt={item.title} loading="lazy" className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <Play className="w-4 h-4 text-white/20" />
+          </div>
+        )}
         <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition bg-black/40">
           <Play className="w-4 h-4 text-white" />
         </div>
       </div>
-
-      {/* Info */}
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-white truncate group-hover:text-[#3ea6ff] transition">
-          {item.title}
-        </p>
+        <p className="text-sm text-white truncate group-hover:text-[#3ea6ff] transition">{item.title}</p>
         <div className="flex items-center gap-2 mt-0.5">
           <span className="text-[11px] text-white/30">{item.source}</span>
           <span className="text-[11px] text-white/20">|</span>
           <span className="text-[11px] text-white/30">{item.type}</span>
         </div>
       </div>
-
-      {/* Date */}
-      <div className="flex items-center gap-1 text-[11px] text-white/20 flex-shrink-0">
-        <Clock className="w-3 h-3" />
-        {item.date}
-      </div>
-
+      {item.date && (
+        <div className="flex items-center gap-1 text-[11px] text-white/20 flex-shrink-0">
+          <Clock className="w-3 h-3" />
+          {item.date.split('T')[0]}
+        </div>
+      )}
       <ChevronRight className="w-4 h-4 text-white/10 group-hover:text-white/30 transition flex-shrink-0" />
     </div>
   );
@@ -246,13 +292,37 @@ function EmptyState({ text }: { text: string }) {
 // ---------------------------------------------------------------------------
 
 export default function ProfilePage() {
+  const { user, isLoggedIn, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<ProfileTab>('history');
-  const [showEmpty, setShowEmpty] = useState(false);
+  const [items, setItems] = useState<ContentItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [stats, setStats] = useState<Record<string, number>>({ history: 0, favorites: 0, bookmarks: 0, playlists: 0 });
 
-  const items = useMemo(() => {
-    if (showEmpty) return [];
-    return generateMockItems(activeTab);
-  }, [activeTab, showEmpty]);
+  // Fetch stats on mount
+  useEffect(() => {
+    if (isLoggedIn) {
+      fetchStats().then(setStats);
+    }
+  }, [isLoggedIn]);
+
+  // Fetch tab data when tab changes
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setItems([]);
+      return;
+    }
+    setLoading(true);
+    fetchTabData(activeTab)
+      .then(setItems)
+      .finally(() => setLoading(false));
+  }, [activeTab, isLoggedIn]);
+
+  const handleRefresh = useCallback(() => {
+    setLoading(true);
+    fetchTabData(activeTab)
+      .then(setItems)
+      .finally(() => setLoading(false));
+  }, [activeTab]);
 
   const currentTabConfig = TABS.find((t) => t.id === activeTab)!;
 
@@ -261,21 +331,16 @@ export default function ProfilePage() {
       <Header />
       <main className="min-h-screen bg-[#0f0f0f] text-white">
         <div className="max-w-[900px] mx-auto px-4 py-6 pb-24 md:pb-8 space-y-4">
-          {/* Page title */}
           <h1 className="text-xl font-bold flex items-center gap-2">
-            <User className="w-5 h-5 text-[#3ea6ff]" />
+            <UserIcon className="w-5 h-5 text-[#3ea6ff]" />
             个人中心
           </h1>
 
-          {/* User info card */}
-          <UserInfoCard />
-
-          {/* Stats row */}
-          <StatsRow />
+          <UserInfoCard user={user} onLogout={logout} />
+          <StatsRow stats={stats} />
 
           {/* Tab navigation */}
           <div className="bg-[#1a1a1a] rounded-2xl border border-white/5 overflow-hidden">
-            {/* Tab bar */}
             <div className="flex border-b border-white/5 overflow-x-auto">
               {TABS.map((tab) => {
                 const Icon = tab.icon;
@@ -292,21 +357,35 @@ export default function ProfilePage() {
                   >
                     <Icon className="w-4 h-4" />
                     {tab.label}
+                    {stats[tab.id] > 0 && (
+                      <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded-full">{stats[tab.id]}</span>
+                    )}
                   </button>
                 );
               })}
+              <div className="flex-1" />
+              <button
+                onClick={handleRefresh}
+                className="px-3 py-3 text-white/30 hover:text-white/60 transition"
+                aria-label="刷新"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              </button>
             </div>
 
-            {/* Tab content */}
             <div className="p-3 sm:p-4">
-              {items.length > 0 ? (
+              {loading ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-6 h-6 text-[#3ea6ff] animate-spin" />
+                </div>
+              ) : items.length > 0 ? (
                 <div className="space-y-0.5">
                   {items.map((item) => (
-                    <ContentItem key={item.id} item={item} />
+                    <ContentItemRow key={item.id} item={item} />
                   ))}
                 </div>
               ) : (
-                <EmptyState text={currentTabConfig.emptyText} />
+                <EmptyState text={isLoggedIn ? currentTabConfig.emptyText : '请先登录查看'} />
               )}
             </div>
           </div>

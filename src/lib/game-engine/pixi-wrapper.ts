@@ -23,6 +23,7 @@ export async function loadPixi(): Promise<typeof import('pixi.js')> {
 
 /**
  * 创建 PixiJS Application 并挂载到 canvas
+ * DPR 上限为 2，防止 3x 屏幕内存爆炸
  */
 export async function createPixiApp(options: {
   canvas: HTMLCanvasElement;
@@ -33,16 +34,52 @@ export async function createPixiApp(options: {
 }): Promise<Application> {
   const pixi = await loadPixi();
   const app = new pixi.Application();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   await app.init({
     canvas: options.canvas,
     width: options.width,
     height: options.height,
     backgroundColor: options.backgroundColor ?? 0x0f0f0f,
     antialias: options.antialias ?? true,
-    resolution: window.devicePixelRatio || 1,
+    resolution: dpr,
     autoDensity: true,
   });
   return app;
+}
+
+/**
+ * 为 PixiJS app 设置自动响应式缩放。
+ * 监听容器大小变化，自动调整 canvas 尺寸保持宽高比。
+ * 返回 cleanup 函数。
+ */
+export function setupResponsiveResize(
+  app: Application,
+  canvas: HTMLCanvasElement,
+  designWidth: number,
+  designHeight: number,
+): () => void {
+  const resize = () => {
+    const parent = canvas.parentElement;
+    if (!parent) return;
+    const pw = parent.clientWidth;
+    const ph = parent.clientHeight || window.innerHeight * 0.7;
+    const scaleX = pw / designWidth;
+    const scaleY = ph / designHeight;
+    const scale = Math.min(scaleX, scaleY, 1);
+    const w = Math.floor(designWidth * scale);
+    const h = Math.floor(designHeight * scale);
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    app.renderer.resize(w, h);
+  };
+
+  resize();
+
+  const observer = new ResizeObserver(resize);
+  const parent = canvas.parentElement;
+  if (parent) observer.observe(parent);
+
+  return () => observer.disconnect();
 }
 
 /**

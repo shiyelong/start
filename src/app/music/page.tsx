@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Header from '@/components/layout/Header';
 import RatingBadge from '@/components/ui/RatingBadge';
 import PlaylistManager from '@/components/player/PlaylistManager';
@@ -600,8 +600,48 @@ export default function MusicPage() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showPlaylistSidebar, setShowPlaylistSidebar] = useState(false);
   const [playlists, setPlaylists] = useState<MockPlaylist[]>(INITIAL_PLAYLISTS);
+  const [apiResults, setApiResults] = useState<MockMusicTrack[]>([]);
+  const [apiSearching, setApiSearching] = useState(false);
 
-  // --- Filtered tracks ---
+  // --- API search (debounced) ---
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setApiResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setApiSearching(true);
+      try {
+        const params = new URLSearchParams({ q: searchQuery.trim(), pageSize: '30' });
+        if (activeSource !== 'all') params.set('source', activeSource);
+        const res = await fetch(`/api/music/search?${params}`);
+        if (res.ok) {
+          const data = await res.json() as { items?: Record<string, unknown>[] };
+          if (data.items && data.items.length > 0) {
+            const mapped: MockMusicTrack[] = data.items.map((item, i) => ({
+              id: String(item.id || `api-${i}`),
+              title: String(item.title || ''),
+              artist: String((item.metadata as Record<string, unknown>)?.artist || item.source || ''),
+              album: String((item.metadata as Record<string, unknown>)?.album || ''),
+              cover: String(item.cover || ''),
+              duration: Number((item.metadata as Record<string, unknown>)?.duration || 200),
+              source: String(item.source || ''),
+              sourceId: String(item.sourceId || ''),
+              genre: 'pop',
+              plays: Number(item.popularity || 0),
+              rating: (item.rating || 'PG') as ContentRating,
+              streamUrl: String(item.url || ''),
+            }));
+            setApiResults(mapped);
+          }
+        }
+      } catch { /* silent */ }
+      setApiSearching(false);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchQuery, activeSource]);
+
+  // --- Filtered tracks (merge local + API results) ---
   const filteredTracks = useMemo(() => {
     let list = ALL_TRACKS;
 
@@ -622,10 +662,16 @@ export default function MusicPage() {
           t.album.toLowerCase().includes(q) ||
           t.source.toLowerCase().includes(q),
       );
+      // Merge API results (deduplicate by title+artist)
+      if (apiResults.length > 0) {
+        const existingKeys = new Set(list.map(t => `${t.title.toLowerCase()}-${t.artist.toLowerCase()}`));
+        const newItems = apiResults.filter(t => !existingKeys.has(`${t.title.toLowerCase()}-${t.artist.toLowerCase()}`));
+        list = [...list, ...newItems];
+      }
     }
 
     return list;
-  }, [activeGenre, activeSource, searchQuery]);
+  }, [activeGenre, activeSource, searchQuery, apiResults]);
 
   const isSearching = searchQuery.trim().length > 0;
 

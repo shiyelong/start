@@ -731,11 +731,11 @@ export default function ZoneAnimePage() {
       {/* ===== Video Player Modal ===== */}
       {playingAnime && (
         <div
-          className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center p-3 md:p-6"
+          className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center p-3 md:p-6 lg:p-8"
           onClick={closePlayer}
         >
           <div
-            className="w-full max-w-5xl"
+            className="w-full max-w-5xl lg:max-w-6xl xl:max-w-7xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}

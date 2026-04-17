@@ -193,10 +193,10 @@ export default function Header() {
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors ${
+                    className={`relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm whitespace-nowrap transition-all duration-200 ${
                       active
-                        ? 'text-[#3ea6ff] bg-[#3ea6ff]/10'
-                        : 'text-gray-300 hover:text-[#3ea6ff] hover:bg-white/5'
+                        ? 'text-[#3ea6ff] bg-[#3ea6ff]/10 font-medium'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
                     }`}
                   >
                     {item.icon}
@@ -320,7 +320,7 @@ export default function Header() {
       </header>
 
       {/* ===== Mobile Bottom Tab Bar ===== */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#0f0f0f]/95 backdrop-blur border-t border-white/5 pb-[env(safe-area-inset-bottom)]">
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#0f0f0f]/95 backdrop-blur-lg border-t border-white/[0.06] pb-[env(safe-area-inset-bottom)]">
         <div className="flex items-center justify-around h-14">
           {MOBILE_TABS.map((tab) => {
             const active = isActive(tab.href);
@@ -328,23 +328,31 @@ export default function Header() {
               <Link
                 key={tab.href}
                 href={tab.href}
-                className={`flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors ${
-                  active ? 'text-[#3ea6ff]' : 'text-gray-500'
+                className={`relative flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-all duration-200 ${
+                  active ? 'text-[#3ea6ff]' : 'text-gray-500 active:text-gray-300'
                 }`}
               >
-                {tab.icon}
-                <span className="text-[10px]">{tab.label}</span>
+                {active && (
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-5 h-0.5 rounded-full bg-[#3ea6ff]" />
+                )}
+                <div className={`transition-transform duration-200 ${active ? 'scale-110' : ''}`}>
+                  {tab.icon}
+                </div>
+                <span className={`text-[10px] transition-all ${active ? 'font-semibold' : ''}`}>{tab.label}</span>
               </Link>
             );
           })}
           {/* "更多" button opens full overlay */}
           <button
             onClick={() => setMobileOverlayOpen(true)}
-            className={`flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors ${
-              mobileOverlayOpen ? 'text-[#3ea6ff]' : 'text-gray-500'
+            className={`relative flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-all duration-200 ${
+              mobileOverlayOpen ? 'text-[#3ea6ff]' : 'text-gray-500 active:text-gray-300'
             }`}
             aria-label="更多导航"
           >
+            {mobileOverlayOpen && (
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-5 h-0.5 rounded-full bg-[#3ea6ff]" />
+            )}
             <MoreHorizontal size={20} />
             <span className="text-[10px]">更多</span>
           </button>

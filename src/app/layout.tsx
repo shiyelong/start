@@ -4,6 +4,8 @@ import MusicPlayerProvider from "@/components/player/MusicPlayerProvider";
 import MusicPlayer from "@/components/player/MusicPlayer";
 import AgeGateWrapper from "@/components/AgeGateWrapper";
 import AppDownloadBanner from "@/components/ui/AppDownloadBanner";
+import { ToastProvider } from "@/components/ui/Toast";
+import BackToTop from "@/components/ui/BackToTop";
 
 export const metadata: Metadata = {
   title: "星聚 — 视频·游戏·漫画·社区·AI",
@@ -41,13 +43,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-startup-image" href="/logo.svg" />
       </head>
       <body className="bg-[#0f0f0f] text-white min-h-screen antialiased overscroll-none">
-        <MusicPlayerProvider>
-          <AgeGateWrapper>
-            {children}
-          </AgeGateWrapper>
-          <MusicPlayer />
-          <AppDownloadBanner />
-        </MusicPlayerProvider>
+        <ToastProvider>
+          <MusicPlayerProvider>
+            <AgeGateWrapper>
+              {children}
+            </AgeGateWrapper>
+            <MusicPlayer />
+            <AppDownloadBanner />
+            <BackToTop />
+          </MusicPlayerProvider>
+        </ToastProvider>
       </body>
     </html>
   );

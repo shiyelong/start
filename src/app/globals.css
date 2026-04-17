@@ -38,8 +38,13 @@ p, h1, h2, h3, span, div { user-select: text; }
 
 /* 主题增强动画 */
 @keyframes float {
-  0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.6; }
-  50% { transform: translateY(-20px) rotate(180deg); opacity: 1; }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes gradient-x {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
 }
 @keyframes glowPulse {
   0%, 100% { box-shadow: 0 0 20px rgba(62,166,255,0.1); }
@@ -86,7 +91,8 @@ p, h1, h2, h3, span, div { user-select: text; }
   .animate-scale-in { animation: scaleIn 0.3s ease; }
   .animate-shake { animation: shake 0.5s ease; }
   .animate-glow-pulse { animation: glowPulse 2s ease-in-out infinite; }
-  .animate-float { animation: float 3s ease-in-out infinite; }
+  .animate-float { animation: float 2.5s ease-in-out infinite; }
+  .animate-gradient-x { animation: gradient-x 4s ease infinite; }
   .animate-spin-slow { animation: spin 20s linear infinite; }
   .animate-shimmer {
     background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.05) 50%, transparent 100%);
@@ -291,4 +297,57 @@ main {
   .game-landscape-optimize nav {
     display: none;
   }
+}
+
+/* ===== Smooth page transitions ===== */
+.page-transition-enter {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.page-transition-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* ===== Glass morphism utility ===== */
+.glass {
+  background: rgba(26, 26, 26, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* ===== Focus ring for accessibility ===== */
+:focus-visible {
+  outline: 2px solid #3ea6ff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ===== Reduced motion preference ===== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ===== Selection color ===== */
+::selection {
+  background: rgba(62, 166, 255, 0.3);
+  color: white;
+}
+
+/* ===== Smooth image loading ===== */
+img {
+  transition: opacity 0.3s ease;
+}
+img[loading="lazy"] {
+  opacity: 0;
+}
+img[loading="lazy"].loaded,
+img[loading="lazy"][src]:not([src=""]) {
+  opacity: 1;
 }

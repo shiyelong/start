@@ -112,31 +112,98 @@ export default function AIPage() {
       setInput('');
 
       const userMsg: Msg = { role: 'user', content: msg };
-      setMsgs((prev) => [...prev, userMsg]);
+      const updatedMsgs = [...msgs, userMsg];
+      setMsgs(updatedMsgs);
       setStreaming(true);
 
-      // Stub: simulate SSE streaming response
+      // Add empty assistant message for streaming
       const assistantMsg: Msg = { role: 'assistant', content: '' };
-      setMsgs((prev) => [...prev, assistantMsg]);
+      setMsgs([...updatedMsgs, assistantMsg]);
 
-      const stubResponse = `这是来自 ${OPENROUTER_MODELS.find((m) => m.id === model)?.label || model} 的模拟回复。\n\n在生产环境中，此回复将通过 SSE 流式传输从 OpenRouter API 获取。\n\n你的问题是：「${msg}」`;
-
-      // Simulate streaming character by character
-      let accumulated = '';
-      for (let i = 0; i < stubResponse.length; i++) {
-        accumulated += stubResponse[i];
-        const current = accumulated;
-        await new Promise((r) => setTimeout(r, 15));
-        setMsgs((prev) => {
-          const updated = [...prev];
-          updated[updated.length - 1] = { role: 'assistant', content: current };
-          return updated;
+      try {
+        // Try real API first
+        const res = await fetch('/api/ai/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(typeof window !== 'undefined' && localStorage.getItem('starhub_token')
+              ? { Authorization: `Bearer ${localStorage.getItem('starhub_token')}` }
+              : {}),
+          },
+          body: JSON.stringify({
+            model,
+            messages: updatedMsgs.map((m) => ({ role: m.role, content: m.content })),
+          }),
         });
+
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+
+        // Parse SSE stream
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error('No response body');
+
+        const decoder = new TextDecoder();
+        let accumulated = '';
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') break;
+
+            try {
+              const parsed = JSON.parse(data) as {
+                choices?: { delta?: { content?: string } }[];
+              };
+              const content = parsed.choices?.[0]?.delta?.content;
+              if (content) {
+                accumulated += content;
+                const current = accumulated;
+                setMsgs((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = { role: 'assistant', content: current };
+                  return updated;
+                });
+              }
+            } catch {
+              // Skip malformed JSON chunks
+            }
+          }
+        }
+
+        // If no content was streamed, show a fallback
+        if (!accumulated) {
+          throw new Error('Empty response');
+        }
+      } catch {
+        // Fallback: simulate response when API is unavailable
+        const modelLabel = OPENROUTER_MODELS.find((m) => m.id === model)?.label || model;
+        const stubResponse = `[离线模式] ${modelLabel} 暂时不可用。\n\n后端 API 已就绪（/api/ai/chat），部署到 Cloudflare Pages 并配置 OPENROUTER_API_KEY 后即可使用真实 AI 对话。\n\n你的问题：「${msg}」`;
+
+        let accumulated = '';
+        for (let i = 0; i < stubResponse.length; i++) {
+          accumulated += stubResponse[i];
+          const current = accumulated;
+          await new Promise((r) => setTimeout(r, 12));
+          setMsgs((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = { role: 'assistant', content: current };
+            return updated;
+          });
+        }
       }
 
       setStreaming(false);
     },
-    [input, streaming, model],
+    [input, streaming, model, msgs],
   );
 
   const newConversation = useCallback(() => {
@@ -391,7 +458,7 @@ export default function AIPage() {
 
           {/* Input */}
           <div className="px-4 pb-4 pt-2 border-t border-white/5">
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-end">
               <textarea
                 ref={inputRef}
                 value={input}
@@ -402,22 +469,36 @@ export default function AIPage() {
                     send();
                   }
                 }}
+                onInput={(e) => {
+                  const el = e.currentTarget;
+                  el.style.height = '44px';
+                  el.style.height = Math.min(el.scrollHeight, 128) + 'px';
+                }}
                 rows={1}
-                className="flex-1 min-h-[44px] max-h-32 px-4 py-3 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white placeholder-gray-600 outline-none focus:border-[#3ea6ff] transition-colors resize-none"
+                className="flex-1 min-h-[44px] max-h-32 px-4 py-3 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white placeholder-gray-600 outline-none focus:border-[#3ea6ff]/40 focus:ring-1 focus:ring-[#3ea6ff]/10 transition-all resize-none"
                 placeholder={`${MODES.find((m) => m.id === mode)?.desc}...`}
                 disabled={streaming}
+                style={{ height: '44px' }}
               />
               <button
                 onClick={() => send()}
                 disabled={streaming || !input.trim()}
-                className={`px-4 rounded-xl text-sm font-semibold transition-colors flex items-center ${
+                className={`shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-all ${
                   streaming || !input.trim()
-                    ? 'bg-[#333] text-gray-600'
-                    : 'bg-[#3ea6ff] text-[#0f0f0f] hover:bg-[#65b8ff]'
+                    ? 'bg-white/[0.04] text-white/15'
+                    : 'bg-[#3ea6ff] text-white hover:bg-[#65b8ff] shadow-lg shadow-[#3ea6ff]/20'
                 }`}
               >
-                <Send className="w-4 h-4" />
+                {streaming ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
               </button>
+            </div>
+            <div className="flex items-center justify-between mt-1.5 px-1">
+              <span className="text-[10px] text-white/15">Enter 发送 · Shift+Enter 换行</span>
+              <span className="text-[10px] text-white/15">{input.length}/4000</span>
             </div>
           </div>
         </div>

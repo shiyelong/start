@@ -43,3 +43,12 @@ cloudflared*.yml
 next-env.d.ts
 dist/
 server/node_modules/
+
+# electron build output
+/release/
+electron/*.js
+
+# secrets — 宪法第七章
+*.token
+*.secret
+cloudflared*.yml

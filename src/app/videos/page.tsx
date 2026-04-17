@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Header from "@/components/Header";
 import RatingBadge from "@/components/ui/RatingBadge";
 import VideoPlayer from "@/components/player/VideoPlayer";
@@ -343,6 +343,45 @@ export default function VideosPage() {
   const [activeVideoType, setActiveVideoType] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [showFilters, setShowFilters] = useState(false);
+  const [apiResults, setApiResults] = useState<MockVideo[]>([]);
+
+  // --- API search (debounced) ---
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setApiResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ q: searchQuery.trim(), pageSize: '30' });
+        if (activePlatform !== 'local') params.set('source', activePlatform);
+        const res = await fetch(`/api/video/search?${params}`);
+        if (res.ok) {
+          const data = await res.json() as { items?: Record<string, unknown>[] };
+          if (data.items && data.items.length > 0) {
+            const mapped: MockVideo[] = data.items.map((item, i) => ({
+              id: String(item.id || `api-v-${i}`),
+              title: String(item.title || ''),
+              cover: String(item.cover || ''),
+              source: String(item.source || ''),
+              sourceId: String(item.sourceId || ''),
+              platform: String(item.sourceId || 'local'),
+              region: 'cn',
+              videoType: 'short',
+              rating: (item.rating || 'PG') as ContentRating,
+              duration: String((item.metadata as Record<string, unknown>)?.duration || '00:00'),
+              views: Number((item.metadata as Record<string, unknown>)?.views || 0),
+              author: String((item.metadata as Record<string, unknown>)?.author || ''),
+              date: '',
+              url: String(item.url || ''),
+            }));
+            setApiResults(mapped);
+          }
+        }
+      } catch { /* silent */ }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchQuery, activePlatform]);
 
   // Player state
   const [playingVideo, setPlayingVideo] = useState<MockVideo | null>(null);
@@ -400,6 +439,12 @@ export default function VideosPage() {
           v.author.toLowerCase().includes(q) ||
           v.source.toLowerCase().includes(q)
       );
+      // Merge API results
+      if (apiResults.length > 0) {
+        const existingIds = new Set(list.map(v => v.id));
+        const newItems = apiResults.filter(v => !existingIds.has(v.id));
+        list = [...list, ...newItems];
+      }
     }
 
     // Tag filter
@@ -411,7 +456,7 @@ export default function VideosPage() {
     }
 
     return list;
-  }, [activePlatform, activeRegion, activeVideoType, searchQuery, activeTagFilter, videoTags]);
+  }, [activePlatform, activeRegion, activeVideoType, searchQuery, activeTagFilter, videoTags, apiResults]);
 
   // --- AutoPlay candidate ---
   const autoPlayCandidate = useMemo<AutoPlayCandidate | null>(() => {
@@ -857,11 +902,11 @@ export default function VideosPage() {
       {/* ===== Video Player Modal (Aggregated) ===== */}
       {playingVideo && (
         <div
-          className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center p-3 md:p-6"
+          className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center p-3 md:p-6 lg:p-8"
           onClick={closePlayer}
         >
           <div
-            className="w-full max-w-5xl"
+            className="w-full max-w-5xl lg:max-w-6xl xl:max-w-7xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
