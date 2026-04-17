@@ -308,9 +308,9 @@ export default function DanmakuLayer({
           );
         })}
 
-      {/* Controls bar at bottom */}
+      {/* Controls bar — positioned ABOVE video controls (bottom-12 to avoid overlap) */}
       <div
-        className="absolute bottom-0 left-0 right-0 pointer-events-auto"
+        className="absolute bottom-12 left-0 right-0 pointer-events-auto"
         data-controls
         onClick={(e) => e.stopPropagation()}
       >
@@ -344,11 +344,11 @@ export default function DanmakuLayer({
                     onClick={() => setSendPosition(pos)}
                     className={`px-2 py-0.5 rounded transition-colors ${
                       sendPosition === pos
-                        ? 'bg-accent text-black'
+                        ? 'bg-[#3ea6ff] text-black'
                         : 'bg-white/10 text-white hover:bg-white/20'
                     }`}
                   >
-                    {pos === 'scroll' ? 'Scroll' : pos === 'top' ? 'Top' : 'Bottom'}
+                    {pos === 'scroll' ? '滚动' : pos === 'top' ? '顶部' : '底部'}
                   </button>
                 ))}
               </div>
@@ -361,7 +361,7 @@ export default function DanmakuLayer({
                     onClick={() => setSendSize(sz)}
                     className={`px-2 py-0.5 rounded transition-colors ${
                       sendSize === sz
-                        ? 'bg-accent text-black'
+                        ? 'bg-[#3ea6ff] text-black'
                         : 'bg-white/10 text-white hover:bg-white/20'
                     }`}
                   >
@@ -378,15 +378,15 @@ export default function DanmakuLayer({
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Type danmaku..."
+                placeholder="输入弹幕内容..."
                 maxLength={100}
-                className="flex-1 bg-white/10 text-white text-sm px-3 py-1.5 rounded outline-none placeholder:text-muted focus:ring-1 focus:ring-accent"
+                className="flex-1 bg-white/10 text-white text-sm px-3 py-1.5 rounded outline-none placeholder:text-white/30 focus:ring-1 focus:ring-[#3ea6ff]"
               />
               <button
                 onClick={handleSend}
                 disabled={!inputText.trim()}
-                className="text-accent hover:text-accent-hover disabled:text-muted transition-colors p-1.5"
-                aria-label="Send danmaku"
+                className="text-[#3ea6ff] hover:text-[#65b8ff] disabled:text-white/20 transition-colors p-1.5"
+                aria-label="发送弹幕"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -402,21 +402,21 @@ export default function DanmakuLayer({
             className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
               enabled
                 ? 'bg-white/10 text-white hover:bg-white/20'
-                : 'bg-white/5 text-muted hover:bg-white/10'
+                : 'bg-white/5 text-white/40 hover:bg-white/10'
             }`}
-            aria-label={enabled ? 'Hide danmaku' : 'Show danmaku'}
+            aria-label={enabled ? '关闭弹幕' : '开启弹幕'}
           >
             {enabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-            <span>{enabled ? 'On' : 'Off'}</span>
+            <span>{enabled ? '弹幕开' : '弹幕关'}</span>
           </button>
 
           {/* Density control */}
           <button
             onClick={cycleDensity}
             className="px-2 py-1 rounded text-xs bg-white/10 text-white hover:bg-white/20 transition-colors"
-            aria-label="Cycle danmaku density"
+            aria-label="弹幕密度"
           >
-            Density: {density}
+            密度: {density === 'off' ? '关' : density === 'low' ? '低' : density === 'medium' ? '中' : '高'}
           </button>
 
           {/* Spacer */}
@@ -428,13 +428,13 @@ export default function DanmakuLayer({
               onClick={() => setShowInput((prev) => !prev)}
               className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
                 showInput
-                  ? 'bg-accent text-black'
+                  ? 'bg-[#3ea6ff] text-black'
                   : 'bg-white/10 text-white hover:bg-white/20'
               }`}
-              aria-label="Toggle danmaku input"
+              aria-label="发送弹幕"
             >
               <MessageSquare className="w-3.5 h-3.5" />
-              <span>Danmaku</span>
+              <span>弹幕</span>
             </button>
           )}
         </div>

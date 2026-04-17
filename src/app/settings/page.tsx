@@ -31,6 +31,13 @@ import {
   Globe,
   ExternalLink,
   AlertTriangle,
+  Video,
+  Music,
+  BookOpen,
+  BookText,
+  Headphones,
+  Gamepad2,
+  Play,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -660,6 +667,101 @@ function NotificationSection() {
 }
 
 // ===========================================================================
+// Content Mode Preferences Section
+// ===========================================================================
+
+type ContentMode = 'video' | 'audio' | 'text' | 'comic' | 'audiobook' | 'visual-novel';
+
+interface ContentModeConfig {
+  id: ContentMode;
+  label: string;
+  desc: string;
+  icon: React.ReactNode;
+}
+
+const CONTENT_MODES: ContentModeConfig[] = [
+  { id: 'video', label: '视频播放', desc: '标准视频流播放', icon: <Video className="w-4 h-4" /> },
+  { id: 'audio', label: '音频播放', desc: '仅播放音频（省流量）', icon: <Music className="w-4 h-4" /> },
+  { id: 'text', label: '文字阅读', desc: '纯文字小说阅读', icon: <BookText className="w-4 h-4" /> },
+  { id: 'comic', label: '漫画阅读', desc: '图片翻页/条漫模式', icon: <BookOpen className="w-4 h-4" /> },
+  { id: 'audiobook', label: '有声小说', desc: 'TTS朗读或音频书', icon: <Headphones className="w-4 h-4" /> },
+  { id: 'visual-novel', label: '视觉小说', desc: '互动剧情+分支选择', icon: <Gamepad2 className="w-4 h-4" /> },
+];
+
+const CONTENT_CATEGORIES = [
+  { key: 'defaultVideoMode', label: '视频内容默认模式', options: ['video', 'audio'] as ContentMode[] },
+  { key: 'defaultNovelMode', label: '小说内容默认模式', options: ['text', 'audiobook', 'visual-novel'] as ContentMode[] },
+  { key: 'defaultComicMode', label: '漫画内容默认模式', options: ['comic', 'video'] as ContentMode[] },
+  { key: 'defaultMusicMode', label: '音乐内容默认模式', options: ['audio', 'video'] as ContentMode[] },
+];
+
+function ContentModeSection() {
+  const [prefs, setPrefs] = useState<Record<string, ContentMode>>(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const saved = localStorage.getItem('starhub_content_modes');
+      return saved ? JSON.parse(saved) : {
+        defaultVideoMode: 'video',
+        defaultNovelMode: 'text',
+        defaultComicMode: 'comic',
+        defaultMusicMode: 'audio',
+      };
+    } catch { return {}; }
+  });
+
+  const updatePref = useCallback((key: string, mode: ContentMode) => {
+    setPrefs(prev => {
+      const next = { ...prev, [key]: mode };
+      try { localStorage.setItem('starhub_content_modes', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  return (
+    <Section title="内容播放模式" icon={Play}>
+      <p className="text-[11px] text-white/30 px-3 mb-3">
+        为不同类型的内容设置默认播放/阅读模式，也可以在播放时随时切换
+      </p>
+      <div className="space-y-3">
+        {CONTENT_CATEGORIES.map(cat => {
+          const current = prefs[cat.key] || cat.options[0];
+          return (
+            <div key={cat.key} className="px-3">
+              <p className="text-xs text-white/50 mb-2">{cat.label}</p>
+              <div className="flex flex-wrap gap-1.5">
+                {cat.options.map(optId => {
+                  const opt = CONTENT_MODES.find(m => m.id === optId);
+                  if (!opt) return null;
+                  const isActive = current === optId;
+                  return (
+                    <button
+                      key={optId}
+                      onClick={() => updatePref(cat.key, optId)}
+                      className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs transition-all ${
+                        isActive
+                          ? 'bg-[#3ea6ff]/15 text-[#3ea6ff] border border-[#3ea6ff]/40 font-medium'
+                          : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10 hover:text-white/70'
+                      }`}
+                    >
+                      {opt.icon}
+                      <div className="text-left">
+                        <span className="block">{opt.label}</span>
+                        <span className={`block text-[9px] ${isActive ? 'text-[#3ea6ff]/60' : 'text-white/25'}`}>{opt.desc}</span>
+                      </div>
+                      {isActive && <Check className="w-3 h-3 ml-1" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+// ===========================================================================
 // Display Section
 // ===========================================================================
 
@@ -754,6 +856,9 @@ export default function SettingsPage() {
 
           {/* Notification preferences */}
           <NotificationSection />
+
+          {/* Content mode preferences */}
+          <ContentModeSection />
 
           {/* Display settings */}
           <DisplaySection />

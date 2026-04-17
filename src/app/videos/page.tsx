@@ -224,7 +224,7 @@ function generateMockVideos(): MockVideo[] {
         views: Math.floor(Math.random() * 5000000) + 10000,
         author: `创作者${id}`,
         date: "2026-04-09",
-        url: `/api/video/stream/v-${id}`,
+        url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
         episode: isEpisodic ? ((i % 12) + 1) : undefined,
         totalEpisodes: isEpisodic ? 24 : undefined,
       });
