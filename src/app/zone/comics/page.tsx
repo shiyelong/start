@@ -106,6 +106,21 @@ const SORT_OPTIONS: FilterOption[] = [
   { id: 'random', label: '随机' },
 ];
 
+const SOURCE_TAB_OPTIONS: FilterOption[] = [
+  { id: 'all', label: '全部来源' },
+  { id: 'local', label: '本地NAS' },
+  { id: 'upload', label: '网友上传' },
+  { id: 'telegram', label: 'Telegram' },
+  { id: 'nhentai', label: 'nhentai' },
+  { id: 'ehentai', label: 'E-Hentai' },
+  { id: 'hitomi', label: 'Hitomi' },
+  { id: 'pixiv', label: 'Pixiv' },
+  { id: 'jinman', label: '禁漫天堂' },
+  { id: 'shenshi', label: '紳士漫畫' },
+  { id: 'wnacg', label: 'Wnacg' },
+  { id: 'tsumino', label: 'Tsumino' },
+];
+
 // ---------------------------------------------------------------------------
 // Mock data
 // ---------------------------------------------------------------------------
@@ -149,8 +164,8 @@ function generateMockAdultComics(): AdultComic[] {
   ];
 
   const sources = [
-    'Source-A', 'Source-B', 'Source-C', 'Source-D', 'Source-E',
-    'Source-F', 'Source-G', 'Source-H', 'Source-I', 'Source-J', 'Source-K',
+    '本地NAS', '网友上传', 'Telegram频道', 'nhentai', 'E-Hentai',
+    'Hitomi', 'Pixiv', '禁漫天堂', '紳士漫畫', 'Wnacg', 'Tsumino',
   ];
 
   const covers = [
@@ -293,6 +308,7 @@ export default function ZoneComicsPage() {
   // --- Filter state ---
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [activeSource, setActiveSource] = useState('all');
   const [activeGenre, setActiveGenre] = useState('all');
   const [activeLanguage, setActiveLanguage] = useState('all');
   const [activeStyle, setActiveStyle] = useState('all');
@@ -310,6 +326,7 @@ export default function ZoneComicsPage() {
 
   // --- Active filter count ---
   const activeFilterCount = [
+    activeSource !== 'all',
     activeGenre !== 'all',
     activeLanguage !== 'all',
     activeStyle !== 'all',
@@ -320,6 +337,10 @@ export default function ZoneComicsPage() {
   const filteredComics = useMemo(() => {
     let list = [...ALL_ADULT_COMICS];
 
+    if (activeSource !== 'all') {
+      const sourceLabel = SOURCE_TAB_OPTIONS.find(s => s.id === activeSource)?.label || '';
+      list = list.filter((c) => c.source === sourceLabel);
+    }
     if (activeGenre !== 'all') {
       list = list.filter((c) => c.genre === activeGenre);
     }
@@ -362,7 +383,7 @@ export default function ZoneComicsPage() {
     }
 
     return list;
-  }, [activeGenre, activeLanguage, activeStyle, activePageCount, searchQuery, activeSort]);
+  }, [activeSource, activeGenre, activeLanguage, activeStyle, activePageCount, searchQuery, activeSort]);
 
   // --- Handlers ---
   const handleReadComic = useCallback((comic: AdultComic) => {
@@ -394,6 +415,23 @@ export default function ZoneComicsPage() {
             <span>成人漫画专区</span>
             <RatingBadge rating="NC-17" size="md" />
           </h1>
+        </div>
+
+        {/* ===== Source Tabs ===== */}
+        <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1 scrollbar-hide">
+          {SOURCE_TAB_OPTIONS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveSource(tab.id)}
+              className={`px-3 py-1.5 rounded-full text-[12px] whitespace-nowrap border transition shrink-0 ${
+                activeSource === tab.id
+                  ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/40 font-semibold'
+                  : 'bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {/* ===== Search Bar ===== */}

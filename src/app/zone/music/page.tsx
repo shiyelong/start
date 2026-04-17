@@ -87,6 +87,16 @@ const SORT_OPTIONS: FilterOption[] = [
   { id: 'random', label: '随机' },
 ];
 
+const SOURCE_TAB_OPTIONS: FilterOption[] = [
+  { id: 'all', label: '全部来源' },
+  { id: 'local', label: '本地NAS' },
+  { id: 'telegram', label: 'Telegram' },
+  { id: 'dlsite', label: 'DLsite' },
+  { id: 'asmrone', label: 'ASMR.one' },
+  { id: 'jasmr', label: 'Japaneseasmr' },
+  { id: 'onlyfans', label: 'OnlyFans' },
+];
+
 
 // ---------------------------------------------------------------------------
 // Mock data
@@ -139,7 +149,7 @@ function generateMockAdultMusic(): AdultMusic[] {
     '蜜语工作室', '梦幻音声', 'Whisper Studio', 'Velvet Voice',
   ];
 
-  const sources = ['Source-A', 'Source-B', 'Source-C', 'Source-D', 'Source-E', 'Source-F'];
+  const sources = ['本地NAS', 'Telegram频道', 'DLsite', 'ASMR.one', 'Japaneseasmr', 'OnlyFans'];
 
   const covers = [
     'https://images.unsplash.com/photo-1511379938547-c1f69419868d?w=400&q=80',
@@ -268,6 +278,7 @@ export default function ZoneMusicPage() {
   // --- Filter state ---
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [activeSource, setActiveSource] = useState('all');
   const [activeGenre, setActiveGenre] = useState('all');
   const [activeLanguage, setActiveLanguage] = useState('all');
   const [activeVoiceGender, setActiveVoiceGender] = useState('all');
@@ -284,6 +295,7 @@ export default function ZoneMusicPage() {
 
   // --- Active filter count ---
   const activeFilterCount = [
+    activeSource !== 'all',
     activeGenre !== 'all',
     activeLanguage !== 'all',
     activeVoiceGender !== 'all',
@@ -294,6 +306,10 @@ export default function ZoneMusicPage() {
   const filteredMusic = useMemo(() => {
     let list = [...ALL_ADULT_MUSIC];
 
+    if (activeSource !== 'all') {
+      const sourceLabel = SOURCE_TAB_OPTIONS.find(s => s.id === activeSource)?.label || '';
+      list = list.filter((m) => m.source === sourceLabel);
+    }
     if (activeGenre !== 'all') {
       list = list.filter((m) => m.genre === activeGenre);
     }
@@ -340,7 +356,7 @@ export default function ZoneMusicPage() {
     }
 
     return list;
-  }, [activeGenre, activeLanguage, activeVoiceGender, activeDuration, searchQuery, activeSort]);
+  }, [activeSource, activeGenre, activeLanguage, activeVoiceGender, activeDuration, searchQuery, activeSort]);
 
   // --- Play track through MusicPlayer ---
   const playTrack = useCallback(
@@ -389,6 +405,23 @@ export default function ZoneMusicPage() {
             <span>成人音乐专区</span>
             <RatingBadge rating="NC-17" size="md" />
           </h1>
+        </div>
+
+        {/* ===== Source Tabs ===== */}
+        <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1 scrollbar-hide">
+          {SOURCE_TAB_OPTIONS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveSource(tab.id)}
+              className={`px-3 py-1.5 rounded-full text-[12px] whitespace-nowrap border transition shrink-0 ${
+                activeSource === tab.id
+                  ? 'bg-purple-500/15 text-purple-400 border-purple-500/40 font-semibold'
+                  : 'bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {/* ===== Search Bar ===== */}

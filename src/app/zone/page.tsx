@@ -25,7 +25,7 @@ const CONTENT_SECTIONS: ZoneSection[] = [
   {
     href: '/zone/videos',
     title: '成人视频',
-    description: '16个聚合源，高清流媒体',
+    description: '本地/自拍/Telegram + 12个聚合源',
     icon: <Video size={28} />,
     color: '#ef4444',
   },
@@ -39,14 +39,14 @@ const CONTENT_SECTIONS: ZoneSection[] = [
   {
     href: '/zone/comics',
     title: '成人漫画',
-    description: '11个聚合源，全彩连载',
+    description: '本地/网友上传/Telegram + 8个聚合源',
     icon: <BookOpen size={28} />,
     color: '#eab308',
   },
   {
     href: '/zone/novels',
     title: '成人小说',
-    description: '7个聚合源，多分类阅读',
+    description: '本地/视觉小说/Telegram + 4个聚合源',
     icon: <FileText size={28} />,
     color: '#22c55e',
   },
@@ -60,7 +60,7 @@ const CONTENT_SECTIONS: ZoneSection[] = [
   {
     href: '/zone/music',
     title: '成人音乐',
-    description: '6个聚合源，ASMR/氛围',
+    description: '本地/Telegram + ASMR/DLsite/OnlyFans',
     icon: <Music size={28} />,
     color: '#8b5cf6',
   },
@@ -84,7 +84,7 @@ const COMMUNITY_SECTIONS: ZoneSection[] = [
   {
     href: '/zone/services',
     title: '服务点评',
-    description: '成人服务者验证与匿名点评',
+    description: '楼凤/外围/Telegram + 12个聚合源',
     icon: <ShieldAlert size={28} />,
     color: '#14b8a6',
   },

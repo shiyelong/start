@@ -87,6 +87,7 @@ p, h1, h2, h3, span, div { user-select: text; }
   .animate-shake { animation: shake 0.5s ease; }
   .animate-glow-pulse { animation: glowPulse 2s ease-in-out infinite; }
   .animate-float { animation: float 3s ease-in-out infinite; }
+  .animate-spin-slow { animation: spin 20s linear infinite; }
   .animate-shimmer {
     background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.05) 50%, transparent 100%);
     background-size: 200% 100%;
@@ -198,5 +199,96 @@ main {
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .pb-mobile-nav {
     padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ===== Game Canvas Responsive ===== */
+.game-canvas-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 100vw;
+  overflow: hidden;
+}
+
+.game-canvas-container canvas {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  touch-action: none; /* Prevent browser gestures on game canvas */
+}
+
+/* Prevent pull-to-refresh on game pages */
+.game-page {
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Game fullscreen mode */
+.game-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: #0f0f0f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.game-fullscreen canvas {
+  max-width: 100vw;
+  max-height: 100vh;
+  width: auto;
+  height: auto;
+}
+
+/* ===== Mobile Touch Optimization ===== */
+@media (max-width: 768px) {
+  /* Larger touch targets on mobile */
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Game controls spacing */
+  .game-controls button {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px;
+  }
+
+  /* Prevent text selection during gameplay */
+  .game-active {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Bottom padding for pages with mobile nav */
+  .has-mobile-nav {
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ===== High DPI Canvas ===== */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+  .game-canvas-container canvas {
+    image-rendering: auto; /* Let browser handle scaling on retina */
+  }
+}
+
+/* ===== Landscape Game Mode ===== */
+@media (orientation: landscape) and (max-height: 500px) {
+  .game-landscape-optimize {
+    padding-top: 0 !important;
+  }
+  .game-landscape-optimize header {
+    display: none;
+  }
+  .game-landscape-optimize nav {
+    display: none;
   }
 }

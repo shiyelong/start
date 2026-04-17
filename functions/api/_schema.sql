@@ -783,3 +783,118 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ai_msg_conv ON ai_messages(conversation_id);
+
+-- ============================================================
+-- 新增表 — 成人内容聚合源（NAS/上传/Telegram/外部）
+-- ============================================================
+
+-- NAS 本地视频库（通过 Cloudflare Tunnel 同步元数据）
+CREATE TABLE IF NOT EXISTS nas_videos (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  file_path TEXT NOT NULL,         -- NAS 上的相对路径（不含 IP）
+  cover_path TEXT,
+  duration INTEGER NOT NULL DEFAULT 0,
+  file_size INTEGER NOT NULL DEFAULT 0,
+  codec TEXT,
+  resolution TEXT,
+  tags TEXT DEFAULT '[]',
+  rating TEXT NOT NULL DEFAULT 'NC-17',
+  added_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nas_video_title ON nas_videos(title);
+CREATE INDEX IF NOT EXISTS idx_nas_video_added ON nas_videos(added_at);
+CREATE INDEX IF NOT EXISTS idx_nas_video_tags ON nas_videos(tags);
+
+-- NAS 本地漫画库
+CREATE TABLE IF NOT EXISTS nas_comics (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  folder_path TEXT NOT NULL,
+  cover_path TEXT,
+  page_count INTEGER NOT NULL DEFAULT 0,
+  tags TEXT DEFAULT '[]',
+  language TEXT DEFAULT 'jp',
+  rating TEXT NOT NULL DEFAULT 'NC-17',
+  added_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nas_comic_title ON nas_comics(title);
+
+-- NAS 本地小说库
+CREATE TABLE IF NOT EXISTS nas_novels (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  word_count INTEGER NOT NULL DEFAULT 0,
+  genre TEXT,
+  tags TEXT DEFAULT '[]',
+  rating TEXT NOT NULL DEFAULT 'NC-17',
+  added_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nas_novel_title ON nas_novels(title);
+
+-- NAS 本地音乐/ASMR库
+CREATE TABLE IF NOT EXISTS nas_music (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  artist TEXT,
+  duration INTEGER NOT NULL DEFAULT 0,
+  genre TEXT,
+  tags TEXT DEFAULT '[]',
+  rating TEXT NOT NULL DEFAULT 'NC-17',
+  added_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nas_music_title ON nas_music(title);
+
+-- 用户上传内容
+CREATE TABLE IF NOT EXISTS user_uploads (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  content_type TEXT NOT NULL,      -- video/comic/novel/music
+  title TEXT NOT NULL,
+  r2_key TEXT NOT NULL,            -- R2 存储键
+  cover_r2_key TEXT,
+  file_size INTEGER NOT NULL DEFAULT 0,
+  duration INTEGER,                -- 视频/音频时长
+  page_count INTEGER,              -- 漫画页数
+  word_count INTEGER,              -- 小说字数
+  tags TEXT DEFAULT '[]',
+  rating TEXT NOT NULL DEFAULT 'NC-17',
+  status TEXT NOT NULL DEFAULT 'pending', -- pending/approved/rejected
+  views INTEGER NOT NULL DEFAULT 0,
+  uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_upload_user ON user_uploads(user_id);
+CREATE INDEX IF NOT EXISTS idx_upload_type ON user_uploads(content_type);
+CREATE INDEX IF NOT EXISTS idx_upload_status ON user_uploads(status);
+
+-- Telegram 媒体内容（Bot webhook 接收后存入）
+CREATE TABLE IF NOT EXISTS telegram_media (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL REFERENCES telegram_channels(id),
+  channel_name TEXT NOT NULL,
+  message_id INTEGER NOT NULL,
+  media_type TEXT NOT NULL,        -- video/photo/animation/document/audio
+  caption TEXT,
+  file_id TEXT NOT NULL,           -- Telegram file_id
+  r2_cache_key TEXT,               -- 缓存到 R2 后的键
+  file_size INTEGER NOT NULL DEFAULT 0,
+  duration INTEGER,
+  width INTEGER,
+  height INTEGER,
+  tags TEXT DEFAULT '[]',
+  rating TEXT NOT NULL DEFAULT 'NC-17',
+  source_type TEXT NOT NULL DEFAULT 'channel', -- channel/group
+  message_date TEXT NOT NULL,
+  cached_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tg_media_channel ON telegram_media(channel_id);
+CREATE INDEX IF NOT EXISTS idx_tg_media_type ON telegram_media(media_type);
+CREATE INDEX IF NOT EXISTS idx_tg_media_date ON telegram_media(message_date);
+CREATE INDEX IF NOT EXISTS idx_tg_media_source ON telegram_media(source_type);
+
+-- 服务者来源字段（ALTER TABLE 兼容已有表）
+-- SQLite 不支持 IF NOT EXISTS 的 ALTER TABLE，用 try-catch 在代码中处理
+-- ALTER TABLE service_providers ADD COLUMN source TEXT NOT NULL DEFAULT 'user';

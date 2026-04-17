@@ -76,13 +76,34 @@ const REGION_OPTIONS: FilterOption[] = [
   { id: 'shenzhen', label: '深圳' },
   { id: 'chengdu', label: '成都' },
   { id: 'hangzhou', label: '杭州' },
+  { id: 'nanjing', label: '南京' },
+  { id: 'wuhan', label: '武汉' },
+  { id: 'chongqing', label: '重庆' },
+  { id: 'xian', label: '西安' },
+  { id: 'changsha', label: '长沙' },
+  { id: 'dongguan', label: '东莞' },
+  { id: 'foshan', label: '佛山' },
+  { id: 'zhongshan', label: '中山' },
+  { id: 'suzhou', label: '苏州' },
+  { id: 'xiamen', label: '厦门' },
+  { id: 'kunming', label: '昆明' },
+  { id: 'sanya', label: '三亚' },
   { id: 'tokyo', label: '东京' },
   { id: 'bangkok', label: '曼谷' },
+  { id: 'pattaya', label: '芭提雅' },
+  { id: 'manila', label: '马尼拉' },
+  { id: 'kualalumpur', label: '吉隆坡' },
+  { id: 'singapore', label: '新加坡' },
+  { id: 'macau', label: '澳门' },
+  { id: 'hongkong', label: '香港' },
+  { id: 'taipei', label: '台北' },
   { id: 'other', label: '其他' },
 ];
 
 const SERVICE_TYPE_OPTIONS: FilterOption[] = [
   { id: 'all', label: '全部服务' },
+  { id: 'loufeng', label: '楼凤' },
+  { id: 'waiwai', label: '外围/模特' },
   { id: 'spa', label: 'SPA/按摩' },
   { id: 'companion', label: '陪伴服务' },
   { id: 'performance', label: '表演/娱乐' },
@@ -90,9 +111,12 @@ const SERVICE_TYPE_OPTIONS: FilterOption[] = [
   { id: 'full-service', label: '全套服务' },
   { id: 'special', label: '特殊服务' },
   { id: 'multi', label: '多人服务' },
-  { id: 'long-term', label: '长期关系' },
+  { id: 'long-term', label: '长期/包养' },
   { id: 'online', label: '线上服务' },
-  { id: 'venue', label: '场所服务' },
+  { id: 'venue', label: '场所(会所/KTV)' },
+  { id: 'travel', label: '出差/旅游伴游' },
+  { id: 'student', label: '兼职学生' },
+  { id: 'housewife', label: '兼职人妻' },
 ];
 
 const VERIFICATION_OPTIONS: FilterOption[] = [
@@ -118,6 +142,25 @@ const SORT_OPTIONS: FilterOption[] = [
   { id: 'rating', label: '评分' },
   { id: 'reviews', label: '点评数' },
   { id: 'random', label: '随机' },
+];
+
+const SOURCE_TAB_OPTIONS: FilterOption[] = [
+  { id: 'all', label: '全部来源' },
+  { id: 'user', label: '用户发布' },
+  { id: 'telegram', label: 'Telegram' },
+  { id: 'verified', label: '平台认证' },
+  { id: 'agency', label: '经纪公司' },
+  { id: 'loufeng', label: '楼凤信息' },
+  { id: 'waiwai', label: '外围模特' },
+  { id: 'qm', label: 'QM百花丛' },
+  { id: 'yese', label: '夜色导航' },
+  { id: 'langhua', label: '浪花导航' },
+  { id: 'caoliu', label: '草榴社区' },
+  { id: 'sexinsex', label: 'SexInSex' },
+  { id: 'twitter', label: 'Twitter/X' },
+  { id: 'wechat', label: '微信群聚合' },
+  { id: 'tieba', label: '贴吧/论坛' },
+  { id: 'overseas', label: '海外信息站' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -153,6 +196,7 @@ interface ServiceProvider {
   city: string;
   serviceType: string;
   verificationLevel: string;
+  source: string;
   score: number;
   reviewCount: number;
   views: number;
@@ -167,11 +211,19 @@ function generateMockProviders(): ServiceProvider[] {
     '小樱', '美月', 'Lily', 'Anna', '小雪', 'Mia', '佳琪', 'Yuki',
     'Sofia', '小美', 'Emma', '心怡', 'Natasha', '小凤', 'Luna', 'Coco',
     '雅婷', 'Suki', 'Bella', '小蝶', 'Jade', '梦琪', 'Rose', '小燕',
+    '晓晓', '甜甜', 'Mika', '小柔', '安琪', 'Nana', '思思', '可可',
+    '小妮', 'Yuna', '婷婷', '小丽', 'Sora', '梦梦', '小静', 'Hana',
+    '佳佳', '小敏', 'Rina', '小芳', '小婷', 'Mei', '小萱', '小琳',
   ];
   const nationalities = NATIONALITY_OPTIONS.filter(n => n.id !== 'all').map(n => n.id);
   const regions = REGION_OPTIONS.filter(r => r.id !== 'all').map(r => r.id);
   const serviceTypes = SERVICE_TYPE_OPTIONS.filter(s => s.id !== 'all').map(s => s.id);
   const verLevels = ['full', 'community', 'health', 'video', 'none'];
+  const providerSources = [
+    'user', 'telegram', 'verified', 'agency', 'loufeng', 'waiwai',
+    'qm', 'yese', 'langhua', 'caoliu', 'sexinsex', 'twitter',
+    'wechat', 'tieba', 'overseas',
+  ];
   const avatars = [
     'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&q=80',
     'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&q=80',
@@ -189,6 +241,7 @@ function generateMockProviders(): ServiceProvider[] {
     city: REGION_OPTIONS.find(r => r.id === regions[i % regions.length])?.label || '其他',
     serviceType: serviceTypes[i % serviceTypes.length],
     verificationLevel: verLevels[i % verLevels.length],
+    source: providerSources[i % providerSources.length],
     score: Math.round((Math.random() * 2 + 3) * 10) / 10,
     reviewCount: Math.floor(Math.random() * 500) + 5,
     views: Math.floor(Math.random() * 50000) + 100,
@@ -366,6 +419,7 @@ export default function ZoneServicesPage() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [activeSource, setActiveSource] = useState('all');
   const [activeNationality, setActiveNationality] = useState('all');
   const [activeRegion, setActiveRegion] = useState('all');
   const [activeServiceType, setActiveServiceType] = useState('all');
@@ -377,6 +431,7 @@ export default function ZoneServicesPage() {
   if (!hasAccess) return <AccessDenied />;
 
   const activeFilterCount = [
+    activeSource !== 'all',
     activeNationality !== 'all',
     activeRegion !== 'all',
     activeServiceType !== 'all',
@@ -386,6 +441,7 @@ export default function ZoneServicesPage() {
 
   const filteredProviders = useMemo(() => {
     let list = [...ALL_PROVIDERS];
+    if (activeSource !== 'all') list = list.filter(p => p.source === activeSource);
     if (activeNationality !== 'all') list = list.filter(p => p.nationality === activeNationality);
     if (activeRegion !== 'all') list = list.filter(p => p.region === activeRegion);
     if (activeServiceType !== 'all') list = list.filter(p => p.serviceType === activeServiceType);
@@ -406,9 +462,10 @@ export default function ZoneServicesPage() {
       default: list.sort((a, b) => b.views * b.score - a.views * a.score); break;
     }
     return list;
-  }, [activeNationality, activeRegion, activeServiceType, activeVerification, activeRating, searchQuery, activeSort]);
+  }, [activeSource, activeNationality, activeRegion, activeServiceType, activeVerification, activeRating, searchQuery, activeSort]);
 
   const clearFilters = useCallback(() => {
+    setActiveSource('all');
     setActiveNationality('all');
     setActiveRegion('all');
     setActiveServiceType('all');
@@ -430,6 +487,23 @@ export default function ZoneServicesPage() {
         </div>
 
         {/* Search */}
+        {/* Source Tabs */}
+        <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1 scrollbar-hide">
+          {SOURCE_TAB_OPTIONS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveSource(tab.id)}
+              className={`px-3 py-1.5 rounded-full text-[12px] whitespace-nowrap border transition shrink-0 ${
+                activeSource === tab.id
+                  ? 'bg-teal-500/15 text-teal-400 border-teal-500/40 font-semibold'
+                  : 'bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
         <div className="relative mb-4">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#666]" />
           <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="搜索服务者..." className="w-full h-9 pl-9 pr-24 bg-[#1a1a1a] border border-[#333] rounded-lg text-sm text-white placeholder-[#666] outline-none focus:border-[#3ea6ff] transition" />

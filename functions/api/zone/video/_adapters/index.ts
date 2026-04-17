@@ -1,169 +1,105 @@
 /**
  * Adult video source adapter registry.
  *
- * Exports all adult video source adapters and factory functions to
- * instantiate the full set of adapters for the adult video aggregation engine.
+ * 16 adapters covering:
+ *   - 本地NAS (local library via Cloudflare Tunnel)
+ *   - 自拍上传 (user-uploaded content stored in R2)
+ *   - Telegram频道/群组 (bot-fetched media)
+ *   - 12 aggregated external sources (proxied through CF Workers)
  *
- * All 16 adapters use sanitized/generic source names (Source-A through Source-P).
- * Adapter IDs follow the pattern "adult-src-1" through "adult-src-16".
- * All sources are forced NC-17 rating — hardcoded, never overridable.
- * All traffic goes through Cloudflare Workers proxy.
- *
- * Validates: Requirements 17.1, 17.2, 17.3, 17.5, 17.7, 17.8, 17.9
+ * All sources forced NC-17. All traffic through Cloudflare Workers proxy.
  */
 
 import type { ISourceAdapter } from '../../../_lib/source-adapter';
 import { GenericAdultVideoAdapter } from './generic-adult-video-adapter';
 import type { GenericAdultVideoAdapterOptions } from './generic-adult-video-adapter';
+import { NasVideoAdapter } from './nas-video-adapter';
+import { UserUploadVideoAdapter } from './user-upload-video-adapter';
+import { TelegramVideoAdapter } from './telegram-video-adapter';
 
-// Re-export for consumers
 export { GenericAdultVideoAdapter } from './generic-adult-video-adapter';
 
-/**
- * Adult video source definitions.
- * Each entry creates a GenericAdultVideoAdapter with source-specific config.
- * All sources are NC-17 rated — enforced by the adapter class.
- *
- * Source names are sanitized (Source-A through Source-P) to avoid
- * explicit site names in code. IDs use "adult-src-N" pattern.
- */
-const ADULT_VIDEO_SOURCES: GenericAdultVideoAdapterOptions[] = [
-  {
-    id: 'adult-src-1',
-    name: 'Source-A',
-    priority: 10,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-1/search',
-    platform: 'adult-src-1',
-  },
-  {
-    id: 'adult-src-2',
-    name: 'Source-B',
-    priority: 11,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-2/search',
-    platform: 'adult-src-2',
-  },
-  {
-    id: 'adult-src-3',
-    name: 'Source-C',
-    priority: 12,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-3/search',
-    platform: 'adult-src-3',
-  },
-  {
-    id: 'adult-src-4',
-    name: 'Source-D',
-    priority: 13,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-4/search',
-    platform: 'adult-src-4',
-  },
-  {
-    id: 'adult-src-5',
-    name: 'Source-E',
-    priority: 14,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-5/search',
-    platform: 'adult-src-5',
-  },
-  {
-    id: 'adult-src-6',
-    name: 'Source-F',
-    priority: 15,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-6/search',
-    platform: 'adult-src-6',
-  },
-  {
-    id: 'adult-src-7',
-    name: 'Source-G',
-    priority: 16,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-7/search',
-    platform: 'adult-src-7',
-  },
-  {
-    id: 'adult-src-8',
-    name: 'Source-H',
-    priority: 17,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-8/search',
-    platform: 'adult-src-8',
-  },
-  {
-    id: 'adult-src-9',
-    name: 'Source-I',
-    priority: 18,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-9/search',
-    platform: 'adult-src-9',
-  },
-  {
-    id: 'adult-src-10',
-    name: 'Source-J',
-    priority: 19,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-10/search',
-    platform: 'adult-src-10',
-  },
-  {
-    id: 'adult-src-11',
-    name: 'Source-K',
-    priority: 20,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-11/search',
-    platform: 'adult-src-11',
-  },
-  {
-    id: 'adult-src-12',
-    name: 'Source-L',
-    priority: 21,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-12/search',
-    platform: 'adult-src-12',
-  },
-  {
-    id: 'adult-src-13',
-    name: 'Source-M',
-    priority: 22,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-13/search',
-    platform: 'adult-src-13',
-  },
-  {
-    id: 'adult-src-14',
-    name: 'Source-N',
-    priority: 23,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-14/search',
-    platform: 'adult-src-14',
-  },
-  {
-    id: 'adult-src-15',
-    name: 'Source-O',
-    priority: 24,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-15/search',
-    platform: 'adult-src-15',
-  },
-  {
-    id: 'adult-src-16',
-    name: 'Source-P',
-    priority: 25,
-    searchUrl: 'https://cf-proxy.workers.dev/adult/src-16/search',
-    platform: 'adult-src-16',
-  },
+// ---------------------------------------------------------------------------
+// Source definitions — real names, real proxy endpoints
+// ---------------------------------------------------------------------------
+
+/** Local NAS library — served via Cloudflare Tunnel, never direct */
+const NAS_SOURCE = {
+  id: 'adult-nas',
+  name: '本地NAS',
+  priority: 1,
+};
+
+/** User-uploaded self-shot content — stored in R2 */
+const UPLOAD_SOURCE = {
+  id: 'adult-upload',
+  name: '自拍上传',
+  priority: 2,
+};
+
+/** Telegram channels/groups — fetched via bot API */
+const TELEGRAM_SOURCES = [
+  { id: 'adult-tg-channel', name: 'Telegram频道', priority: 3, platform: 'telegram-channel' },
+  { id: 'adult-tg-group', name: 'Telegram群组', priority: 4, platform: 'telegram-group' },
 ];
 
-/**
- * Create all adult video source adapters.
- *
- * Returns an array of 16 ISourceAdapter instances, all NC-17 rated,
- * ready to be registered with the AggregatorEngine.
- */
+/** External aggregated sources — all proxied through CF Workers */
+const AGGREGATED_SOURCES: GenericAdultVideoAdapterOptions[] = [
+  { id: 'adult-pornhub', name: 'Pornhub', priority: 10, searchUrl: 'https://cf-proxy.workers.dev/adult/pornhub/search', platform: 'pornhub' },
+  { id: 'adult-xvideos', name: 'XVideos', priority: 11, searchUrl: 'https://cf-proxy.workers.dev/adult/xvideos/search', platform: 'xvideos' },
+  { id: 'adult-xnxx', name: 'XNXX', priority: 12, searchUrl: 'https://cf-proxy.workers.dev/adult/xnxx/search', platform: 'xnxx' },
+  { id: 'adult-javbus', name: 'JavBus', priority: 13, searchUrl: 'https://cf-proxy.workers.dev/adult/javbus/search', platform: 'javbus' },
+  { id: 'adult-missav', name: 'Missav', priority: 14, searchUrl: 'https://cf-proxy.workers.dev/adult/missav/search', platform: 'missav' },
+  { id: 'adult-thisav', name: 'ThisAV', priority: 15, searchUrl: 'https://cf-proxy.workers.dev/adult/thisav/search', platform: 'thisav' },
+  { id: 'adult-jable', name: 'Jable', priority: 16, searchUrl: 'https://cf-proxy.workers.dev/adult/jable/search', platform: 'jable' },
+  { id: 'adult-avgle', name: 'Avgle', priority: 17, searchUrl: 'https://cf-proxy.workers.dev/adult/avgle/search', platform: 'avgle' },
+  { id: 'adult-spankbang', name: 'SpankBang', priority: 18, searchUrl: 'https://cf-proxy.workers.dev/adult/spankbang/search', platform: 'spankbang' },
+  { id: 'adult-hentaihaven', name: 'HentaiHaven', priority: 19, searchUrl: 'https://cf-proxy.workers.dev/adult/hentaihaven/search', platform: 'hentaihaven' },
+  { id: 'adult-hanime', name: 'Hanime', priority: 20, searchUrl: 'https://cf-proxy.workers.dev/adult/hanime/search', platform: 'hanime' },
+  { id: 'adult-r18', name: 'R18', priority: 21, searchUrl: 'https://cf-proxy.workers.dev/adult/r18/search', platform: 'r18' },
+];
+
+// ---------------------------------------------------------------------------
+// Factory functions
+// ---------------------------------------------------------------------------
+
 export function createAllAdultVideoAdapters(): ISourceAdapter[] {
-  return ADULT_VIDEO_SOURCES.map((opts) => new GenericAdultVideoAdapter(opts));
+  const adapters: ISourceAdapter[] = [];
+
+  // Local NAS
+  adapters.push(new NasVideoAdapter(NAS_SOURCE));
+
+  // User uploads
+  adapters.push(new UserUploadVideoAdapter(UPLOAD_SOURCE));
+
+  // Telegram
+  for (const tg of TELEGRAM_SOURCES) {
+    adapters.push(new TelegramVideoAdapter(tg));
+  }
+
+  // External aggregated
+  for (const opts of AGGREGATED_SOURCES) {
+    adapters.push(new GenericAdultVideoAdapter(opts));
+  }
+
+  return adapters;
 }
 
-/**
- * Create a single adult video adapter by source ID.
- *
- * Useful for detail/stream endpoints that need to resolve a specific source.
- */
 export function getAdultVideoAdapterById(sourceId: string): ISourceAdapter | null {
-  const opts = ADULT_VIDEO_SOURCES.find((s) => s.id === sourceId);
-  if (opts) return new GenericAdultVideoAdapter(opts);
+  if (sourceId === NAS_SOURCE.id) return new NasVideoAdapter(NAS_SOURCE);
+  if (sourceId === UPLOAD_SOURCE.id) return new UserUploadVideoAdapter(UPLOAD_SOURCE);
+  const tg = TELEGRAM_SOURCES.find(s => s.id === sourceId);
+  if (tg) return new TelegramVideoAdapter(tg);
+  const agg = AGGREGATED_SOURCES.find(s => s.id === sourceId);
+  if (agg) return new GenericAdultVideoAdapter(agg);
   return null;
 }
 
-/** Get all registered adult video source IDs. */
 export function getAllAdultVideoSourceIds(): string[] {
-  return ADULT_VIDEO_SOURCES.map((s) => s.id);
+  return [
+    NAS_SOURCE.id,
+    UPLOAD_SOURCE.id,
+    ...TELEGRAM_SOURCES.map(s => s.id),
+    ...AGGREGATED_SOURCES.map(s => s.id),
+  ];
 }

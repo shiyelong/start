@@ -102,6 +102,25 @@ const SORT_OPTIONS: FilterOption[] = [
   { id: 'random', label: '随机' },
 ];
 
+const SOURCE_TAB_OPTIONS: FilterOption[] = [
+  { id: 'all', label: '全部来源' },
+  { id: 'local', label: '本地NAS' },
+  { id: 'self-shot', label: '自拍上传' },
+  { id: 'telegram', label: 'Telegram' },
+  { id: 'pornhub', label: 'Pornhub' },
+  { id: 'xvideos', label: 'XVideos' },
+  { id: 'javbus', label: 'JavBus' },
+  { id: 'missav', label: 'Missav' },
+  { id: 'thisav', label: 'ThisAV' },
+  { id: 'jable', label: 'Jable' },
+  { id: 'avgle', label: 'Avgle' },
+  { id: 'spankbang', label: 'SpankBang' },
+  { id: 'hentai', label: 'HentaiHaven' },
+  { id: 'hanime', label: 'Hanime' },
+  { id: 'r18', label: 'R18' },
+  { id: 'xnxx', label: 'XNXX' },
+];
+
 // ---------------------------------------------------------------------------
 // Mock data
 // ---------------------------------------------------------------------------
@@ -194,7 +213,12 @@ function generateMockAdultVideos(): AdultVideo[] {
     '录音棚', '化妆间', '更衣室', '休息室',
   ];
 
-  const sources = ['Source-A', 'Source-B', 'Source-C', 'Source-D', 'Source-E'];
+  const sources = [
+    '本地NAS', '自拍上传', 'Telegram频道', 'Telegram群组',
+    'Pornhub', 'XVideos', 'XNXX', 'JavBus',
+    'Missav', 'ThisAV', 'Jable', 'Avgle',
+    'SpankBang', 'HentaiHaven', 'Hanime', 'R18',
+  ];
 
   const covers = [
     'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=400&q=80',
@@ -351,6 +375,7 @@ export default function ZoneVideosPage() {
   // --- Filter state ---
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [activeSource, setActiveSource] = useState('all');
   const [activeRegion, setActiveRegion] = useState('all');
   const [activeVideoType, setActiveVideoType] = useState('all');
   const [activeQuality, setActiveQuality] = useState('all');
@@ -401,6 +426,7 @@ export default function ZoneVideosPage() {
 
   // --- Active filter count ---
   const activeFilterCount = [
+    activeSource !== 'all',
     activeRegion !== 'all',
     activeVideoType !== 'all',
     activeQuality !== 'all',
@@ -412,6 +438,10 @@ export default function ZoneVideosPage() {
   const filteredVideos = useMemo(() => {
     let list = [...ALL_ADULT_VIDEOS];
 
+    if (activeSource !== 'all') {
+      const sourceLabel = SOURCE_TAB_OPTIONS.find(s => s.id === activeSource)?.label || '';
+      list = list.filter((v) => v.source === sourceLabel);
+    }
     if (activeRegion !== 'all') {
       list = list.filter((v) => v.region === activeRegion);
     }
@@ -465,7 +495,7 @@ export default function ZoneVideosPage() {
     }
 
     return list;
-  }, [activeRegion, activeVideoType, activeQuality, activeDuration, searchQuery, activeSort, selectedTags]);
+  }, [activeSource, activeRegion, activeVideoType, activeQuality, activeDuration, searchQuery, activeSort, selectedTags]);
 
   // --- AutoPlay candidate ---
   const autoPlayCandidate = useMemo<AutoPlayCandidate | null>(() => {
@@ -534,6 +564,7 @@ export default function ZoneVideosPage() {
   }, []);
 
   const clearFilters = useCallback(() => {
+    setActiveSource('all');
     setActiveRegion('all');
     setActiveVideoType('all');
     setActiveQuality('all');
@@ -553,6 +584,23 @@ export default function ZoneVideosPage() {
             <span>成人视频专区</span>
             <RatingBadge rating="NC-17" size="md" />
           </h1>
+        </div>
+
+        {/* ===== Source Tabs ===== */}
+        <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1 scrollbar-hide">
+          {SOURCE_TAB_OPTIONS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveSource(tab.id)}
+              className={`px-3 py-1.5 rounded-full text-[12px] whitespace-nowrap border transition shrink-0 ${
+                activeSource === tab.id
+                  ? 'bg-red-500/15 text-red-400 border-red-500/40 font-semibold'
+                  : 'bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {/* ===== Search Bar ===== */}
@@ -747,11 +795,12 @@ export default function ZoneVideosPage() {
         </div>
 
         {/* ===== Active filter summary ===== */}
-        {(activeRegion !== 'all' || activeVideoType !== 'all' || activeQuality !== 'all' || activeDuration !== 'all' || searchQuery || selectedTags.length > 0) && (
+        {(activeSource !== 'all' || activeRegion !== 'all' || activeVideoType !== 'all' || activeQuality !== 'all' || activeDuration !== 'all' || searchQuery || selectedTags.length > 0) && (
           <div className="flex items-center gap-2 mb-3 text-[12px] text-[#888]">
             <SlidersHorizontal size={12} />
             <span>
-              {activeRegion !== 'all' && REGION_OPTIONS.find(r => r.id === activeRegion)?.label}
+              {activeSource !== 'all' && SOURCE_TAB_OPTIONS.find(s => s.id === activeSource)?.label}
+              {activeRegion !== 'all' && ` · ${REGION_OPTIONS.find(r => r.id === activeRegion)?.label}`}
               {activeVideoType !== 'all' && ` · ${VIDEO_TYPE_OPTIONS.find(t => t.id === activeVideoType)?.label}`}
               {activeQuality !== 'all' && ` · ${QUALITY_OPTIONS.find(q => q.id === activeQuality)?.label}`}
               {activeDuration !== 'all' && ` · ${DURATION_OPTIONS.find(d => d.id === activeDuration)?.label}`}

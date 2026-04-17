@@ -100,7 +100,7 @@ export default function MobileGameShell({
   return (
     <div
       ref={containerRef}
-      className={`relative bg-[#0f0f0f] ${isFull ? "fixed inset-0 z-[9999]" : "min-h-0"}`}
+      className={`relative bg-[#0f0f0f] game-page game-active ${isFull ? "game-fullscreen" : "min-h-0"}`}
       onTouchStart={isFull ? showBar : undefined}
       onMouseMove={isFull ? showBar : undefined}
     >
@@ -113,7 +113,7 @@ export default function MobileGameShell({
       >
         <button
           onClick={handleBack}
-          className="p-2 -ml-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 active:bg-white/10 transition"
+          className="p-2 -ml-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 active:bg-white/10 transition touch-target"
           aria-label="返回"
         >
           <ArrowLeft size={20} />
@@ -126,7 +126,7 @@ export default function MobileGameShell({
         {onToggleMute && (
           <button
             onClick={onToggleMute}
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 active:bg-white/10 transition"
+            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 active:bg-white/10 transition touch-target"
             aria-label={muted ? "开启音效" : "关闭音效"}
           >
             {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
@@ -136,7 +136,7 @@ export default function MobileGameShell({
         {allowFullscreen && (
           <button
             onClick={toggleFullscreen}
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 active:bg-white/10 transition"
+            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 active:bg-white/10 transition touch-target"
             aria-label={isFull ? "退出全屏" : "全屏"}
           >
             {isFull ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
@@ -145,7 +145,7 @@ export default function MobileGameShell({
       </div>
 
       {/* 游戏内容 */}
-      <div className={isFull ? "w-full h-full" : ""}>
+      <div className={`game-canvas-container ${isFull ? "w-full h-full flex items-center justify-center" : ""}`}>
         {children}
       </div>
 

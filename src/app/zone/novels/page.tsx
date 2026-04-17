@@ -99,6 +99,17 @@ const SORT_OPTIONS: FilterOption[] = [
   { id: 'favorites', label: '收藏数' },
 ];
 
+const SOURCE_TAB_OPTIONS: FilterOption[] = [
+  { id: 'all', label: '全部来源' },
+  { id: 'local', label: '本地NAS' },
+  { id: 'upload', label: '网友上传' },
+  { id: 'telegram', label: 'Telegram' },
+  { id: '69shu', label: '69书吧' },
+  { id: 'biquge', label: '笔趣阁' },
+  { id: 'dlsite', label: 'DLsite' },
+  { id: 'vndb', label: 'VNDB' },
+];
+
 // ---------------------------------------------------------------------------
 // Mock data
 // ---------------------------------------------------------------------------
@@ -148,8 +159,8 @@ function generateMockAdultNovels(): AdultNovel[] {
   ];
 
   const sources = [
-    'Source-A', 'Source-B', 'Source-C', 'Source-D',
-    'Source-E', 'Source-F', 'Source-G',
+    '本地NAS', '网友上传', 'Telegram频道', '69书吧',
+    '笔趣阁', 'DLsite', 'VNDB',
   ];
 
   const covers = [
@@ -320,6 +331,7 @@ export default function ZoneNovelsPage() {
   // --- Filter state ---
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [activeSource, setActiveSource] = useState('all');
   const [activeGenre, setActiveGenre] = useState('all');
   const [activeLanguage, setActiveLanguage] = useState('all');
   const [activeWordCount, setActiveWordCount] = useState('all');
@@ -336,6 +348,7 @@ export default function ZoneNovelsPage() {
 
   // --- Active filter count ---
   const activeFilterCount = [
+    activeSource !== 'all',
     activeGenre !== 'all',
     activeLanguage !== 'all',
     activeWordCount !== 'all',
@@ -346,6 +359,10 @@ export default function ZoneNovelsPage() {
   const filteredNovels = useMemo(() => {
     let list = [...ALL_ADULT_NOVELS];
 
+    if (activeSource !== 'all') {
+      const sourceLabel = SOURCE_TAB_OPTIONS.find(s => s.id === activeSource)?.label || '';
+      list = list.filter((n) => n.source === sourceLabel);
+    }
     if (activeGenre !== 'all') {
       list = list.filter((n) => n.genre === activeGenre);
     }
@@ -389,7 +406,7 @@ export default function ZoneNovelsPage() {
     }
 
     return list;
-  }, [activeGenre, activeLanguage, activeWordCount, activeStatus, searchQuery, activeSort]);
+  }, [activeSource, activeGenre, activeLanguage, activeWordCount, activeStatus, searchQuery, activeSort]);
 
   // --- Handlers ---
   const handleReadNovel = useCallback((novel: AdultNovel) => {
@@ -434,6 +451,23 @@ export default function ZoneNovelsPage() {
             <p className="text-xs text-[#8a8a8a] mt-0.5">互动剧情叙事，分支选择体验</p>
           </div>
         </a>
+
+        {/* ===== Source Tabs ===== */}
+        <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1 scrollbar-hide">
+          {SOURCE_TAB_OPTIONS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveSource(tab.id)}
+              className={`px-3 py-1.5 rounded-full text-[12px] whitespace-nowrap border transition shrink-0 ${
+                activeSource === tab.id
+                  ? 'bg-green-500/15 text-green-400 border-green-500/40 font-semibold'
+                  : 'bg-transparent text-[#888] border-[#333] hover:text-white hover:border-[#555]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
         {/* ===== Search Bar ===== */}
         <div className="relative mb-4">
