@@ -174,27 +174,38 @@ describe('AgeGate.filterContent', () => {
 // ---------------------------------------------------------------------------
 
 describe('AgeGate.switchMode', () => {
-  it('returns false when no PIN has been set', async () => {
+  it('returns true without PIN when switching to lower privilege (adult→child)', async () => {
+    // Default mode is adult; switching to child is going down — no PIN needed
     const gate = new AgeGate();
-    const ok = await gate.switchMode('child', '123456');
-    expect(ok).toBe(false);
-    expect(gate.getMode()).toBe('adult'); // unchanged
-  });
-
-  it('returns false for wrong PIN', async () => {
-    const gate = new AgeGate();
-    await gate.setPin('123456');
-    const ok = await gate.switchMode('child', '000000');
-    expect(ok).toBe(false);
-    expect(gate.getMode()).toBe('adult');
-  });
-
-  it('returns true and changes mode for correct PIN', async () => {
-    const gate = new AgeGate();
-    await gate.setPin('123456');
-    const ok = await gate.switchMode('child', '123456');
+    const ok = await gate.switchMode('child', '');
     expect(ok).toBe(true);
     expect(gate.getMode()).toBe('child');
+  });
+
+  it('returns false when going up and no PIN has been set', async () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'child');
+    const gate = new AgeGate();
+    const ok = await gate.switchMode('adult', '123456');
+    expect(ok).toBe(false);
+    expect(gate.getMode()).toBe('child'); // unchanged
+  });
+
+  it('returns false for wrong PIN when going up', async () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'child');
+    const gate = new AgeGate();
+    await gate.setPin('123456');
+    const ok = await gate.switchMode('adult', '000000');
+    expect(ok).toBe(false);
+    expect(gate.getMode()).toBe('child');
+  });
+
+  it('returns true and changes mode for correct PIN when going up', async () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'child');
+    const gate = new AgeGate();
+    await gate.setPin('123456');
+    const ok = await gate.switchMode('adult', '123456');
+    expect(ok).toBe(true);
+    expect(gate.getMode()).toBe('adult');
   });
 
   it('persists the new mode to localStorage', async () => {
@@ -202,6 +213,20 @@ describe('AgeGate.switchMode', () => {
     await gate.setPin('999999');
     await gate.switchMode('teen', '999999');
     expect(localStorageMock.getItem('starhub_age_gate_mode')).toBe('teen');
+  });
+
+  it('logs mode switch on successful switch', async () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'child');
+    const gate = new AgeGate();
+    await gate.setPin('123456');
+    await gate.switchMode('adult', '123456');
+    const raw = localStorageMock.getItem('starhub_mode_switch_log');
+    expect(raw).not.toBeNull();
+    const log = JSON.parse(raw!);
+    expect(log).toHaveLength(1);
+    expect(log[0].fromMode).toBe('child');
+    expect(log[0].toMode).toBe('adult');
+    expect(log[0].switchedAt).toBeDefined();
   });
 });
 
@@ -263,5 +288,186 @@ describe('AgeGate.setPin', () => {
     await gate.setPin('123456');
     const stored = localStorageMock.getItem('starhub_age_gate_pin');
     expect(stored).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AgeGate.getNavConfig
+// ---------------------------------------------------------------------------
+
+describe('AgeGate.getNavConfig', () => {
+  it('returns child config with child-friendly sections', () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'child');
+    const gate = new AgeGate();
+    const config = gate.getNavConfig();
+    expect(config.mode).toBe('child');
+    expect(config.visibleSections).toEqual(['动画片', '儿歌', '益智游戏']);
+    expect(config.hiddenRatings).toEqual(['PG', 'PG-13', 'R', 'NC-17']);
+    expect(config.searchBlacklist.length).toBeGreaterThan(0);
+    expect(config.uiStyle).toBe('child');
+  });
+
+  it('returns teen config with standard sections minus adult', () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'teen');
+    const gate = new AgeGate();
+    const config = gate.getNavConfig();
+    expect(config.mode).toBe('teen');
+    expect(config.visibleSections).toContain('视频');
+    expect(config.visibleSections).not.toContain('成人专区');
+    expect(config.hiddenRatings).toEqual(['R', 'NC-17']);
+    expect(config.uiStyle).toBe('teen');
+  });
+
+  it('returns mature config hiding only NC-17', () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'mature');
+    const gate = new AgeGate();
+    const config = gate.getNavConfig();
+    expect(config.mode).toBe('mature');
+    expect(config.hiddenRatings).toEqual(['NC-17']);
+    expect(config.visibleSections).not.toContain('成人专区');
+    expect(config.uiStyle).toBe('standard');
+  });
+
+  it('returns adult config with all sections including adult zone', () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'adult');
+    const gate = new AgeGate();
+    const config = gate.getNavConfig();
+    expect(config.mode).toBe('adult');
+    expect(config.visibleSections).toContain('成人专区');
+    expect(config.hiddenRatings).toEqual([]);
+    expect(config.uiStyle).toBe('adult');
+  });
+
+  it('returns elder config with simplified sections', () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'elder');
+    const gate = new AgeGate();
+    const config = gate.getNavConfig();
+    expect(config.mode).toBe('elder');
+    expect(config.visibleSections).toEqual(['看电视', '听音乐', '听戏曲', '看新闻']);
+    expect(config.hiddenRatings).toEqual(['PG-13', 'R', 'NC-17']);
+    expect(config.uiStyle).toBe('elder');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AgeGate.getPinLockStatus
+// ---------------------------------------------------------------------------
+
+describe('AgeGate.getPinLockStatus', () => {
+  it('returns unlocked when no failures recorded', () => {
+    const gate = new AgeGate();
+    const status = gate.getPinLockStatus();
+    expect(status.locked).toBe(false);
+    expect(status.remainingSeconds).toBe(0);
+  });
+
+  it('returns locked after 3 consecutive PIN failures', async () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'child');
+    const gate = new AgeGate();
+    await gate.setPin('123456');
+
+    // 3 wrong attempts
+    await gate.switchMode('adult', 'wrong1');
+    await gate.switchMode('adult', 'wrong2');
+    await gate.switchMode('adult', 'wrong3');
+
+    const status = gate.getPinLockStatus();
+    expect(status.locked).toBe(true);
+    expect(status.remainingSeconds).toBeGreaterThan(0);
+    expect(status.remainingSeconds).toBeLessThanOrEqual(1800);
+  });
+
+  it('blocks switchMode when locked', async () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'child');
+    const gate = new AgeGate();
+    await gate.setPin('123456');
+
+    // Trigger lockout
+    await gate.switchMode('adult', 'wrong1');
+    await gate.switchMode('adult', 'wrong2');
+    await gate.switchMode('adult', 'wrong3');
+
+    // Even correct PIN should fail while locked
+    const ok = await gate.switchMode('adult', '123456');
+    expect(ok).toBe(false);
+    expect(gate.getMode()).toBe('child');
+  });
+
+  it('returns unlocked after lock expires', () => {
+    const gate = new AgeGate();
+    // Set a lock that already expired
+    localStorageMock.setItem('starhub_pin_locked_until', String(Date.now() - 1000));
+    localStorageMock.setItem('starhub_pin_fail_count', '3');
+
+    const status = gate.getPinLockStatus();
+    expect(status.locked).toBe(false);
+    expect(status.remainingSeconds).toBe(0);
+    // Should have cleaned up
+    expect(localStorageMock.getItem('starhub_pin_locked_until')).toBeNull();
+    expect(localStorageMock.getItem('starhub_pin_fail_count')).toBeNull();
+  });
+
+  it('resets failure count on successful PIN', async () => {
+    localStorageMock.setItem('starhub_age_gate_mode', 'child');
+    const gate = new AgeGate();
+    await gate.setPin('123456');
+
+    // 2 wrong attempts (not yet locked)
+    await gate.switchMode('adult', 'wrong1');
+    await gate.switchMode('adult', 'wrong2');
+    expect(localStorageMock.getItem('starhub_pin_fail_count')).toBe('2');
+
+    // Correct PIN resets counter
+    await gate.switchMode('adult', '123456');
+    expect(localStorageMock.getItem('starhub_pin_fail_count')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AgeGate.logModeSwitch
+// ---------------------------------------------------------------------------
+
+describe('AgeGate.logModeSwitch', () => {
+  it('stores a mode switch entry in localStorage', () => {
+    const gate = new AgeGate();
+    gate.logModeSwitch('adult', 'child');
+
+    const raw = localStorageMock.getItem('starhub_mode_switch_log');
+    expect(raw).not.toBeNull();
+    const log = JSON.parse(raw!);
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({ fromMode: 'adult', toMode: 'child' });
+    expect(log[0].switchedAt).toBeDefined();
+  });
+
+  it('appends multiple entries', () => {
+    const gate = new AgeGate();
+    gate.logModeSwitch('adult', 'child');
+    gate.logModeSwitch('child', 'teen');
+
+    const log = JSON.parse(localStorageMock.getItem('starhub_mode_switch_log')!);
+    expect(log).toHaveLength(2);
+    expect(log[0].toMode).toBe('child');
+    expect(log[1].toMode).toBe('teen');
+  });
+
+  it('keeps only the last 100 entries', () => {
+    const gate = new AgeGate();
+    // Write 105 entries
+    for (let i = 0; i < 105; i++) {
+      gate.logModeSwitch('adult', 'child');
+    }
+
+    const log = JSON.parse(localStorageMock.getItem('starhub_mode_switch_log')!);
+    expect(log).toHaveLength(100);
+  });
+
+  it('handles corrupted log data gracefully', () => {
+    localStorageMock.setItem('starhub_mode_switch_log', 'not-json');
+    const gate = new AgeGate();
+    gate.logModeSwitch('adult', 'child');
+
+    const log = JSON.parse(localStorageMock.getItem('starhub_mode_switch_log')!);
+    expect(log).toHaveLength(1);
   });
 });

@@ -154,3 +154,90 @@ export function isRatingAllowed(
   if (maxIndex === -1 || contentIndex === -1) return false;
   return contentIndex <= maxIndex;
 }
+
+// ── Rating colors (Requirement 14.21) ─────────────────────────
+
+/** MPAA 分级标签颜色映射 */
+export const RATING_COLORS: Record<ContentRating, string> = {
+  'G': '#22c55e',
+  'PG': '#3b82f6',
+  'PG-13': '#eab308',
+  'R': '#f97316',
+  'NC-17': '#ef4444',
+};
+
+/**
+ * Return the hex color for a given MPAA rating.
+ */
+export function getRatingColor(rating: ContentRating): string {
+  return RATING_COLORS[rating] ?? '#6b7280';
+}
+
+// ── Content type rating rules (Requirement 14.17) ─────────────
+
+/** 每种内容类型的细化分级规则 */
+export type SourceTypeKey = 'video' | 'music' | 'comic' | 'novel' | 'game' | 'live' | 'podcast';
+
+export interface ContentRatingRule {
+  description: string;
+  rating: ContentRating;
+}
+
+const CONTENT_RATING_RULES: Record<SourceTypeKey, ContentRatingRule[]> = {
+  video: [
+    { description: '无暴力无性暗示', rating: 'G' },
+    { description: '轻微暴力或轻微粗口', rating: 'PG' },
+    { description: '较强暴力或轻微性暗示或频繁粗口', rating: 'PG-13' },
+    { description: '明显暴力或性场景或大量粗口', rating: 'R' },
+    { description: '明确色情内容', rating: 'NC-17' },
+  ],
+  music: [
+    { description: '纯音乐/儿歌', rating: 'G' },
+    { description: '流行/摇滚/民谣', rating: 'PG' },
+    { description: '含轻微粗口或暗示歌词', rating: 'PG-13' },
+    { description: '含明显粗口或性暗示歌词（Explicit标记）', rating: 'R' },
+    { description: '成人ASMR/音声作品/成人广播剧', rating: 'NC-17' },
+  ],
+  comic: [
+    { description: '儿童漫画/全年龄', rating: 'G' },
+    { description: '少年漫画/轻微暴力', rating: 'PG' },
+    { description: '较强暴力或轻微性暗示', rating: 'PG-13' },
+    { description: '明显暴力或性暗示', rating: 'R' },
+    { description: '成人漫画/里番', rating: 'NC-17' },
+  ],
+  novel: [
+    { description: '儿童文学', rating: 'G' },
+    { description: '青少年文学', rating: 'PG' },
+    { description: '含暴力或轻微性描写', rating: 'PG-13' },
+    { description: '含明显暴力或性描写', rating: 'R' },
+    { description: '成人小说/情色文学', rating: 'NC-17' },
+  ],
+  game: [
+    { description: 'ESRB E', rating: 'G' },
+    { description: 'ESRB E10+', rating: 'PG' },
+    { description: 'ESRB T', rating: 'PG-13' },
+    { description: 'ESRB M', rating: 'R' },
+    { description: 'ESRB AO 或成人游戏', rating: 'NC-17' },
+  ],
+  live: [
+    { description: '教育/知识/户外', rating: 'G' },
+    { description: '娱乐/游戏', rating: 'PG' },
+    { description: '含轻微暴力游戏或擦边内容', rating: 'PG-13' },
+    { description: '含明显暴力或性暗示', rating: 'R' },
+    { description: '成人直播', rating: 'NC-17' },
+  ],
+  podcast: [
+    { description: '教育/科技/新闻', rating: 'G' },
+    { description: '娱乐/访谈', rating: 'PG' },
+    { description: '含粗口或敏感话题', rating: 'PG-13' },
+    { description: '含明显粗口或性话题（Explicit标记）', rating: 'R' },
+    { description: '成人播客/性教育/成人故事', rating: 'NC-17' },
+  ],
+};
+
+/**
+ * Return the detailed rating rules for a given content type.
+ */
+export function getContentRatingRules(contentType: SourceTypeKey): ContentRatingRule[] {
+  return CONTENT_RATING_RULES[contentType] ?? [];
+}

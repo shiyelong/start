@@ -898,3 +898,121 @@ CREATE INDEX IF NOT EXISTS idx_tg_media_source ON telegram_media(source_type);
 -- 服务者来源字段（ALTER TABLE 兼容已有表）
 -- SQLite 不支持 IF NOT EXISTS 的 ALTER TABLE，用 try-catch 在代码中处理
 -- ALTER TABLE service_providers ADD COLUMN source TEXT NOT NULL DEFAULT 'user';
+
+-- ============================================================
+-- Phase 1 扩展表：刮削引擎 + TTS + 家长控制日志
+-- ============================================================
+
+-- 刮削规则配置（关联 source_config）
+CREATE TABLE IF NOT EXISTS scrape_rules (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES source_config(id),
+  content_type TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  interval_seconds INTEGER NOT NULL DEFAULT 21600,
+  depth TEXT NOT NULL DEFAULT 'first-page',
+  max_pages INTEGER NOT NULL DEFAULT 5,
+  keywords TEXT NOT NULL DEFAULT '[]',
+  tags TEXT NOT NULL DEFAULT '[]',
+  min_rating REAL NOT NULL DEFAULT 0,
+  quality_preference TEXT NOT NULL DEFAULT '1080p>720p>480p',
+  max_concurrent INTEGER NOT NULL DEFAULT 3,
+  daily_limit_mb INTEGER NOT NULL DEFAULT 50000,
+  max_items_per_run INTEGER NOT NULL DEFAULT 100,
+  last_scraped_at TEXT,
+  next_scheduled_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sr_source ON scrape_rules(source_id);
+CREATE INDEX IF NOT EXISTS idx_sr_type ON scrape_rules(content_type);
+CREATE INDEX IF NOT EXISTS idx_sr_enabled ON scrape_rules(enabled);
+CREATE INDEX IF NOT EXISTS idx_sr_next ON scrape_rules(next_scheduled_at);
+
+-- 刮削任务跟踪
+CREATE TABLE IF NOT EXISTS scrape_tasks (
+  id TEXT PRIMARY KEY,
+  rule_id TEXT NOT NULL REFERENCES scrape_rules(id),
+  source_id TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  progress INTEGER NOT NULL DEFAULT 0,
+  items_found INTEGER NOT NULL DEFAULT 0,
+  items_downloaded INTEGER NOT NULL DEFAULT 0,
+  bytes_downloaded INTEGER NOT NULL DEFAULT 0,
+  errors TEXT NOT NULL DEFAULT '[]',
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_st_rule ON scrape_tasks(rule_id);
+CREATE INDEX IF NOT EXISTS idx_st_type ON scrape_tasks(content_type);
+CREATE INDEX IF NOT EXISTS idx_st_status ON scrape_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_st_started ON scrape_tasks(started_at);
+
+-- 成人内容存储配额（按内容类型）
+CREATE TABLE IF NOT EXISTS adult_storage_quota (
+  content_type TEXT PRIMARY KEY,
+  quota_mb INTEGER NOT NULL DEFAULT 50000,
+  used_mb INTEGER NOT NULL DEFAULT 0,
+  item_count INTEGER NOT NULL DEFAULT 0,
+  last_cleanup_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- TTS 有声小说生成任务
+CREATE TABLE IF NOT EXISTS tts_tasks (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  chapter_id TEXT NOT NULL,
+  cache_key TEXT NOT NULL,
+  voice_gender TEXT NOT NULL DEFAULT 'female',
+  voice_speed REAL NOT NULL DEFAULT 1.0,
+  voice_style TEXT NOT NULL DEFAULT 'standard',
+  voice_language TEXT NOT NULL DEFAULT 'zh',
+  provider TEXT NOT NULL DEFAULT 'edge-tts',
+  status TEXT NOT NULL DEFAULT 'queued',
+  encrypted_path TEXT,
+  audio_duration INTEGER,
+  file_size INTEGER,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tts_novel ON tts_tasks(novel_id);
+CREATE INDEX IF NOT EXISTS idx_tts_chapter ON tts_tasks(chapter_id);
+CREATE INDEX IF NOT EXISTS idx_tts_cache_key ON tts_tasks(cache_key);
+CREATE INDEX IF NOT EXISTS idx_tts_status ON tts_tasks(status);
+
+-- 家长控制访问日志
+CREATE TABLE IF NOT EXISTS parental_access_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  content_type TEXT NOT NULL,
+  content_id TEXT,
+  content_title TEXT NOT NULL,
+  content_rating TEXT NOT NULL,
+  accessed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pal_user ON parental_access_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_pal_accessed ON parental_access_log(accessed_at);
+
+-- 每日使用时长跟踪（按内容类型）
+CREATE TABLE IF NOT EXISTS parental_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  date TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  minutes INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(user_id, date, content_type)
+);
+CREATE INDEX IF NOT EXISTS idx_pu_user_date ON parental_usage(user_id, date);
+
+-- 模式切换日志（Age Gate）
+CREATE TABLE IF NOT EXISTS mode_switch_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  from_mode TEXT NOT NULL,
+  to_mode TEXT NOT NULL,
+  switched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_msl_user ON mode_switch_log(user_id);

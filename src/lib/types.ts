@@ -545,3 +545,196 @@ export interface FetchAPIOptions extends Omit<RequestInit, 'body'> {
   /** Skip automatic JSON parsing of the response */
   rawResponse?: boolean;
 }
+
+// =============================================================================
+// 刮削引擎 & NAS 缓存共享类型
+// =============================================================================
+
+// --- 刮削内容类型 ---
+
+/** 刮削引擎支持的内容类型 */
+export type ScrapeContentType =
+  | 'video'
+  | 'comic'
+  | 'novel'
+  | 'music'
+  | 'anime'
+  | 'live-recording';
+
+/** 刮削任务状态 */
+export type ScrapeTaskStatus =
+  | 'queued'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'blocked';
+
+// --- 刮削规则 ---
+
+/** 刮削规则配置（存储在 D1 scrape_rules 表） */
+export interface ScrapeRule {
+  id: string;
+  sourceId: string;
+  contentType: ScrapeContentType;
+  enabled: boolean;
+  /** 刮削间隔（秒） */
+  interval: number;
+  depth: 'first-page' | 'top-n' | 'full-site';
+  /** depth=top-n 时的最大页数 */
+  maxPages: number;
+  keywords: string[];
+  tags: string[];
+  /** 最低评分阈值 */
+  minRating: number;
+  /** 质量偏好，如 '1080p>720p>480p' */
+  qualityPreference: string;
+  /** 最大并发下载数 */
+  maxConcurrent: number;
+  /** 每日最大下载量（MB） */
+  dailyLimit: number;
+  /** 每次刮削最大项数 */
+  maxItemsPerRun: number;
+  /** 上次刮削时间 ISO */
+  lastScrapedAt: string;
+  /** 下次计划刮削时间 ISO */
+  nextScheduledAt: string;
+}
+
+// --- 刮削任务 ---
+
+/** 刮削任务（存储在 D1 scrape_tasks 表） */
+export interface ScrapeTask {
+  id: string;
+  ruleId: string;
+  sourceId: string;
+  contentType: ScrapeContentType;
+  status: ScrapeTaskStatus;
+  /** 进度 0-100 */
+  progress: number;
+  itemsFound: number;
+  itemsDownloaded: number;
+  bytesDownloaded: number;
+  errors: string[];
+  startedAt: string;
+  completedAt?: string;
+}
+
+// --- 刮削统计 ---
+
+/** 按内容类型的刮削统计 */
+export interface ScrapeStats {
+  totalItems: number;
+  totalBytes: number;
+  /** 成功率 0-100 */
+  successRate: number;
+  lastScrapedAt: string;
+  activeTaskCount: number;
+}
+
+/** 成人内容刮削状态 */
+export interface AdultScrapeStatus {
+  contentType: ScrapeContentType;
+  itemCount: number;
+  storageUsedMB: number;
+  storageQuotaMB: number;
+  lastScrapedAt: string;
+  scrapeStatus: 'active' | 'paused' | 'blocked';
+  sourceCount: number;
+  healthySources: number;
+}
+
+/** NAS 存储使用情况 */
+export interface StorageUsage {
+  totalUsedMB: number;
+  totalQuotaMB: number;
+  byContentType: Record<ScrapeContentType, { usedMB: number; quotaMB: number }>;
+}
+
+// --- NAS 缓存状态 ---
+
+/** NAS 缓存状态（管理员仪表盘 GET /api/admin/cache/status 响应） */
+export interface NASCacheStatus {
+  /** 缓存文件总大小（字节） */
+  totalSize: number;
+  /** 缓存文件总数 */
+  itemCount: number;
+  /** 缓存命中率 0-100 */
+  hitRate: number;
+  /** NAS 连接状态 */
+  connectionStatus: 'connected' | 'disconnected' | 'degraded';
+  /** 按内容类型的缓存分布 */
+  byContentType: Record<string, { count: number; sizeBytes: number }>;
+}
+
+// =============================================================================
+// 分级标签颜色 & 导航配置 & TTS 引擎 & 缓存源头共享类型
+// =============================================================================
+
+// --- 分级标签颜色 ---
+
+/** MPAA 分级标签颜色映射（G=绿色, PG=蓝色, PG-13=黄色, R=橙色, NC-17=红色） */
+export const RATING_COLORS: Record<ContentRating, string> = {
+  'G': '#22c55e',
+  'PG': '#3b82f6',
+  'PG-13': '#eab308',
+  'R': '#f97316',
+  'NC-17': '#ef4444',
+};
+
+// --- 导航配置 ---
+
+/** 各用户模式的导航配置 */
+export interface NavConfig {
+  mode: UserMode;
+  /** 可见的导航分区 */
+  visibleSections: string[];
+  /** 隐藏的分级 */
+  hiddenRatings: ContentRating[];
+  /** 搜索关键词黑名单 */
+  searchBlacklist: string[];
+  /** UI 风格 */
+  uiStyle: 'child' | 'teen' | 'standard' | 'adult' | 'elder';
+}
+
+// --- TTS 有声小说引擎类型 ---
+
+/** TTS 语音配置 */
+export interface TTSVoiceConfig {
+  gender: 'male' | 'female';
+  speed: number;
+  style: string;
+  language: 'zh' | 'en' | 'ja';
+}
+
+/** TTS 服务提供商 */
+export type TTSProvider = 'openai' | 'edge-tts' | 'azure';
+
+/** TTS 生成任务状态 */
+export type TTSTaskStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cached';
+
+/** TTS 生成任务 */
+export interface TTSTask {
+  id: string;
+  novelId: string;
+  chapterId: string;
+  voice: TTSVoiceConfig;
+  provider: TTSProvider;
+  status: TTSTaskStatus;
+  /** 生成完成后的音频 URL（NAS 代理 URL） */
+  audioUrl?: string;
+  /** 章节内容哈希 + 语音配置哈希 */
+  cacheKey: string;
+  /** 音频时长（秒） */
+  audioDuration?: number;
+  /** 文件大小（字节） */
+  fileSize?: number;
+  error?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+// --- 缓存源头标识 ---
+
+/** 缓存源头标识（用于 X-Cache-Source 响应头） */
+export type CacheSourceHeader = 'nas' | 'origin';
