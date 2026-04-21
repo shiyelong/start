@@ -28,11 +28,43 @@ interface Env {
 /**
  * Extract the source ID from a composite adult video ID.
  *
- * Adult video IDs follow the pattern "adult-src-N-<rest>".
- * We need to extract "adult-src-N" as the source ID.
+ * Adult video IDs follow patterns like:
+ * - "adult-src-N-<rest>" for generic sources
+ * - "adult-nas-<rest>" for NAS content
+ * - "adult-upload-<rest>" for user uploads
+ * - "adult-tg-channel-<rest>" / "adult-tg-group-<rest>" for Telegram
+ * - "adult-pornhub-<rest>" etc. for external sources
+ *
+ * We extract the source ID prefix to route to the correct adapter.
  */
 function extractAdultSourceId(videoId: string): { sourceId: string; itemId: string } | null {
-  // Match "adult-src-N" prefix where N is 1-16
+  // Known source ID prefixes (ordered by specificity)
+  const knownPrefixes = [
+    'adult-nas',
+    'adult-upload',
+    'adult-tg-channel',
+    'adult-tg-group',
+    'adult-pornhub',
+    'adult-xvideos',
+    'adult-xnxx',
+    'adult-javbus',
+    'adult-missav',
+    'adult-thisav',
+    'adult-jable',
+    'adult-avgle',
+    'adult-spankbang',
+    'adult-hentaihaven',
+    'adult-hanime',
+    'adult-r18',
+  ];
+
+  for (const prefix of knownPrefixes) {
+    if (videoId.startsWith(`${prefix}-`)) {
+      return { sourceId: prefix, itemId: videoId };
+    }
+  }
+
+  // Fallback: match "adult-src-N" pattern
   const match = videoId.match(/^(adult-src-\d+)-/);
   if (!match) return null;
 

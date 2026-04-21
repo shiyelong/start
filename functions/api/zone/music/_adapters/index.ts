@@ -12,12 +12,12 @@
 import type { ISourceAdapter } from '../../../_lib/source-adapter';
 import { GenericAdultMusicAdapter } from './generic-adult-music-adapter';
 import type { GenericAdultMusicAdapterOptions } from './generic-adult-music-adapter';
+import { NasMusicAdapter } from './nas-music-adapter';
 
 export { GenericAdultMusicAdapter } from './generic-adult-music-adapter';
 
 const ADULT_MUSIC_SOURCES: GenericAdultMusicAdapterOptions[] = [
-  // Local & user sources
-  { id: 'adult-music-nas', name: '本地NAS', priority: 1, searchUrl: '', platform: 'nas' },
+  // Local & user sources (NAS uses dedicated adapter)
   { id: 'adult-music-telegram', name: 'Telegram频道', priority: 2, searchUrl: '', platform: 'telegram' },
   // External aggregated sources
   { id: 'adult-music-dlsite', name: 'DLsite', priority: 10, searchUrl: 'https://cf-proxy.workers.dev/adult-music/dlsite/search', platform: 'dlsite' },
@@ -26,11 +26,25 @@ const ADULT_MUSIC_SOURCES: GenericAdultMusicAdapterOptions[] = [
   { id: 'adult-music-onlyfans', name: 'OnlyFans', priority: 13, searchUrl: 'https://cf-proxy.workers.dev/adult-music/onlyfans/search', platform: 'onlyfans' },
 ];
 
+/** NAS source — dedicated adapter with tunnel streaming */
+const NAS_MUSIC_SOURCE = { id: 'adult-music-nas', name: '本地NAS', priority: 1 };
+
 export function createAllAdultMusicAdapters(): ISourceAdapter[] {
-  return ADULT_MUSIC_SOURCES.map((opts) => new GenericAdultMusicAdapter(opts));
+  const adapters: ISourceAdapter[] = [];
+
+  // NAS — dedicated adapter
+  adapters.push(new NasMusicAdapter(NAS_MUSIC_SOURCE));
+
+  // Generic adapters
+  for (const opts of ADULT_MUSIC_SOURCES) {
+    adapters.push(new GenericAdultMusicAdapter(opts));
+  }
+
+  return adapters;
 }
 
 export function getAdultMusicAdapterById(sourceId: string): ISourceAdapter | null {
+  if (sourceId === NAS_MUSIC_SOURCE.id) return new NasMusicAdapter(NAS_MUSIC_SOURCE);
   const opts = ADULT_MUSIC_SOURCES.find((s) => s.id === sourceId);
   if (opts) return new GenericAdultMusicAdapter(opts);
   return null;

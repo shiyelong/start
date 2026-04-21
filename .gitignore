@@ -52,3 +52,9 @@ electron/*.js
 *.token
 *.secret
 cloudflared*.yml
+
+# NAS service — 运行时配置不提交
+nas-service/node_modules/
+nas-service/.env
+nas-service/*.key
+nas-service/config.yml

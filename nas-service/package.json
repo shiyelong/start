@@ -1,0 +1,17 @@
+{
+  "name": "starhub-nas-service",
+  "version": "1.0.0",
+  "description": "NAS 端媒体服务 — 仅通过 Cloudflare Tunnel 访问",
+  "private": true,
+  "scripts": {
+    "start": "tsx server.ts",
+    "dev": "tsx watch server.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0"
+  }
+}

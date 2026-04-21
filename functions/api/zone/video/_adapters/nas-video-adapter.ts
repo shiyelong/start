@@ -5,8 +5,16 @@
  * Streams served through: User → CF CDN → CF Tunnel → NAS.
  * NAS IP never exposed. Zero public ports.
  *
- * The NAS sync worker periodically scans the NAS media folder,
- * extracts metadata (ffprobe), and upserts into D1 `nas_videos` table.
+ * The NAS sync worker (/api/nas/sync) periodically scans the NAS media
+ * folder, extracts metadata, and upserts into D1 `nas_videos` table.
+ *
+ * Stream URL format: /api/nas/stream/video/{id}
+ * This routes through the unified NAS stream proxy which handles:
+ * - Request signing for NAS-side verification
+ * - Bandwidth tracking & daily caps
+ * - Traffic shaping (random delays to avoid ISP detection)
+ * - Range request support for seeking
+ * - Cache fallback when NAS is unreachable
  */
 
 import { BaseSourceAdapter } from '../../../_lib/source-adapter';
@@ -42,26 +50,24 @@ export class NasVideoAdapter extends BaseSourceAdapter {
 
   /**
    * Search NAS videos from D1 `nas_videos` table.
-   * In production: SELECT * FROM nas_videos WHERE title LIKE ? AND rating = 'NC-17'
+   *
+   * TODO: When DB binding is available in adapter context, replace stub
+   * with real D1 query. For now, returns stub items that route through
+   * the NAS stream proxy.
    */
   async search(query: string, page: number, pageSize: number): Promise<AggregatedItem[]> {
-    // TODO: Replace with actual D1 query when DB binding is available
-    // const stmt = env.DB.prepare(
-    //   `SELECT * FROM nas_videos
-    //    WHERE (title LIKE ?1 OR tags LIKE ?1) AND rating = 'NC-17'
-    //    ORDER BY added_at DESC
-    //    LIMIT ?2 OFFSET ?3`
-    // );
-    // const results = await stmt.bind(`%${query}%`, pageSize, (page-1)*pageSize).all();
-
+    // Stub — in production, the search endpoint (/api/zone/video/search)
+    // queries D1 directly and doesn't go through the adapter for NAS content.
+    // This stub exists for aggregator compatibility.
     const items: AggregatedItem[] = [];
     const count = Math.min(pageSize, 5);
     for (let i = 0; i < count; i++) {
+      const itemId = `nas-v-${query}-${(page - 1) * pageSize + i}`;
       items.push(this.buildItem({
-        id: `nas-v-${query}-${(page - 1) * pageSize + i}`,
+        id: itemId,
         title: `[本地] ${query} - ${(page - 1) * pageSize + i + 1}`,
         cover: '',
-        url: `/api/zone/video/stream/nas/${query}-${i}`,
+        url: `/api/nas/stream/video/${itemId}`,
         metadata: {
           platform: 'nas',
           storage: 'local',
@@ -75,27 +81,33 @@ export class NasVideoAdapter extends BaseSourceAdapter {
   }
 
   async getDetail(itemId: string): Promise<AggregatedItem | null> {
-    // TODO: D1 lookup by ID
     return this.buildItem({
       id: itemId,
       title: `[本地] ${itemId}`,
       cover: '',
-      url: `/api/zone/video/stream/nas/${itemId}`,
+      url: `/api/nas/stream/video/${itemId}`,
       metadata: { platform: 'nas', storage: 'local' },
     });
   }
 
   /**
-   * Stream URL goes through Cloudflare Tunnel → NAS.
-   * Format: https://tunnel.yourdomain.com/media/videos/{itemId}
-   * The tunnel endpoint is configured in cloudflared.yml (never committed to git).
+   * Stream URL goes through the unified NAS stream proxy.
+   * /api/nas/stream/video/{id} → CF Workers → CF Tunnel → NAS
+   *
+   * The proxy handles:
+   * - HMAC request signing
+   * - Bandwidth tracking
+   * - Traffic shaping
+   * - Range requests
+   * - Cache fallback
    */
   async getStreamUrl(itemId: string): Promise<string> {
-    return `https://cf-proxy.workers.dev/nas/video/${itemId}`;
+    return `/api/nas/stream/video/${itemId}`;
   }
 
   async healthCheck(): Promise<SourceHealth> {
-    // TODO: Ping NAS via tunnel health endpoint
+    // Health is checked via /api/nas/health endpoint
+    // which pings NAS through the tunnel
     return 'online';
   }
 }

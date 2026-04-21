@@ -13,12 +13,12 @@
 import type { ISourceAdapter } from '../../../_lib/source-adapter';
 import { GenericAdultComicAdapter } from './generic-adult-comic-adapter';
 import type { GenericAdultComicAdapterOptions } from './generic-adult-comic-adapter';
+import { NasComicAdapter } from './nas-comic-adapter';
 
 export { GenericAdultComicAdapter } from './generic-adult-comic-adapter';
 
 const ADULT_COMIC_SOURCES: GenericAdultComicAdapterOptions[] = [
-  // Local & user sources
-  { id: 'adult-comic-nas', name: '本地NAS', priority: 1, searchUrl: '', platform: 'nas' },
+  // Local & user sources (NAS uses dedicated adapter)
   { id: 'adult-comic-upload', name: '网友上传', priority: 2, searchUrl: '', platform: 'user-upload' },
   { id: 'adult-comic-telegram', name: 'Telegram频道', priority: 3, searchUrl: '', platform: 'telegram' },
   // External aggregated sources
@@ -32,11 +32,25 @@ const ADULT_COMIC_SOURCES: GenericAdultComicAdapterOptions[] = [
   { id: 'adult-comic-tsumino', name: 'Tsumino', priority: 17, searchUrl: 'https://cf-proxy.workers.dev/adult-comic/tsumino/search', platform: 'tsumino' },
 ];
 
+/** NAS source — dedicated adapter with tunnel streaming */
+const NAS_COMIC_SOURCE = { id: 'adult-comic-nas', name: '本地NAS', priority: 1 };
+
 export function createAllAdultComicAdapters(): ISourceAdapter[] {
-  return ADULT_COMIC_SOURCES.map((opts) => new GenericAdultComicAdapter(opts));
+  const adapters: ISourceAdapter[] = [];
+
+  // NAS — dedicated adapter
+  adapters.push(new NasComicAdapter(NAS_COMIC_SOURCE));
+
+  // Generic adapters
+  for (const opts of ADULT_COMIC_SOURCES) {
+    adapters.push(new GenericAdultComicAdapter(opts));
+  }
+
+  return adapters;
 }
 
 export function getAdultComicAdapterById(sourceId: string): ISourceAdapter | null {
+  if (sourceId === NAS_COMIC_SOURCE.id) return new NasComicAdapter(NAS_COMIC_SOURCE);
   const opts = ADULT_COMIC_SOURCES.find((s) => s.id === sourceId);
   if (opts) return new GenericAdultComicAdapter(opts);
   return null;

@@ -1,0 +1,26 @@
+{
+  "name": "@starhub/file-watcher",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "StarHub OS 文件监控服务 — 监控 incoming 目录，检测新文件并通知 task-scheduler",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest --run",
+    "lint": "eslint src/ --ext .ts"
+  },
+  "dependencies": {
+    "chokidar": "4.0.3",
+    "extract-zip": "2.0.1",
+    "node-unrar-js": "2.0.2"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3",
+    "@types/node": "20.17.16",
+    "vitest": "2.1.8",
+    "fast-check": "4.6.0",
+    "tsx": "4.19.2"
+  }
+}

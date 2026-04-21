@@ -11,11 +11,18 @@
  * NAS is accessed ONLY through Cloudflare Tunnel (zero public ports).
  * Encryption key stored in Workers Secrets (NAS_ENCRYPTION_KEY).
  *
+ * All NAS communication goes through the nas-proxy module which handles:
+ * - Request signing (HMAC-SHA256)
+ * - Bandwidth tracking & daily caps
+ * - Traffic shaping (random delays)
+ * - Health monitoring
+ *
  * Validates: Requirements 52.1–52.9
  */
 
 import { queryOne, execute, query } from './db';
 import { encrypt, decrypt } from './crypto';
+import { checkNasHealth, type NasProxyConfig } from './nas-proxy';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -177,8 +184,14 @@ export async function cachePut(
 
 /**
  * Get cache status summary.
+ *
+ * @param nasConfig  Optional NAS proxy config for real tunnel health check.
+ *                   If omitted, nasConnected defaults to false.
  */
-export async function getCacheStatus(db: D1Database): Promise<CacheStatus> {
+export async function getCacheStatus(
+  db: D1Database,
+  nasConfig?: NasProxyConfig,
+): Promise<CacheStatus> {
   const stats = await queryOne<{ total: number; size: number }>(
     db,
     'SELECT COUNT(*) as total, COALESCE(SUM(size_bytes), 0) as size FROM cache_index',
@@ -206,11 +219,22 @@ export async function getCacheStatus(db: D1Database): Promise<CacheStatus> {
     };
   }
 
+  // Real tunnel health check via nas-proxy
+  let nasConnected = false;
+  if (nasConfig) {
+    try {
+      const health = await checkNasHealth(nasConfig);
+      nasConnected = health.connected;
+    } catch {
+      nasConnected = false;
+    }
+  }
+
   return {
     totalFiles: stats?.total ?? 0,
     totalSizeBytes: stats?.size ?? 0,
     hitRate: hitStats?.total ? hitStats.hits / hitStats.total : 0,
-    nasConnected: true, // Stub: would check tunnel health
+    nasConnected,
     typeBreakdown,
   };
 }

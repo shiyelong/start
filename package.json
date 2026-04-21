@@ -7,6 +7,11 @@
       "esbuild",
       "electron",
       "unrs-resolver"
+    ],
+    "ignoredBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "electron-winstaller"
     ]
   },
   "scripts": {
