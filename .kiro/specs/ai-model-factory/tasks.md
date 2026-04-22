@@ -1,397 +1,294 @@
-# 实施计划：AI 模型工厂（多模型编排系统）
+# 实施计划：AI 模型工厂（全开源组合 + 傻瓜式一键部署）
 
 ## 概述
 
-AI 模型工厂是星聚OS的多模型 AI 编排子系统，作为 `model-factory` 服务（Node.js/TypeScript :8300）运行。
-按 8 个阶段递进实施：模型注册 → VRAM 管理 → 路由代理 → ComfyUI → 夜间训练 → 模型侦察 → API 网关 → 属性测试。
-自研代码约 ~4200 行 TypeScript + ~800 行 Python 训练脚本。
+**核心策略：最大化复用开源项目，自研仅写部署脚本和胶水配置。**
 
-**技术栈：** Node.js/TypeScript（核心服务）、Python（训练脚本）、ComfyUI（工作流）、SQLite（pipeline.db）、BullMQ（任务队列）
+原方案自研 ~5000 行代码，现在用成熟开源项目替代 80%，自研仅需 ~800 行（部署脚本 + 配置文件）。
+用户体验：运行一个脚本，所有 AI 工具自动部署、配置、串联，打开浏览器就能用。
 
----
+**开源项目矩阵：**
 
-## 阶段一：模型注册表与下载系统（~800 行 TS）
+| 功能 | 开源项目 | Stars | 替代的自研代码 |
+|------|---------|-------|--------------|
+| 对话界面 + 模型管理 | [Open WebUI](https://github.com/open-webui/open-webui) | 80k+ | 管理界面 + 对话 UI |
+| AI 工作流编排 + Agent | [Dify](https://github.com/langgenius/dify) | 130k+ | 路由代理 + 流水线执行器 |
+| 图像/视频/3D 工作流 | [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | 70k+ | ComfyUI 编排器 |
+| 统一推理 API | [LocalAI](https://github.com/mudler/LocalAI) | 30k+ | 统一 API 网关 + 模型下载 |
+| LLM 管理 | [Ollama](https://github.com/ollama/ollama) | 120k+ | LLM 加载/卸载 |
+| LLM 微调（no-code） | [Unsloth](https://github.com/unslothai/unsloth) + Studio | 25k+ | QLoRA 训练脚本 |
+| 图像 LoRA 训练 | [kohya_ss](https://github.com/bmaltais/kohya_ss) | 10k+ | LoRA 训练脚本 |
+| 中文 LoRA 训练 GUI | [SD-Trainer](https://github.com/Akegarasu/lora-scripts) | 5k+ | 中文友好 LoRA GUI |
+| ComfyUI + LLM 联动 | [comfyui_LLM_party](https://github.com/heshengtao/comfyui_LLM_party) | 15k+ | ComfyUI 内调 LLM |
+| Docker 管理 | [Dockge](https://github.com/louislam/dockge) | 15k+ | 已在 starhub-os 中 |
 
-- [ ] 1. 搭建 model-factory 项目骨架
-  - [ ] 1.1 初始化 Node.js/TypeScript 项目
-    - 创建 `services/starhub-os/model-factory/`
-    - package.json + tsconfig.json + ESLint + Dockerfile
-    - 依赖：express, better-sqlite3, ioredis, bullmq, node-cron, uuid
-    - 测试依赖：vitest, fast-check, supertest
-    - _需求: 1, 2_
+**自研代码清单（仅胶水）：**
 
-  - [ ] 1.2 实现 pipeline.db 新增 7 张表的 schema
-    - 创建 model_registry, model_downloads, inference_logs, training_jobs, training_data, model_benchmarks, pipeline_plans 表
-    - 创建所有索引
-    - 幂等执行（CREATE TABLE IF NOT EXISTS）
-    - _需求: 1.1, 1.2, 1.3_
-
-  - [ ] 1.3 实现模型注册表 CRUD
-    - registerModel, getModel, listModels, updateModelStatus, deleteModel
-    - 多版本管理：setActiveVersion, getActiveVersion
-    - 模型状态机转换验证
-    - 自动扫描 /mnt/storage/ai_models/ 目录注册新模型
-    - _需求: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6_
-
-  - [ ] 1.4 实现模型下载器
-    - 使用 child_process 调用 huggingface-cli download
-    - 镜像源优先级：hf-mirror.com → huggingface.co（HF_ENDPOINT 环境变量）
-    - 断点续传、进度追踪、SHA256 校验
-    - 下载队列（按提交顺序依次下载）
-    - 失败重试：30 分钟间隔，最多 3 次
-    - 下载完成后自动注册到 Model_Registry
-    - _需求: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8_
-
-  - [ ] 1.5 实现预置模型配置
-    - 定义 12 个模型的默认配置（名称、领域、HuggingFace repo、量化格式、VRAM 需求）
-    - 首次启动时自动注册所有预置模型到 Model_Registry
-    - _需求: 1.1, 1.2_
-
-- [ ] 2. 检查点 — 模型注册与下载完成
-  - 确认 7 张新表创建成功
-  - 确认 12 个预置模型注册到 Model_Registry
-  - 确认模型下载器能从 hf-mirror.com 下载模型
-  - 确认 SHA256 校验通过
+| 文件 | 语言 | 行数 | 职责 |
+|------|------|------|------|
+| `ai-factory-deploy.sh` | Bash | ~500 行 | 一键部署所有 AI 容器 + 配置 |
+| `ai-factory-config.json` | JSON | ~100 行 | 模型矩阵 + 下载源 + 端口配置 |
+| `dify-workflows/*.yml` | YAML | ~200 行 | 预置 Dify 工作流模板（赛博朋克视频等） |
+| `comfyui-workflows/*.json` | JSON | ~200 行 | 预置 ComfyUI 工作流（漫画上色等） |
+| **总计** | | **~1000 行** | |
 
 ---
 
-## 阶段二：VRAM 管理与 GPU 集成（~600 行 TS）
+## 阶段一：核心 AI 服务部署（ai-factory-deploy.sh）
 
-- [ ] 3. 实现 VRAM 管理器
-  - [ ] 3.1 实现 GPU 状态监控
-    - 每 10 秒通过 nvidia-smi 读取温度、功耗、VRAM 使用率
-    - 温度告警：80°C 告警、85°C 暂停、90°C 持续 5 分钟强制停止
-    - 历史数据记录（保留 30 天）
-    - _需求: 14.1, 14.2, 14.3, 14.4, 14.5, 14.6_
+- [x] 1. 编写 AI 模型工厂一键部署脚本
+  - [x] 1.1 创建部署配置文件 ai-factory-config.json
+    - 定义 12 个模型的 HuggingFace repo ID、量化格式、VRAM 需求、领域分类
+    - 定义各服务端口映射（全部 127.0.0.1）
+    - 定义 SSD/HDD 存储路径
+    - 定义白天/夜间模式时间配置
+    - **自研代码：** ~100 行 JSON
+    - _需求: 1, 9_
 
-  - [ ] 3.2 实现模型加载/卸载调度
-    - 加载前检查 VRAM，不足时先卸载当前模型
-    - 集成 gpu_lock 表（复用 task-scheduler 的 GPU 互斥锁）
-    - 支持三种后端：Ollama API、ComfyUI API、vLLM/llama.cpp CLI
-    - LRU 策略：记录使用频率，优先保留高频模型
-    - 加载耗时记录，超过 120 秒告警
-    - 卸载后 nvidia-smi 验证 VRAM 释放
-    - _需求: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8_
+  - [x] 1.2 部署 Ollama + 拉取 LLM 模型
+    - Ollama 已在 starhub-os deploy.sh 中部署（:11434）
+    - 拉取 Qwen3.6-35B-A3B（路由/日常，~21GB GGUF）
+    - 拉取 Kimi-K2.6 Q3.6bit（代码主力，~40GB）— 如果 SSD 空间足够
+    - 拉取 GLM-5.1 Q4（代码备用，~72GB）— 可选
+    - 使用 hf-mirror.com 镜像加速
+    - **开源复用：** Ollama 直接用
+    - **自研代码：** ~50 行 Bash（拉取脚本）
+    - _需求: 2, 12_
 
-  - [ ] 3.3 实现白天/夜间模式切换
-    - 白天模式：Qwen3.6 常驻 RAM（~21GB），其他模型按需加载
-    - 夜间模式：卸载 Qwen3.6，全 GPU 资源给训练
-    - 可配置切换时间（默认 08:00-02:00 白天，02:00-08:00 夜间）
-    - 过渡期：等待当前任务完成（超时 30 分钟）
-    - 紧急任务中断：优先级 0-10 可在夜间触发临时切换
-    - _需求: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7_
+  - [x] 1.3 部署 LocalAI 统一推理 API
+    - Docker 部署 LocalAI（:8080 → 改为 127.0.0.1:8090 避免与 qBittorrent 冲突）
+    - 配置 GPU 直通（--gpus all）
+    - 配置模型目录挂载 /mnt/storage/ai_models/
+    - LocalAI 自带：模型自动下载、OpenAI 兼容 API、VRAM 管理、TTS/图像/视频支持
+    - 替代自研：模型注册表、模型下载器、统一 API 网关、VRAM 管理器
+    - **开源复用：** LocalAI 整个项目
+    - **自研代码：** ~30 行 Bash（部署配置）
+    - _需求: 1, 2, 4, 20_
 
-  - [ ] 3.4 实现资源隔离与超时保护
-    - 推理超时：LLM 30min、图像 10min、视频 60min、TTS 15min
-    - OOM/CUDA 错误自动清理
-    - VRAM 泄漏检测与强制清理
-    - RAM 限制：Qwen3.6 常驻 ≤ 25GB
-    - _需求: 19.1, 19.2, 19.3, 19.4, 19.5, 19.6_
+  - [x] 1.4 部署 Open WebUI 对话界面
+    - Docker 部署 Open WebUI（127.0.0.1:3000）
+    - 连接 Ollama（:11434）作为 LLM 后端
+    - 连接 ComfyUI（:8188）作为图像生成后端
+    - 配置深色主题、中文界面
+    - 替代自研：对话界面、模型管理界面、GPU 监控面板
+    - **开源复用：** Open WebUI 整个项目
+    - **自研代码：** ~30 行 Bash（部署配置）
+    - _需求: 17_
 
-  - [ ] 3.5 VRAM 互斥属性测试
-    - **Property 1: VRAM 互斥** — 同一时间至多一个模型占用 GPU
-    - **验证: 需求 4.2, 19.1**
+  - [x] 1.5 部署 Dify AI 工作流平台
+    - Docker Compose 部署 Dify（127.0.0.1:3001）
+    - 连接 Ollama 作为模型提供者
+    - 配置 Agent 工作流模板
+    - 替代自研：路由代理、流水线执行器、任务分解引擎
+    - **开源复用：** Dify 整个项目
+    - **自研代码：** ~50 行 Bash（部署 + 初始配置）
+    - _需求: 3, 10, 16_
 
-  - [ ] 3.6 GPU 温度安全属性测试
-    - **Property 8: GPU 温度安全** — 超阈值自动暂停
-    - **验证: 需求 14.3, 14.4, 14.5**
-
-- [ ] 4. 检查点 — VRAM 管理完成
-  - 确认 GPU 状态监控正常（温度/VRAM）
-  - 确认模型加载/卸载正常
-  - 确认白天/夜间模式切换正常
-  - 确认 GPU 互斥锁集成正常
-
----
-
-## 阶段三：路由代理与流水线执行器（~1000 行 TS）
-
-- [ ] 5. 实现路由代理
-  - [ ] 5.1 实现任务意图分析
-    - 调用 Qwen3.6（通过 Ollama API）分析用户自然语言任务
-    - 输出结构化 JSON 执行计划
-    - 无法理解时向用户提出澄清问题
-    - _需求: 3.1, 3.2, 3.5, 3.6_
-
-  - [ ] 5.2 实现模型路由规则
-    - 代码 → Kimi-K2.6（备用 GLM-5.1）
-    - 图像 → Nucleus-Image / FLUX Kontext / DiffSensei
-    - 视频 → Wan 2.7
-    - 3D → Hunyuan3D 2.0 / HY-World 2.0
-    - TTS → CosyVoice2（备用 Fish-Speech）
-    - 口型同步 → LivePortrait
-    - _需求: 3.3, 3.4, 3.8_
-
-  - [ ] 5.3 实现执行计划确认流程
-    - 生成计划摘要展示给用户
-    - 用户确认后开始执行
-    - _需求: 3.7_
-
-- [ ] 6. 实现流水线执行器
-  - [ ] 6.1 实现 DAG 拓扑排序
-    - 解析 JSON 执行计划的依赖关系
-    - 拓扑排序确定执行顺序
-    - 无依赖的非 GPU 任务可并行执行
-    - _需求: 10.1, 10.8_
-
-  - [ ] 6.2 实现子任务执行循环
-    - 获取 GPU 锁 → 加载模型 → 推理 → 卸载 → 释放锁
-    - 中间结果传递（前一步输出路径作为下一步输入）
-    - 中间结果存 /tmp/ai_pipeline/{task_id}/
-    - 最终输出存 /mnt/storage/media/ai_output/
-    - _需求: 10.2, 10.3, 10.4, 10.5_
-
-  - [ ] 6.3 实现失败重试与备用模型回退
-    - 失败重试 3 次，30 秒间隔
-    - 备用模型回退（Kimi → GLM，CosyVoice → Fish-Speech）
-    - 执行状态检查点，系统重启后恢复
-    - _需求: 22.1, 22.2, 22.5_
-
-  - [ ] 6.4 实现 BullMQ 集成
-    - 子任务作为独立 BullMQ job 入队 task-scheduler
-    - 任务类型 model_factory_pipeline
-    - 复用优先级规则和 GPU_Mutex 锁
-    - _需求: 16.1, 16.2, 16.3, 16.4, 16.5_
-
-  - [ ] 6.5 流水线依赖顺序属性测试
-    - **Property 3: 流水线依赖顺序** — 子任务按依赖关系正确执行
-    - **验证: 需求 3.2, 10.1, 10.3**
-
-- [ ] 7. 检查点 — 路由代理与流水线完成
-  - 确认路由代理能分解任务
-  - 确认流水线执行器能按顺序执行子任务
-  - 确认中间结果正确传递
-  - 确认 BullMQ 集成正常
-
----
-
-## 阶段四：ComfyUI 集成与工作流模板（~500 行 TS + JSON）
-
-- [ ] 8. 实现 ComfyUI 编排器
-  - [ ] 8.1 部署 ComfyUI Docker 容器
-    - 在 deploy.sh 中添加 ComfyUI 容器部署
-    - GPU 直通（--gpus all），端口 127.0.0.1:8188
+  - [x] 1.6 部署 ComfyUI + 插件
+    - Docker 部署 ComfyUI（127.0.0.1:8188）
+    - GPU 直通（--gpus all）
     - 模型目录挂载 /mnt/storage/ai_models/
-    - _需求: 6.1_
+    - 安装核心插件：
+      - comfyui_LLM_party（LLM 联动，支持 Ollama/Qwen/GLM）
+      - ComfyUI-Manager（插件管理器）
+      - ComfyUI-Impact-Pack（常用节点包）
+      - ComfyUI-WanVideoWrapper（Wan 2.7 视频生成）
+      - ComfyUI-LivePortrait（口型同步）
+      - ComfyUI-CosyVoice（TTS 配音）
+    - 替代自研：ComfyUI 编排器
+    - **开源复用：** ComfyUI + 社区插件
+    - **自研代码：** ~50 行 Bash（部署 + 插件安装）
+    - _需求: 6_
 
-  - [ ] 8.2 实现 ComfyUI API 客户端
-    - 连接 ComfyUI WebSocket API
-    - 提交工作流、监控执行进度、获取输出
-    - 节点失败时保存中间结果
-    - _需求: 6.4, 6.5, 6.6_
+  - [x] 1.7 部署 Unsloth Studio（LLM 微调 GUI）
+    - Docker 部署 Unsloth Studio（127.0.0.1:7681）
+    - GPU 直通
+    - 模型目录 + 训练数据目录挂载
+    - 浏览器打开即可 no-code 微调 LLM
+    - 替代自研：QLoRA 训练脚本、训练任务调度
+    - **开源复用：** Unsloth + Unsloth Studio
+    - **自研代码：** ~30 行 Bash
+    - _需求: 7, 13, 21_
 
-  - [ ] 8.3 创建漫画上色工作流模板
+  - [x] 1.8 部署 kohya_ss / SD-Trainer（图像 LoRA 训练 GUI）
+    - Docker 部署 kohya_ss GUI（127.0.0.1:7682）
+    - 或使用 Akegarasu/lora-scripts（SD-Trainer，中文 GUI）
+    - GPU 直通
+    - 模型目录 + 训练数据目录挂载
+    - 浏览器打开即可训练图像 LoRA
+    - 替代自研：LoRA 训练脚本
+    - **开源复用：** kohya_ss / SD-Trainer
+    - **自研代码：** ~30 行 Bash
+    - _需求: 7_
+
+  - [x] 1.9 下载 AI 模型文件到 SSD
+    - 通过 Ollama 拉取 LLM 模型（Qwen3.6、Kimi-K2.6 量化版）
+    - 通过 HuggingFace CLI 下载 ComfyUI 模型：
+      - Nucleus-Image（~10-15GB）→ /mnt/storage/ai_models/image/
+      - FLUX.1 Kontext Q4（~7GB）→ /mnt/storage/ai_models/image/
+      - Wan 2.7（~30-40GB）→ /mnt/storage/ai_models/video/
+      - CosyVoice2-0.5B（~2-5GB）→ /mnt/storage/ai_models/tts/
+      - Fish-Speech 1.5（~3-5GB）→ /mnt/storage/ai_models/tts/
+      - LivePortrait（~2-5GB）→ /mnt/storage/ai_models/lipsync/
+      - Hunyuan3D 2.0（~15-20GB）→ /mnt/storage/ai_models/3d/
+    - 使用 HF_ENDPOINT=https://hf-mirror.com 镜像加速
+    - 断点续传 + SHA256 校验
+    - **自研代码：** ~80 行 Bash（下载脚本）
+    - _需求: 2, 9_
+
+  - [x] 1.10 配置服务间连接
+    - Open WebUI → Ollama（LLM）+ ComfyUI（图像）
+    - Dify → Ollama（LLM）+ LocalAI（统一 API）
+    - ComfyUI → Ollama（通过 comfyui_LLM_party 插件）
+    - 所有服务绑定 127.0.0.1，通过 Cloudflare Tunnel 暴露
+    - 配置 Tunnel ingress 规则：
+      - ai.你的域名 → Open WebUI :3000
+      - dify.你的域名 → Dify :3001
+      - comfy.你的域名 → ComfyUI :8188
+    - **自研代码：** ~50 行 Bash
+    - _需求: 4, 20_
+
+- [ ] 2. 检查点 — 核心 AI 服务部署完成
+  - 确认 Ollama 运行正常，Qwen3.6 可对话
+  - 确认 Open WebUI 可访问，能选择模型对话
+  - 确认 Dify 可访问，能创建工作流
+  - 确认 ComfyUI 可访问，能加载模型生成图片
+  - 确认 LocalAI API 可调用
+  - 确认 Unsloth Studio 可访问
+  - 确认 kohya_ss GUI 可访问
+  - 确认所有端口绑定 127.0.0.1
+
+---
+
+## 阶段二：预置工作流模板
+
+- [ ] 3. 创建 Dify 预置工作流
+  - [ ] 3.1 赛博朋克短视频工作流
+    - 用户输入描述 → Qwen3.6 分解任务 → 调用 ComfyUI 生成关键帧 → 调用 Wan 2.7 图生视频 → 调用 CosyVoice2 配音 → FFmpeg 合并
+    - 导出为 Dify DSL YAML 文件
+    - **自研代码：** ~50 行 YAML
+    - _需求: 3, 11_
+
+  - [ ] 3.2 智能代码助手工作流
+    - 用户输入代码需求 → Qwen3.6 路由 → Kimi-K2.6 生成代码 → 自动测试 → 返回结果
+    - 备用回退：Kimi 不可用时切换 GLM-5.1
+    - **自研代码：** ~30 行 YAML
+    - _需求: 3_
+
+  - [ ] 3.3 漫画创作工作流
+    - 用户输入故事描述 → Qwen3.6 生成分镜 → DiffSensei 生成漫画 → FLUX Kontext 上色
+    - **自研代码：** ~30 行 YAML
+    - _需求: 3, 6_
+
+  - [ ] 3.4 3D 资产生成工作流
+    - 用户输入描述 → Nucleus-Image 生成概念图 → Hunyuan3D 2.0 生成 3D 模型 → 导出 GLB
+    - **自研代码：** ~30 行 YAML
+    - _需求: 3, 6_
+
+- [ ] 4. 创建 ComfyUI 预置工作流
+  - [ ] 4.1 漫画上色工作流（ComfyUI JSON）
     - 线稿输入 → FLUX Kontext 风格化上色 → 输出彩色漫画
-    - JSON 工作流定义
-    - _需求: 6.2_
+    - **自研代码：** ~50 行 JSON
+    - _需求: 6_
 
-  - [ ] 8.4 创建视频配音+口型同步工作流模板
-    - 视频输入 → CosyVoice2/Fish-Speech 配音 → LivePortrait 口型同步 → FFmpeg 合并
-    - _需求: 6.2_
+  - [ ] 4.2 视频配音 + 口型同步工作流
+    - 视频输入 → CosyVoice2 配音 → LivePortrait 口型同步 → FFmpeg 合并
+    - **自研代码：** ~50 行 JSON
+    - _需求: 6_
 
-  - [ ] 8.5 创建文生视频工作流模板
-    - 文本 → Nucleus-Image 关键帧 → FLUX Kontext 风格化 → Wan 2.7 图生视频
-    - _需求: 6.2_
+  - [ ] 4.3 文生视频工作流
+    - 文本 → Nucleus-Image 关键帧 → Wan 2.7 图生视频 → 拼接
+    - **自研代码：** ~50 行 JSON
+    - _需求: 6_
 
-  - [ ] 8.6 创建 3D 资产生成工作流模板
-    - 概念图 → Hunyuan3D 2.0 生成 mesh+贴图 → 导出 GLB/FBX
-    - _需求: 6.2_
+  - [ ] 4.4 3D 资产生成工作流
+    - 概念图 → Hunyuan3D 2.0 → 导出 GLB/FBX
+    - **自研代码：** ~50 行 JSON
+    - _需求: 6_
 
-- [ ] 9. 检查点 — ComfyUI 集成完成
-  - 确认 ComfyUI 容器运行正常
-  - 确认 4 套工作流模板可执行
-  - 确认工作流输出文件存储到 HDD
-
----
-
-## 阶段五：夜间训练与数据收集（~400 行 TS + Python）
-
-- [ ] 10. 实现训练数据收集
-  - [ ] 10.1 实现白天推理数据自动记录
-    - 记录用户输入、模型输出、用户反馈
-    - 代码数据格式化为 instruction-response 对
-    - 图像数据格式化为 prompt-image 对
-    - 去重和质量过滤
-    - 匿名化处理
-    - _需求: 13.1, 13.2, 13.3, 13.4, 13.6_
-
-  - [ ] 10.2 实现训练数据存储管理
-    - 存储到 SSD /mnt/storage/ai_models/training_data/
-    - 存储配额 20GB，超额按时间清理
-    - 管理后台展示统计
-    - _需求: 13.5, 13.7_
-
-- [ ] 11. 实现夜间训练器
-  - [ ] 11.1 实现 QLoRA 训练脚本（Python）
-    - 使用 unsloth/peft + transformers
-    - 代码模型微调（Kimi-K2.6 或 GLM-5.1）
-    - 每 30 分钟保存检查点
-    - GPU 温度保护（85°C 暂停）
-    - _需求: 7.1, 7.2, 7.5, 7.7_
-
-  - [ ] 11.2 实现 LoRA 训练脚本（Python）
-    - 使用 kohya_ss/diffusers
-    - 图像模型微调（Nucleus-Image 或 FLUX Kontext）
-    - _需求: 7.3_
-
-  - [ ] 11.3 实现训练任务调度
-    - 夜间模式自动启动训练
-    - 训练前验证数据集（≥ 100 条有效样本）
-    - 训练完成后自动评估（pass@1 / FID）
-    - 仅性能提升时更新活跃版本
-    - 连续 3 天无提升时建议调整超参数
-    - _需求: 7.4, 7.6, 7.8, 7.9_
-
-  - [ ] 11.4 模型版本单调性属性测试
-    - **Property 2: 模型版本单调性** — 活跃版本性能不低于前一版本
-    - **验证: 需求 7.6, 8.5, 8.7**
-
-  - [ ] 11.5 白天/夜间模式不变量属性测试
-    - **Property 5: 白天/夜间模式不变量** — 训练仅在夜间，推理在白天
-    - **验证: 需求 5.1, 5.2, 5.3, 5.7, 7.1**
-
-- [ ] 12. 检查点 — 夜间训练完成
-  - 确认训练数据收集正常
-  - 确认 QLoRA/LoRA 训练脚本可执行
-  - 确认训练完成后自动评估
-  - 确认 24 小时学习循环正常
+- [ ] 5. 检查点 — 工作流模板完成
+  - 确认 Dify 4 套工作流可导入并执行
+  - 确认 ComfyUI 4 套工作流可加载并运行
+  - 确认赛博朋克视频端到端流水线可完成
 
 ---
 
-## 阶段六：模型侦察与自动更新（~300 行 TS）
+## 阶段三：白天/夜间模式 + 自动化
 
-- [ ] 13. 实现模型侦察器
-  - [ ] 13.1 实现 HuggingFace/GitHub 搜索
-    - 每周搜索各领域最新模型
-    - 评估维度：评测分数、VRAM 适配性、许可证、社区活跃度
-    - 过滤 VRAM > 24GB 的模型
-    - _需求: 8.1, 8.2, 8.6_
+- [ ] 6. 配置白天/夜间模式自动切换
+  - [ ] 6.1 创建模式切换 systemd timer
+    - 白天模式（08:00）：启动 Ollama + Open WebUI + Dify + ComfyUI，加载 Qwen3.6
+    - 夜间模式（02:00）：停止推理服务，启动 Unsloth Studio + kohya_ss 训练
+    - 过渡期：等待当前任务完成（超时 30 分钟）
+    - **自研代码：** ~60 行 Bash + systemd unit
+    - _需求: 5, 21_
 
-  - [ ] 13.2 实现更新推荐报告
-    - 新旧模型对比、评测分数差异、存储空间需求
-    - 三种策略：仅推荐、自动下载但不激活、自动下载并激活
-    - 自动更新后性能不及预期时回滚
-    - _需求: 8.3, 8.4, 8.5, 8.7_
+  - [ ] 6.2 配置训练数据自动收集
+    - Open WebUI 自带对话历史导出
+    - 配置 cron 每天 01:30 导出当天对话数据到 /mnt/storage/ai_models/training_data/
+    - 格式化为 Unsloth 兼容的 JSONL 格式
+    - **自研代码：** ~40 行 Bash
+    - _需求: 13_
 
-- [ ] 14. 实现存储分层管理
-  - [ ] 14.1 实现 SSD/HDD 存储规则
-    - 模型 → SSD，输出 → HDD，训练数据 → SSD
-    - SSD < 50GB 告警 + 自动归档旧版本到 HDD
-    - 训练检查点保留 7 天
-    - _需求: 9.1, 9.2, 9.3, 9.4, 9.5, 9.7_
+  - [ ] 6.3 配置 GPU 温度监控
+    - systemd timer 每 10 秒读取 nvidia-smi
+    - 85°C 暂停 GPU 容器，75°C 恢复
+    - 90°C 持续 5 分钟强制停止所有 GPU 容器
+    - **自研代码：** ~40 行 Bash
+    - _需求: 14_
 
-  - [ ] 14.2 存储分层正确性属性测试
-    - **Property 4: 存储分层正确性** — 模型在 SSD，输出在 HDD
-    - **验证: 需求 9.1, 9.2, 9.3**
-
-- [ ] 15. 实现模型健康检查
-  - [ ] 15.1 实现每日完整性检查（SHA256）
-    - _需求: 18.1, 18.3_
-
-  - [ ] 15.2 实现每周可用性检查（加载+推理测试）
-    - _需求: 18.2, 18.4_
-
-  - [ ] 15.3 实现损坏模型自动重新下载
-    - _需求: 18.5_
-
-- [ ] 16. 检查点 — 模型侦察与存储管理完成
-  - 确认模型搜索能发现新模型
-  - 确认存储分层规则正确
-  - 确认健康检查正常
+- [ ] 7. 检查点 — 自动化完成
+  - 确认白天/夜间模式自动切换正常
+  - 确认训练数据自动收集正常
+  - 确认 GPU 温度保护正常
 
 ---
 
-## 阶段七：统一 API 网关与管理界面（~600 行 TS + React）
+## 阶段四：部署后验证 + 傻瓜式使用指南
 
-- [ ] 17. 实现统一推理 API 网关
-  - [ ] 17.1 实现推理端点
-    - POST /api/inference/text, image, video, tts, 3d, lipsync, pipeline
-    - 自动处理模型加载/卸载
-    - 标准化响应格式
-    - 认证（X-NAS-Signature）
-    - 调用日志记录
-    - _需求: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6_
+- [ ] 8. 部署后验证与状态报告
+  - [ ] 8.1 全服务健康检查
+    - 检查所有 AI 容器运行状态
+    - 检查 GPU 可用性（nvidia-smi）
+    - 检查模型文件完整性
+    - 检查服务间连接
+    - 输出彩色终端报告
+    - **自研代码：** ~60 行 Bash
+    - _需求: 18, 22_
 
-  - [ ] 17.2 实现模型管理端点
-    - GET/POST /api/models, /api/models/:id, /api/models/download
-    - GPU 状态、模式切换、训练状态、存储状态
-    - 流水线管理（列表、详情、重试、取消）
-    - _需求: 1.7, 4.8, 5.6, 16.6, 16.7_
+  - [ ] 8.2 生成傻瓜式使用指南
+    - 自动生成 README，包含：
+      - 各服务访问地址（Open WebUI / Dify / ComfyUI / Unsloth Studio / kohya_ss）
+      - 快速开始：如何对话、如何生成图片、如何创建视频
+      - 模型列表和用途说明
+      - 常见问题 FAQ
+    - 保存到 /mnt/storage/starhub/AI-GUIDE.md
+    - **自研代码：** ~50 行 Bash（模板生成）
+    - _需求: 17_
 
-  - [ ] 17.3 实现 Ollama 集成层
-    - 通过 Ollama API 管理 LLM 加载/卸载/推理
-    - Ollama 健康监控
-    - 大型 MoE 模型回退到 vLLM/llama.cpp
-    - _需求: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7_
-
-  - [ ] 17.4 实现错误恢复机制
-    - Ollama 崩溃自动重启（60 秒内恢复）
-    - ComfyUI 崩溃自动重启容器
-    - 系统启动时 GPU 状态清理和模型状态同步
-    - _需求: 22.3, 22.4, 22.6, 22.7_
-
-- [ ] 18. 实现管理后台界面
-  - [ ] 18.1 开发模型工厂仪表盘（React SPA）
-    - 模型概览卡片、GPU 监控图表、任务队列、存储状态、训练状态
-    - 一键操作：加载/卸载模型、基准测试、模式切换、模型搜索
-    - WebSocket 实时推送
-    - 深色主题 + SVG 图标 + 中文
-    - _需求: 17.1, 17.2, 17.3, 17.4, 17.5_
-
-  - [ ] 18.2 实现基准测试系统
-    - 代码 pass@1、图像 CLIP、TTS MOS、视频帧一致性
-    - 新模型注册时自动触发
-    - 性能异常告警
-    - _需求: 15.1, 15.2, 15.3, 15.4, 15.5_
-
-- [ ] 19. 检查点 — API 网关与管理界面完成
-  - 确认所有推理端点可调用
-  - 确认管理后台仪表盘正常
-  - 确认 Ollama 集成正常
-  - 确认错误恢复机制正常
-
----
-
-## 阶段八：属性测试与端到端验证
-
-- [ ] 20. 实现剩余属性测试
-  - [ ] 20.1 MPAA 分级传播属性测试
-    - **Property 6: MPAA 分级传播** — 生成内容继承源素材分级
-    - **验证: 需求 3.2（隐含）**
-
-  - [ ] 20.2 重试退避正确性属性测试
-    - **Property 7: 重试退避正确性** — 指数退避且不超过上限
-    - **验证: 需求 2.7, 22.1**
-
-- [ ] 21. 端到端流水线测试
-  - [ ] 21.1 赛博朋克短视频 9 步流水线测试
-    - 用户输入 → 路由代理分解 → 9 步执行 → 最终 MP4 输出
-    - _需求: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6_
-
-  - [ ] 21.2 24 小时学习循环测试
-    - 白天收集数据 → 夜间训练 → 次日使用新模型
-    - _需求: 21.1, 21.2, 21.3, 21.4, 21.5_
-
-- [ ] 22. 最终检查点 — 全系统验证
-  - 运行所有 8 个属性测试（fast-check）
-  - 运行所有单元测试（vitest）
-  - 验证 12 个模型注册正确
-  - 验证 VRAM 互斥调度正常
-  - 验证路由代理任务分解正常
-  - 验证 ComfyUI 4 套工作流正常
-  - 验证夜间训练循环正常
-  - 验证模型侦察搜索正常
-  - 验证统一 API 网关所有端点正常
-  - 验证管理后台仪表盘正常
+- [ ] 9. 最终检查点 — 全系统验证
+  - 运行 ai-factory-deploy.sh 完整部署
+  - 确认 Open WebUI 对话正常（Qwen3.6）
+  - 确认 Dify 工作流可执行（赛博朋克视频）
+  - 确认 ComfyUI 图像生成正常
+  - 确认 Unsloth Studio 可打开训练界面
+  - 确认 kohya_ss 可打开 LoRA 训练界面
+  - 确认白天/夜间模式切换正常
+  - 确认 GPU 温度保护正常
+  - 确认所有端口绑定 127.0.0.1（零公网端口）
 
 ---
 
 ## 备注
 
-- 每个任务引用具体需求编号，确保 22 个需求全覆盖
-- 检查点确保增量验证，避免后期大规模返工
-- 属性测试验证 8 个正确性属性（设计文档定义）
-- 属性测试使用 `fast-check`（Node.js）
-- 单元测试使用 `vitest`（Node.js）
-- Python 训练脚本使用 `pytest` + `hypothesis`
-- 总计自研代码约 ~4200 行 TypeScript + ~800 行 Python
+- **核心原则：** 开源项目直接用，自研仅写部署脚本和配置文件
+- **总自研代码：** ~1000 行（Bash 脚本 + JSON/YAML 配置）
+- **对比原方案：** 从 ~5000 行自研代码减少到 ~1000 行，节省 80% 开发时间
+- **用户体验：** 运行一个脚本 → 打开浏览器 → 开始用 AI
+- **傻瓜式操作：**
+  - 对话 → 打开 Open WebUI
+  - 工作流 → 打开 Dify
+  - 图像/视频 → 打开 ComfyUI
+  - 训练 LLM → 打开 Unsloth Studio
+  - 训练图像 → 打开 kohya_ss
+  - Docker 管理 → 打开 Dockge

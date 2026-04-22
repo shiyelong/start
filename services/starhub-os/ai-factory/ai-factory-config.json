@@ -1,0 +1,202 @@
+{
+  "version": "1.0.0",
+  "description": "星聚OS AI 模型工厂配置 — 12+ 模型的统一管理",
+
+  "storage": {
+    "ssd_models_path": "/mnt/storage/ai_models",
+    "hdd_output_path": "/mnt/storage/media/ai_output",
+    "training_data_path": "/mnt/storage/ai_models/training_data",
+    "checkpoints_path": "/mnt/storage/ai_models/checkpoints",
+    "lora_adapters_path": "/mnt/storage/ai_models/lora_adapters"
+  },
+
+  "mirrors": {
+    "huggingface": "https://hf-mirror.com",
+    "huggingface_fallback": "https://huggingface.co",
+    "docker": ["https://docker.aityp.com", "https://1ms.run", "https://docker.m.daocloud.io"]
+  },
+
+  "services": {
+    "ollama": { "port": 11434, "bind": "127.0.0.1", "gpu": true },
+    "localai": { "port": 8090, "bind": "127.0.0.1", "gpu": true },
+    "open_webui": { "port": 3000, "bind": "127.0.0.1", "gpu": false },
+    "dify": { "port": 3001, "bind": "127.0.0.1", "gpu": false },
+    "comfyui": { "port": 8188, "bind": "127.0.0.1", "gpu": true },
+    "unsloth_studio": { "port": 7681, "bind": "127.0.0.1", "gpu": true },
+    "kohya_ss": { "port": 7682, "bind": "127.0.0.1", "gpu": true }
+  },
+
+  "models": {
+    "llm": [
+      {
+        "name": "qwen3.6-35b-a3b",
+        "display_name": "Qwen3.6-35B-A3B (路由/日常)",
+        "domain": "router",
+        "backend": "ollama",
+        "ollama_model": "qwen3:35b-a3b",
+        "size_gb": 21,
+        "vram_mb": 22000,
+        "license": "Apache-2.0",
+        "priority": "required",
+        "description": "白天常驻内存，负责任务路由和日常对话"
+      },
+      {
+        "name": "kimi-k2.6-q3",
+        "display_name": "Kimi-K2.6 Q3.6bit (代码主力)",
+        "domain": "code",
+        "backend": "ollama",
+        "huggingface_repo": "inferencerlabs/Kimi-K2.6-MLX-3.6bit",
+        "size_gb": 40,
+        "vram_mb": 24000,
+        "license": "Modified MIT",
+        "priority": "recommended",
+        "description": "SWE-Bench 80.2%，代码生成主力模型"
+      },
+      {
+        "name": "glm-5.1-q4",
+        "display_name": "GLM-5.1 Q4 GGUF (代码备用)",
+        "domain": "code",
+        "backend": "ollama",
+        "huggingface_repo": "bartowski/zai-org_GLM-5.1-GGUF",
+        "size_gb": 72,
+        "vram_mb": 24000,
+        "license": "MIT",
+        "priority": "optional",
+        "description": "SWE-Bench Pro #1，代码备用模型"
+      }
+    ],
+    "image": [
+      {
+        "name": "nucleus-image",
+        "display_name": "Nucleus-Image 17B MoE (图像生成)",
+        "domain": "image",
+        "backend": "comfyui",
+        "huggingface_repo": "NucleusAI/Nucleus-Image",
+        "size_gb": 12,
+        "vram_mb": 8000,
+        "license": "开源",
+        "priority": "required",
+        "description": "GenEval 0.87，超越 GPT Image 1"
+      },
+      {
+        "name": "flux-kontext",
+        "display_name": "FLUX.1 Kontext (线稿上色)",
+        "domain": "image",
+        "backend": "comfyui",
+        "huggingface_repo": "black-forest-labs/FLUX.1-Kontext-dev",
+        "gguf_repo": "QuantStack/FLUX.1-Kontext-dev-GGUF",
+        "gguf_file": "flux1-kontext-dev-Q4_K_M.gguf",
+        "size_gb": 7,
+        "vram_mb": 10000,
+        "license": "非商用",
+        "priority": "required",
+        "description": "风格迁移、线稿上色推荐 #1"
+      },
+      {
+        "name": "diffsensei",
+        "display_name": "DiffSensei (漫画生成)",
+        "domain": "image",
+        "backend": "comfyui",
+        "huggingface_repo": "jianzongwu/DiffSensei",
+        "size_gb": 12,
+        "vram_mb": 10000,
+        "license": "学术",
+        "priority": "optional",
+        "description": "角色一致性漫画生成"
+      }
+    ],
+    "video": [
+      {
+        "name": "wan-2.7",
+        "display_name": "Wan 2.7 (视频生成)",
+        "domain": "video",
+        "backend": "comfyui",
+        "huggingface_repo": "Wan-AI/Wan2.1-T2V-14B",
+        "size_gb": 35,
+        "vram_mb": 20000,
+        "license": "开源",
+        "priority": "required",
+        "description": "开源视频模型推荐 #1，文/图/声转视频"
+      }
+    ],
+    "3d": [
+      {
+        "name": "hunyuan3d-2.0",
+        "display_name": "Hunyuan3D 2.0 (3D 资产)",
+        "domain": "3d",
+        "backend": "comfyui",
+        "huggingface_repo": "tencent/Hunyuan3D-2",
+        "size_gb": 18,
+        "vram_mb": 16000,
+        "license": "开源",
+        "priority": "optional",
+        "description": "单角色/道具 mesh+贴图"
+      },
+      {
+        "name": "hy-world-2.0",
+        "display_name": "HY-World 2.0 (3D 场景)",
+        "domain": "3d",
+        "backend": "comfyui",
+        "huggingface_repo": "tencent/HY-World-2.0",
+        "size_gb": 25,
+        "vram_mb": 20000,
+        "license": "开源",
+        "priority": "optional",
+        "description": "完整场景，Unity/Unreal 导出"
+      }
+    ],
+    "tts": [
+      {
+        "name": "cosyvoice2-0.5b",
+        "display_name": "CosyVoice2-0.5B (TTS 配音)",
+        "domain": "tts",
+        "backend": "comfyui",
+        "huggingface_repo": "FunAudioLLM/CosyVoice2-0.5B",
+        "size_gb": 3,
+        "vram_mb": 4000,
+        "license": "开源",
+        "priority": "required",
+        "description": "多语言声音克隆"
+      },
+      {
+        "name": "fish-speech-1.5",
+        "display_name": "Fish-Speech 1.5 (TTS 配音)",
+        "domain": "tts",
+        "backend": "comfyui",
+        "huggingface_repo": "fishaudio/fish-speech-1.5",
+        "size_gb": 4,
+        "vram_mb": 4000,
+        "license": "Apache-2.0",
+        "priority": "required",
+        "description": "SiliconFlow 配音推荐 #1"
+      }
+    ],
+    "lipsync": [
+      {
+        "name": "liveportrait",
+        "display_name": "LivePortrait (口型同步)",
+        "domain": "lipsync",
+        "backend": "comfyui",
+        "huggingface_repo": "KwaiVGI/LivePortrait",
+        "size_gb": 3,
+        "vram_mb": 4000,
+        "license": "MIT",
+        "priority": "required",
+        "description": "开源口型同步推荐"
+      }
+    ]
+  },
+
+  "day_night_mode": {
+    "day_start": "08:00",
+    "day_end": "02:00",
+    "night_start": "02:00",
+    "night_end": "08:00",
+    "transition_timeout_min": 30,
+    "resident_model": "qwen3.6-35b-a3b",
+    "gpu_temp_warn": 80,
+    "gpu_temp_pause": 85,
+    "gpu_temp_emergency": 90,
+    "gpu_temp_resume": 75
+  }
+}
